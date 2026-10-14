@@ -684,7 +684,7 @@ def test_cached_object_v2_rebuilds_compact_pipeline_without_reexporting_model(
     assert bricks[1]["boundary_tag"] == "_touches_raster_boundary"
 
 
-def test_object_v2_pipeline_revision_preserves_existing_contract_six_model(tmp_path, monkeypatch):
+def test_object_v2_pipeline_revision_preserves_current_fp32_dynamic_model(tmp_path, monkeypatch):
     checkpoint = tmp_path / "checkpoint.pt"
     checkpoint.write_bytes(b"checkpoint")
     checkpoint_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
@@ -699,7 +699,7 @@ def test_object_v2_pipeline_revision_preserves_existing_contract_six_model(tmp_p
                                          default=str).encode("utf-8")).hexdigest()
 
     model_digest = digest({
-        "runtime_contract": 6, "checkpoint_sha256": checkpoint_sha, "tile_size": 512,
+        "runtime_contract": 8, "checkpoint_sha256": checkpoint_sha, "tile_size": 512,
         "threshold": 0.5, "external": None, "python_site_packages": None,
     })
     model_name = f"mls_ortho_{model_digest[:24]}"
@@ -721,8 +721,8 @@ def test_object_v2_pipeline_revision_preserves_existing_contract_six_model(tmp_p
     }), encoding="utf-8")
     model_marker_bytes = model_marker_path.read_bytes()
     pipeline_identity = {
-        "pipeline_contract": 6, "model_sha256": model_digest, "context": 0,
-        "resolution_m": None, "postprocess": {}, "class_schema": [],
+        "pipeline_contract": 7, "model_sha256": model_digest, "context": 0,
+        "resolution_m": None, "postprocess": {}, "class_schema": [], "batch_size": 2,
     }
     old_digest = digest(pipeline_identity)
     old_pipeline = pipeline_root / f"{model_name}_{old_digest[:12]}.yaml"
@@ -738,7 +738,7 @@ def test_object_v2_pipeline_revision_preserves_existing_contract_six_model(tmp_p
         config, checkpoint, external_manifest=None, postprocess_config={},
     )
     assert current.model_dir == model_dir and current.model_name == model_name
-    expected_digest = digest({**pipeline_identity, "pipeline_contract": 7})
+    expected_digest = digest({**pipeline_identity, "pipeline_contract": 9, "batch_size": 1})
     assert current.pipeline_path.name == f"{model_name}_{expected_digest[:12]}.yaml"
     assert current.pipeline_path != old_pipeline
     assert model_path.read_bytes() == b"unchanged-onnx"
@@ -748,8 +748,10 @@ def test_object_v2_pipeline_revision_preserves_existing_contract_six_model(tmp_p
     assert json.loads(old_marker.read_text(encoding="utf-8")) == {"identity_sha256": old_digest}
     marker = json.loads(current.pipeline_path.with_suffix(".json").read_text(encoding="utf-8"))
     assert marker["identity_sha256"] == expected_digest
-    assert marker["inference_profile"] == "object_f1_instances_v2_interior_geodesic"
+    assert marker["inference_profile"] == "object_f1_instances_v2_interior_geodesic_fp32_shared_edges_v1"
     assert marker["object_separation_algorithm"] == "interior_geodesic_v1"
+    assert marker["object_simplification_algorithm"] == "shared_edges_v1"
+    assert marker["inference_precision"] == "fp32_no_tf32"
     bricks = yaml.safe_load(current.pipeline_path.read_text(encoding="utf-8"))["config"]["bricks"]
     assert bricks[0]["separation"]["boundary_threshold"] == 0.65
     assert _geoalert_runner._ensure_runtime_export(
@@ -769,15 +771,33 @@ def test_geoalert_report_identifies_only_new_object_postprocessing(tmp_path, mon
         "operation": operation,
     })
     if profile == "object_f1_v2":
-        assert result == {**report, "inference_profile": "object_f1_instances_v2_interior_geodesic",
-                          "object_separation_algorithm": "interior_geodesic_v1"}
+        assert result == {
+            **report, "inference_profile": "object_f1_instances_v2_interior_geodesic_fp32_shared_edges_v1",
+            "object_separation_algorithm": "interior_geodesic_v1",
+            "object_simplification_algorithm": "shared_edges_v1", "inference_precision": "fp32_no_tf32",
+        }
     else:
         assert result == report
     assert report == {"status": "ok", "processed": 1}
 
 
+@pytest.mark.parametrize("profile", ["legacy", "next_gen2", "object_f1", "object_f1_v2"])
+def test_final_report_preserves_only_v2_actual_scene_execution(profile):
+    execution = {"requested_workers": 2, "effective_workers": 1, "max_active_pipelines": 1,
+                 "pipeline_timeline": [{"scene_id": "полный снимок", "number": 1}]}
+    source = {"scene_execution": execution}
+    metadata = _geoalert_runner._scene_execution_metadata({"pipeline_variant": profile}, source)
+    if profile == "object_f1_v2":
+        assert metadata == source
+        assert metadata["scene_execution"] is not execution
+    else:
+        assert metadata == {}
+    assert _geoalert_runner._scene_execution_metadata({"pipeline_variant": profile}, {}) == {}
+
+
 @pytest.mark.parametrize("profile", ["object_f1", "object_f1_v2"])
-def test_compose_runtime_records_algorithm_and_imports_current_repository(tmp_path, monkeypatch, profile):
+@pytest.mark.parametrize("scene_workers", [None, 2])
+def test_compose_runtime_records_algorithm_and_imports_current_repository(tmp_path, monkeypatch, profile, scene_workers):
     captured = {}
 
     def run(command, *, cwd, env, check):
@@ -791,17 +811,38 @@ def test_compose_runtime_records_algorithm_and_imports_current_repository(tmp_pa
     result = _geoalert_runner._run_compose({
         "pipeline_variant": profile, "geoalert_python_path": sys.executable,
         "geoalert_inference_root": str(tmp_path),
+        **({"scene_workers": scene_workers} if scene_workers is not None else {}),
     }, tmp_path, export, [], initial_reports=[], source_image_ids=[], coverage_percent=None, warnings=[])
     assert result == {"status": "ok"}
     assert captured["env"]["PYTHONPATH"].split(_geoalert_runner.os.pathsep)[0] == str(
         Path(_geoalert_runner.__file__).resolve().parents[2]
     )
     if profile == "object_f1_v2":
-        assert captured["spec"]["inference_profile"] == "object_f1_instances_v2_interior_geodesic"
+        assert captured["spec"]["inference_profile"] == "object_f1_instances_v2_interior_geodesic_fp32_shared_edges_v1"
         assert captured["spec"]["object_separation_algorithm"] == "interior_geodesic_v1"
+        assert captured["spec"]["object_simplification_algorithm"] == "shared_edges_v1"
+        assert captured["spec"]["inference_precision"] == "fp32_no_tf32"
+        assert captured["spec"]["scene_workers"] == (scene_workers or 1)
     else:
         assert "inference_profile" not in captured["spec"]
         assert "object_separation_algorithm" not in captured["spec"]
+        assert "scene_workers" not in captured["spec"]
+        assert "pipeline_variant" not in captured["spec"]
+
+
+@pytest.mark.parametrize("profile", ["object_f1", "object_f1_v2"])
+@pytest.mark.parametrize("scene_workers", [None, 2])
+def test_pseudo_report_does_not_invent_parallel_request(tmp_path, profile, scene_workers):
+    report = _geoalert_runner._pseudo_summary(
+        {"pipeline_variant": profile, **({"scene_workers": scene_workers} if scene_workers is not None else {})},
+        started=time.time(), output_geojson=tmp_path / "result.geojson",
+        prepared=_geoalert_runner._PreparedScenes([], [], 0), reports=[], failures=[],
+        feature_count=0, runtime_export=None, postprocess_params={},
+    )
+    if profile == "object_f1_v2":
+        assert report["source"]["configured_scene_workers"] == (scene_workers or 1)
+    else:
+        assert "configured_scene_workers" not in report["source"]
 
 
 def _write_raster(path: Path, values: np.ndarray, transform) -> None:

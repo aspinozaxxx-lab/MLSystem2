@@ -253,6 +253,7 @@ def _run_pseudo_markup(config: dict[str, Any], run_root: Path) -> dict[str, Any]
         runtime_export=runtime_export,
         postprocess_params=postprocess_config,
     )
+    result.update(_scene_execution_metadata(config, child_result))
     if not prepared.is_aoi:
         return result
     error = None
@@ -329,6 +330,7 @@ def _run_test_sample_f1(config: dict[str, Any], run_root: Path) -> dict[str, Any
             "total": len(tiles),
             "error": child_result.get("error") or "Geoalert не обработал все тестовые тайлы.",
             "failures": list(child_result.get("failures") or []),
+            **_scene_execution_metadata(config, child_result),
         }
 
     prediction_root = run_root / "test_predictions"
@@ -363,12 +365,21 @@ def _run_test_sample_f1(config: dict[str, Any], run_root: Path) -> dict[str, Any
             "geoalert_bricks": runtime_export.bricks,
             "postprocess_profile": "geoalert_pipeline",
             "postprocess_params": postprocess_config,
+            **_scene_execution_metadata(config, child_result),
         }
     )
     metrics_progress = Path(metrics_config["run_root"]) / "progress.json"
     if metrics_progress.is_file():
         shutil.copy2(metrics_progress, run_root / "progress.json")
     return result
+
+
+def _scene_execution_metadata(config: dict[str, Any], child_result: dict[str, Any]) -> dict[str, Any]:
+    """Сохранить фактическую параллельность v2 в отчёте, переживающем очистку задания."""
+    execution = child_result.get("scene_execution")
+    if config.get("pipeline_variant") != "object_f1_v2" or not isinstance(execution, dict):
+        return {}
+    return {"scene_execution": dict(execution)}
 
 
 def _prepare_scenes(
@@ -496,7 +507,7 @@ def _ensure_runtime_export(
     )
     model_identity = json.dumps(
         {
-            "runtime_contract": 6 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
+            "runtime_contract": 8 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
             "checkpoint_sha256": checkpoint_sha,
             "tile_size": int(config.get("tile_size") or 768),
             "threshold": config.get("threshold"),
@@ -510,7 +521,9 @@ def _ensure_runtime_export(
     model_digest = hashlib.sha256(model_identity).hexdigest()
     pipeline_identity = json.dumps(
         {
-            "pipeline_contract": 7 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
+            "pipeline_contract": 9 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
+            **({"batch_size": int(config.get("batch_size") or 1)}
+               if config.get("pipeline_variant") == "object_f1_v2" else {}),
             "model_sha256": model_digest,
             "context": int(config.get("context") or 0),
             "resolution_m": config.get("resample_to_resolution_m"),
@@ -566,6 +579,7 @@ def _ensure_runtime_export(
                     if model_marker.get("threshold") is not None
                     else 0.9
                 ),
+                batch_size=int(config.get("batch_size") or 1),
             )
             _install_pipeline_cache(
                 pipeline_path,
@@ -616,6 +630,7 @@ def _ensure_runtime_export(
             class_schema_override=list(
                 config.get("class_schema") or config.get("object_types") or []
             ),
+            inference_batch_size=int(config.get("batch_size") or 1),
         )
     try:
         with zipfile.ZipFile(archive.zip_path) as outer:
@@ -686,6 +701,8 @@ def _run_compose(
     spec_path = run_root / "compose_spec.json"
     spec = {
         **_object_inference_metadata(config.get("pipeline_variant")),
+        **({"pipeline_variant": "object_f1_v2", "scene_workers": min(2, int(config.get("scene_workers") or 1))}
+           if config.get("pipeline_variant") == "object_f1_v2" else {}),
         "pipeline_path": str(runtime_export.pipeline_path),
         "compose_root": str(run_root / "compose"),
         "progress_path": str(run_root / "progress.json"),
@@ -927,6 +944,9 @@ def _pseudo_summary(
             "threshold": config.get("threshold"),
             "f1_score": config.get("checkpoint_f1_score"),
             "epoch": config.get("checkpoint_epoch"),
+            **({"batch_size": int(config.get("batch_size") or 1), "batch_policy": "geoalert_single_window_default_v1",
+                "cuda_use_tf32": False, "configured_scene_workers": min(2, int(config.get("scene_workers") or 1))}
+               if config.get("pipeline_variant") == "object_f1_v2" else {}),
         },
         "scenes": reports,
         "failures": failures,

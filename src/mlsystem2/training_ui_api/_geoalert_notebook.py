@@ -1,11 +1,16 @@
 """Расширения Geoalert для оконного инференса next-gen2 через штатный adapter."""
 
 from contextlib import ExitStack
+import json
 from pathlib import Path
+import time
 
 import numpy as np
 import rasterio
 from rasterio.windows import Window
+
+
+_OBJECT_PERFORMANCE_FILENAME = "object_inference_performance.json"
 
 
 def register_notebook_bricks() -> None:
@@ -44,23 +49,14 @@ def register_notebook_bricks() -> None:
         window_size: int = Field(gt=0)
         threshold: float = Field(default=0.5, gt=0, lt=1)
         separation: ObjectSeparationConfig | None = None
+        batch_size: int = Field(default=1, ge=1, le=32)
 
         def __call__(self, path):
-            from mlsystem2.training_ui_api._object_inference import predict_instances
-
-            with rasterio.open(Path(path) / f"{self.input_raster}.tif") as source:
-                accumulator, result = predict_instances(source,
-                    lambda images: np.stack([self.adapter(image) for image in images]),
-                    input_indexes=tuple(range(1, self.input_channels + 1)), tile_size=self.window_size,
-                    threshold=self.threshold, separation=self.separation)
-                try:
-                    profile = {**_raster_profile(source, "int32"), "nodata": 0}
-                    with rasterio.open(Path(path) / f"{self.output_raster}.tif", "w", **profile) as target:
-                        for _, window in target.block_windows(1):
-                            x, y, w, h = map(int, (window.col_off, window.row_off, window.width, window.height))
-                            target.write(result.instances[y:y+h, x:x+w], 1, window=window)
-                finally:
-                    accumulator.close()
+            _object_instance_segmentation(
+                Path(path), self.input_raster, self.output_raster, self.adapter,
+                input_channels=self.input_channels, window_size=self.window_size,
+                threshold=self.threshold, separation=self.separation, batch_size=self.batch_size,
+            )
 
     class MulticlassProbabilityMasks(Brick):
         input_rasters: list[str] = Field(min_length=2)
@@ -73,6 +69,60 @@ def register_notebook_bricks() -> None:
     from mlsystem2.training_ui_api._geoalert_vector import register_vector_bricks
 
     register_vector_bricks()
+
+
+def _object_instance_segmentation(directory, input_raster, output_raster, adapter, *,
+                                  input_channels, window_size, threshold, separation, batch_size):
+    """V2 отправляет полный NCHW batch; исторический профиль остаётся последовательным."""
+    from mlsystem2.training_ui_api._object_inference import predict_instances
+    from mlsystem2.inference.contracts import ObjectSeparationConfig
+
+    config = ObjectSeparationConfig.model_validate(separation) if separation is not None else None
+    batched = config is not None and config.profile == "object_f1_v2"
+    effective_batch_size = batch_size if batched else 1
+    performance = {"configured_batch_size": batch_size, "effective_batch_size": effective_batch_size}
+    started = time.perf_counter()
+    accumulator = None
+    try:
+        with rasterio.open(directory / f"{input_raster}.tif") as source:
+            predict = adapter if batched else lambda images: np.stack([adapter(image) for image in images])
+            accumulator, result = predict_instances(
+                source, predict, input_indexes=tuple(range(1, input_channels + 1)),
+                tile_size=window_size, batch_size=effective_batch_size,
+                threshold=threshold, separation=config, metrics=performance,
+            )
+            performance["configured_batch_size"] = batch_size
+            write_started = time.perf_counter()
+            profile = {**_raster_profile(source, "int32"), "nodata": 0}
+            with rasterio.open(directory / f"{output_raster}.tif", "w", **profile) as target:
+                for _, window in target.block_windows(1):
+                    x, y, w, h = map(int, (window.col_off, window.row_off, window.width, window.height))
+                    target.write(result.instances[y:y+h, x:x+w], 1, window=window)
+            performance["instance_write_sec"] = time.perf_counter() - write_started
+    finally:
+        if accumulator is not None:
+            cleanup_started = time.perf_counter()
+            accumulator.close()
+            performance["cleanup_sec"] = time.perf_counter() - cleanup_started
+        performance["elapsed_sec"] = time.perf_counter() - started
+        _save_object_performance(directory, performance)
+
+
+def _save_object_performance(directory, performance):
+    """Служебный замер не заменяет ошибку инференса и не отменяет готовый растр."""
+    try:
+        serialized = json.dumps(performance, ensure_ascii=False)
+        (directory / _OBJECT_PERFORMANCE_FILENAME).write_text(serialized, encoding="utf-8")
+    except (OSError, TypeError, ValueError) as exc:
+        try:
+            print(f"Не удалось сохранить замер скорости объектного инференса: {exc}", flush=True)
+        except (OSError, UnicodeError):
+            pass
+        return
+    try:
+        print("Этапы объектного инференса: " + serialized, flush=True)
+    except (OSError, UnicodeError):
+        pass
 
 
 def _raster_profile(source, dtype):

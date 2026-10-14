@@ -11,7 +11,7 @@ import pytest
 from mlsystem2.training_ui_api import _dataset_editor, _test_samples
 
 
-_V2_PROFILE = "object_f1_instances_v2_interior_geodesic"
+_V2_PROFILE = "object_f1_instances_v2_interior_geodesic_fp32_shared_edges_v1"
 
 
 def _digest(payload: dict) -> str:
@@ -28,6 +28,7 @@ def _digest(payload: dict) -> str:
         ("next_gen2", "next_gen2_eval_v1"),
         ("object_f1", "object_f1_instances_v1"),
         ("object_f1_v2", "object_f1_instances_v2"),
+        ("object_f1_v2", "object_f1_instances_v2_interior_geodesic"),
     ],
 )
 @pytest.mark.parametrize("managed", [False, True])
@@ -94,6 +95,10 @@ def test_editor_revision_preserves_previous_payload_and_invalidates_v2_dedup() -
     )
     assert current_hash == _digest({**previous_payload, "inference_profile": _V2_PROFILE})
     assert current_hash != previous_hash
+    previous_v2_hash = _dataset_editor._editor_pseudo_inference_config_hash(
+        selected, 768, inference_profile="object_f1_instances_v2_interior_geodesic",
+    )
+    assert current_hash != previous_v2_hash
     result_id = uuid.UUID("79275782-d161-443f-866c-f2a259b62ad4")
     assert _dataset_editor._editor_pseudo_dedup_key(
         "test", "снимок.geojson", result_id, "raster-revision", current_hash,

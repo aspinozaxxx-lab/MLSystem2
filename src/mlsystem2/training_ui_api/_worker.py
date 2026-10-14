@@ -995,6 +995,7 @@ def _build_pseudo_markup_config(
             ),
             "device": "cuda",
             **_geoalert_runtime_config(config, inference_backend),
+            **_object_v2_ortho_runtime_config(flat.get("train.pipeline_variant"), inference_backend),
         }
 
 
@@ -1121,6 +1122,7 @@ def _build_pseudolabel_aoi_config(
         "external_http_workers": config.pseudolabel_external_http_workers,
         "device": "cuda",
         **_geoalert_runtime_config(config, inference_backend),
+        **_object_v2_ortho_runtime_config(state.get("pipeline_variant"), inference_backend),
     }
 
 
@@ -1355,6 +1357,7 @@ def _build_test_sample_f1_config(
         "batch_size": batch_size,
         "device": "cuda",
         **_geoalert_runtime_config(config, inference_backend),
+        **_object_v2_ortho_runtime_config(flat.get("train.pipeline_variant"), inference_backend),
     }
 
 
@@ -1378,6 +1381,14 @@ def _managed_targets_for_scope(
     if requested_indices != sorted(requested_indices):
         raise RuntimeError("Порядок тестовых разметок управляемого датасета повреждён.")
     return tuple(plan.targets[index] for index in requested_indices)
+
+
+def _object_v2_ortho_runtime_config(variant: object, backend: str) -> dict[str, Any]:
+    """Установленный Triton быстрее с одним окном; две сцены перекрывают CPU и GPU этапы."""
+    if variant != "object_f1_v2" or backend != GEOALERT_INFERENCE_BACKEND:
+        return {}
+    return {"batch_size": 1, "batch_policy": "geoalert_single_window_default_v1",
+            "scene_workers": 2, "inference_precision": "fp32_no_tf32"}
 
 
 def _geoalert_runtime_config(

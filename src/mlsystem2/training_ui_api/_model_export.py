@@ -43,8 +43,10 @@ def _object_inference_metadata(variant: object) -> dict[str, str]:
     if variant != "object_f1_v2":
         return {}
     return {
-        "inference_profile": "object_f1_instances_v2_interior_geodesic",
+        "inference_profile": "object_f1_instances_v2_interior_geodesic_fp32_shared_edges_v1",
         "object_separation_algorithm": "interior_geodesic_v1",
+        "object_simplification_algorithm": "shared_edges_v1",
+        "inference_precision": "fp32_no_tf32",
     }
 
 
@@ -72,6 +74,7 @@ def build_triton_model_export_zip(
     postprocess_config: dict[str, object] | None = None,
     resolution_m: float | None = None,
     class_schema_override: list[dict[str, object]] | None = None,
+    inference_batch_size: int = 1,
 ) -> ModelExportArchive:
     """Собрать zip модели для загрузчика models-serving-service."""
 
@@ -183,6 +186,7 @@ def build_triton_model_export_zip(
                 foreground_channels=(2 if object_f1 else len(class_schema) + int(next_gen2) if task == "multiclass" else 1),
                 instance_kind=parsed_instance_kind,
                 probability_output=next_gen2 or object_f1,
+                dynamic_batch=variant == "object_f1_v2",
             ),
         )
         pipeline_files = _write_export_pipelines(
@@ -200,6 +204,7 @@ def build_triton_model_export_zip(
                 threshold=effective_threshold,
                 object_output=object_f1,
                 object_separation=separation.model_dump() if separation is not None else None,
+                batch_size=inference_batch_size,
             ),
         )
         if object_f1 or next_gen2:
@@ -235,6 +240,9 @@ def build_triton_model_export_zip(
                 "object_separation": separation.model_dump() if separation is not None else parameters.get("object_separation") if object_f1 else None,
                 "inference_merge": "gaussian_probabilities" if next_gen2 or object_f1 else "drop",
                 "inference_stride": max(1, parsed_sample_size // 2) if next_gen2 or object_f1 else inference_core_size,
+                **({"inference_batch_size": inference_batch_size, "dynamic_batch_axis": True,
+                    "inference_batch_policy": "geoalert_single_window_default_v1", "cuda_use_tf32": False}
+                   if variant == "object_f1_v2" else {}),
                 "requires_inference_brick": "ObjectF1Segmentation" if object_f1 else "SlidingWindowSegmentation" if next_gen2 else "Segmentation",
                 "task": task,
                 "class_schema": class_schema,
@@ -354,6 +362,7 @@ def build_geoalert_pipeline_yaml(
     object_output: bool = False,
     object_separation: dict[str, object] | None = None,
     threshold: float = 0.9,
+    batch_size: int = 1,
 ) -> str:
     """Собрать pipeline повторно, не дублируя тяжёлый Triton model export."""
 
@@ -372,6 +381,7 @@ def build_geoalert_pipeline_yaml(
         object_output=object_output,
         object_separation=object_separation,
         threshold=threshold,
+        batch_size=batch_size,
     )
 
 
@@ -920,6 +930,9 @@ def _export_segmentation_mask_onnx(
                     output_name: {2: "height", 3: "width"},
                 },
             }
+            if object_output and object_profile == "object_f1_v2":
+                export_kwargs["dynamic_axes"]["input"][0] = "batch"
+                export_kwargs["dynamic_axes"][output_name][0] = "batch"
             export_params = signature(torch.onnx.export).parameters
             if "external_data" in export_params:
                 export_kwargs["external_data"] = True
@@ -1009,17 +1022,19 @@ def _triton_config(
     foreground_channels: int = 1,
     instance_kind: str = "KIND_CPU",
     probability_output: bool = False,
+    dynamic_batch: bool = False,
 ) -> str:
     output_name = "probabilities" if probability_output else "mask"
     output_type = "TYPE_FP32" if probability_output else "TYPE_UINT8"
-    return f"""name: "{model_name}"
+    batch_dimension = -1 if dynamic_batch else 1
+    result = f"""name: "{model_name}"
 platform: "onnxruntime_onnx"
 max_batch_size: 0
 input [
   {{
     name: "input"
     data_type: TYPE_FP32
-    dims: [ 1, {input_channels}, -1, -1 ]
+    dims: [ {batch_dimension}, {input_channels}, -1, -1 ]
   }}
 ]
 output [
@@ -1036,6 +1051,17 @@ instance_group [
   }}
 ]
 """
+    if dynamic_batch:
+        result += '''optimization {
+  execution_accelerators {
+    gpu_execution_accelerator: [{
+      name: "cuda"
+      parameters { key: "use_tf32" value: "0" }
+    }]
+  }
+}
+'''
+    return result
 
 
 def _pipeline_yaml(
@@ -1050,6 +1076,7 @@ def _pipeline_yaml(
     object_output: bool = False,
     object_separation: dict[str, object] | None = None,
     threshold: float = 0.5,
+    batch_size: int = 1,
 ) -> str:
     core_size = _validate_inference_window(sample_size, context)
     if input_channels == 3:
@@ -1140,6 +1167,9 @@ config:
             output_fcs=["output"],
             value_property_name="instance_id",
         )
+        v2_objects = bool(object_separation and object_separation.get("profile") == "object_f1_v2")
+        if v2_objects:
+            vectorize["match_instance_edges"] = True
         document["config"]["bricks"] = [
             {"_class": "ObjectF1Segmentation", "input_raster": "input", "input_channels": input_channels,
              "window_size": sample_size, "threshold": threshold, "output_raster": "object_instances", "adapter": adapter},
@@ -1149,8 +1179,18 @@ config:
             separation = ObjectSeparationConfig.model_validate(object_separation)
             document["config"]["bricks"][0]["separation"] = separation.model_dump()
             document["config"]["bricks"][0]["threshold"] = separation.foreground_threshold
+            if separation.profile == "object_f1_v2":
+                if isinstance(batch_size, bool) or not isinstance(batch_size, int) or not 1 <= batch_size <= 32:
+                    raise TrainingUIAPIError("Размер batch object f1 v2 должен быть целым числом от 1 до 32.")
+                document["config"]["bricks"][0]["batch_size"] = batch_size
+                adapter["output_ndim"] = 4
         # Геометрические фильтры применяются отдельно к каждому instance.
         extra = yaml.safe_load("bricks:\n" + vector_postprocess_yaml) if vector_postprocess_yaml.strip() else {}
+        if v2_objects:
+            for brick in extra.get("bricks", []):
+                for operation in brick.get("bricks", [brick]):
+                    if operation.get("_class") == "Simplify":
+                        operation["_class"] = "CoverageSimplify"
         document["config"]["bricks"].extend(extra.get("bricks", []))
         return yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
     if probability_output:

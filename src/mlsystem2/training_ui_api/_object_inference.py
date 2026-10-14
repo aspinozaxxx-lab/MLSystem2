@@ -12,9 +12,13 @@ from mlsystem2.inference.contracts import ObjectSceneRequest, ObjectSeparationCo
 
 def predict_instances(dataset, predict, *, input_indexes, tile_size, batch_size=1, threshold=0.5,
                       separation=None, metrics=None):
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("Размер batch объектного инференса должен быть положительным целым числом")
     if any(dataset.colorinterp[index - 1] == ColorInterp.alpha for index in input_indexes):
         raise RuntimeError("Alpha используется как valid mask и не может заменять канал NIR")
     performance = metrics if metrics is not None else {}
+    performance["configured_batch_size"] = batch_size
+    performance["effective_batch_size"] = batch_size
     accumulator = create_object_scene(ObjectSceneRequest(width=dataset.width, height=dataset.height, tile_size=tile_size,
         separation=ObjectSeparationConfig.model_validate(separation) if separation is not None
                    else ObjectSeparationConfig(foreground_threshold=threshold)))
@@ -37,8 +41,11 @@ def predict_instances(dataset, predict, *, input_indexes, tile_size, batch_size=
             if probabilities.shape != (len(pending), 2, tile_size, tile_size):
                 raise RuntimeError("object f1 ожидает две карты вероятностей на каждое окно")
             performance["prediction_sec"] = float(performance.get("prediction_sec", 0)) + time.perf_counter() - started
+            performance["prediction_batch_count"] = int(performance.get("prediction_batch_count", 0)) + 1
+            started = time.perf_counter()
             for (x, y), prediction, valid in zip(pending, probabilities, validity, strict=True):
                 accumulator.add_window(ObjectWindowPrediction(x=x, y=y, probabilities=prediction, valid_pixels=valid))
+            performance["gaussian_accumulation_sec"] = float(performance.get("gaussian_accumulation_sec", 0)) + time.perf_counter() - started
             performance["tile_count"] = int(performance.get("tile_count", 0)) + len(pending)
         started = time.perf_counter()
         result = accumulator.finish()
@@ -46,7 +53,9 @@ def predict_instances(dataset, predict, *, input_indexes, tile_size, batch_size=
         performance["object_count"] = result.object_count
         return accumulator, result
     except BaseException:
+        started = time.perf_counter()
         accumulator.close()
+        performance["cleanup_sec"] = float(performance.get("cleanup_sec", 0)) + time.perf_counter() - started
         raise
 
 

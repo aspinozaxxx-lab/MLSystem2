@@ -366,6 +366,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
             config = _native_inference_config(loaded, config)
+            _apply_native_object_precision(torch, config)
             if config.get("pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
                 threshold = float(config["threshold"])
                 profile = _postprocess_profile_from_config(
@@ -1228,6 +1229,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
             config = _native_inference_config(loaded, config)
+            _apply_native_object_precision(torch, config)
             if config.get("pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
                 threshold = float(config["threshold"])
                 postprocess_profile = _postprocess_profile_from_config(
@@ -1555,6 +1557,18 @@ def _loaded_input_channels(loaded: object, config: dict[str, Any]) -> int:
     return parsed
 
 
+def _apply_native_object_precision(torch: Any, config: dict[str, Any]) -> None:
+    """V2 использует одинаковую полную точность в PyTorch и CUDA EP Triton."""
+    if config.get("pipeline_variant") != "object_f1_v2":
+        return
+    for name in ("cuda", "cudnn"):
+        backend = getattr(getattr(torch, "backends", None), name, None)
+        if name == "cuda":
+            backend = getattr(backend, "matmul", None)
+        if backend is not None and hasattr(backend, "allow_tf32"):
+            backend.allow_tf32 = False
+
+
 def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str, Any]:
     """Отделить порог диагностики обучения от профиля eval-ноутбука."""
     metadata = getattr(getattr(loaded, "artifact", None), "metadata", None) or {}
@@ -1567,7 +1581,8 @@ def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str
                 **({"object_separation": separation.model_dump()} if separation is not None else {}),
                 "threshold": separation.foreground_threshold if separation is not None else 0.5,
                 "batch_size": next_gen2_inference_batch_size(int(metadata.get("sample_size") or config.get("tile_size") or 512), str(getattr(spec, "name", "smp_segformer_b0"))),
-                "inference_merge": "gaussian_instances", "threshold_source": f"{variant}_profile"}
+                "inference_merge": "gaussian_instances", "threshold_source": f"{variant}_profile",
+                **({"inference_precision": "fp32_no_tf32"} if variant == "object_f1_v2" else {})}
     if variant != "next_gen2":
         return config
     return {

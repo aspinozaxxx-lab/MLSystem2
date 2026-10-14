@@ -55,17 +55,22 @@ def test_object_export_preserves_boundary_options_and_filter_order(profile, mode
         "output_fcs": ["output"], "value_property_name": "instance_id",
         "mark_boundary_objects": True, "boundary_tolerance_pixels": 1.0,
         "boundary_tag": "_touches_raster_boundary",
+        **({"match_instance_edges": True} if profile == "object_f1_v2" else {}),
     }
     assert processing["input"] == processing["output"] == "output"
     filters = processing["bricks"]
     assert [brick["_class"] for brick in filters] == [
-        "FilterSmallObjects", "RemoveSmallHoles", filter_name, "Smooth", "Simplify", "RemoveTags",
+        "FilterSmallObjects", "RemoveSmallHoles", filter_name, "Smooth",
+        "CoverageSimplify" if profile == "object_f1_v2" else "Simplify", "RemoveTags",
     ]
     for brick in (filters[0], filters[2]):
         assert brick["preserve_boundary_objects"] is True
         assert brick["boundary_tag"] == vectorize["boundary_tag"]
     assert filters[2]["min_isoperimetric_quotient"] == 0.3
     assert filters[2]["max_bbox_ratio"] == 4
+    assert filters[-2] == {
+        "_class": "CoverageSimplify" if profile == "object_f1_v2" else "Simplify", "rate": 0.5,
+    }
     assert filters[-1]["tags"] == [vectorize["boundary_tag"]]
 
 
@@ -79,6 +84,7 @@ def test_boundary_protection_not_enabled_without_compact_filter(profile, config)
     assert bricks[1] == {
         "_class": "VectorizeMasks", "input_rasters": ["object_instances"],
         "output_fcs": ["output"], "value_property_name": "instance_id",
+        **({"match_instance_edges": True} if profile == "object_f1_v2" else {}),
     }
     if config and config.get("postprocess.min_area_m2"):
         assert bricks[2]["bricks"] == [
@@ -95,14 +101,46 @@ class _Feature(dict):
 
 
 class _Collection(list):
+    @classmethod
+    def from_features(cls, features, crs):
+        collection = cls(_Feature(geometry=shape(feature["geometry"]), **feature["properties"])
+                         for feature in features)
+        collection.crs = crs
+        return collection
+
+    @property
+    def empty(self):
+        return not self
+
+    @property
+    def geometry(self):
+        return [feature.geometry for feature in self]
+
+    @geometry.setter
+    def geometry(self, geometries):
+        for feature, geometry in zip(self, geometries, strict=True):
+            feature["geometry"] = geometry
+
     def filter(self, predicate):
         return _Collection(feature for feature in self if predicate(feature))
 
     def apply(self, function):
         return [function(feature) for feature in self]
 
+    def drop(self, column, *, axis, inplace):
+        assert axis == 1 and inplace
+        for feature in self:
+            del feature[column]
+
+    def __getitem__(self, key):
+        if isinstance(key, tuple):
+            return [feature[key[1]] for feature in self]
+        return super().__getitem__(key)
+
     def __setitem__(self, key, value):
         if isinstance(key, tuple):
+            if np.isscalar(value):
+                value = [value] * len(self)
             for feature, item in zip(self, value, strict=True):
                 feature[key[1]] = item
         else:
@@ -150,9 +188,12 @@ def vector_runtime(monkeypatch):
     io.read_fc = lambda path, name, crs: collections[name]
     io.save_fc = lambda collection, path, name: collections.update({name: collection})
     functional.io = io
+    gpdadapter = ModuleType("gpdadapter")
+    gpdadapter.FeatureCollection = _Collection
     monkeypatch.setitem(sys.modules, "urban", urban)
     monkeypatch.setitem(sys.modules, "urban.base.brick", base)
     monkeypatch.setitem(sys.modules, "urban.functional", functional)
+    monkeypatch.setitem(sys.modules, "gpdadapter", gpdadapter)
     register_vector_bricks()
     return registry, collections
 
@@ -171,7 +212,7 @@ def test_generated_pipeline_filters_instances_independently_and_keeps_edge(
     instances[0:2, 5:35] = 4  # Такой же фрагмент на краю сохраняется.
     with rasterio.open(tmp_path / "object_instances.tif", "w", driver="GTiff",
                        width=50, height=40, count=1, dtype="int32", crs="EPSG:3857",
-                       transform=from_origin(100, 200, 1, 1)) as target:
+                       nodata=0, transform=from_origin(100, 200, 1, 1)) as target:
         target.write(instances, 1)
     _, vectorize, processing = _pipeline(profile, {
         "postprocess.filter_compact_objects.enabled": True,
@@ -224,11 +265,17 @@ def test_export_metadata_distinguishes_current_algorithm_from_checkpoint(profile
         assert current["checkpoint_metadata"] == metadata
         assert "object_separation_algorithm" not in metadata
         if profile == "object_f1_v2":
-            assert current["inference_profile"] == "object_f1_instances_v2_interior_geodesic"
+            assert current["inference_profile"] == "object_f1_instances_v2_interior_geodesic_fp32_shared_edges_v1"
             assert current["object_separation_algorithm"] == "interior_geodesic_v1"
+            assert current["object_simplification_algorithm"] == "shared_edges_v1"
+            assert current["inference_precision"] == "fp32_no_tf32"
+            assert current["cuda_use_tf32"] is False
             assert current["object_separation"] == separation
         else:
             assert "inference_profile" not in current
             assert "object_separation_algorithm" not in current
+            assert "object_simplification_algorithm" not in current
+            assert "inference_precision" not in current
+            assert "cuda_use_tf32" not in current
     finally:
         archive.cleanup()
