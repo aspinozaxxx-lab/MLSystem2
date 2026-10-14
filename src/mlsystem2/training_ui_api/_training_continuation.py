@@ -1,4 +1,4 @@
-"""Новый этап обучения от результата с сохранением исходных данных и параметров."""
+"""Новый этап от сохранённых весов на прежнем либо актуальном составе датасета."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ from mlsystem2.mlflow_adapter.api import download_run_artifact, get_finished_run
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError
 
 from ._config import TrainingUIAPIConfig
+from ._dataset_catalog import find_managed_dataset
+from ._markup_lock import markup_read_lock
 from ._models import JobRow, TrainingResultRow
 from ._template_selection import effective_inference_template_row
 from ._queueing import (
@@ -28,7 +31,7 @@ from ._queueing import (
     next_queue_position,
 )
 from .contracts import (
-    JobSource, JobStatus, JobType, ResultStatus,
+    DatasetInfo, JobSource, JobStatus, JobType, ResultStatus,
     TrainingContinuationCreate, TrainingContinuationOptions, TrainingUIAPIError,
 )
 
@@ -79,6 +82,28 @@ def _check_artifact(config: TrainingUIAPIConfig, run_id: str, artifact: str) -> 
         raise TrainingUIAPIError(f"Завершённый запуск не содержит файл {artifact}. Продолжение недоступно.")
 
 
+def _current_dataset(
+    session: Session, result: TrainingResultRow, job: JobRow, config: TrainingUIAPIConfig,
+    *, input_channels: int | None = None,
+) -> DatasetInfo:
+    if job.custom_dataset_id is not None:
+        raise TrainingUIAPIError("Для загруженного вручную датасета выберите прежний состав: его файлы неизменяемы.")
+    key = job.dataset_key or result.dataset_key or result.class_key
+    dataset = find_managed_dataset(session, config, key)
+    if dataset is None or not dataset.source_available or dataset.images_dir is None:
+        raise TrainingUIAPIError("Актуальный датасет удалён или его источник недоступен. Выберите прежний состав.")
+    if dataset.image_count == 0 and not dataset.managed:
+        raise TrainingUIAPIError("Актуальный датасет пуст. Добавьте и опубликуйте снимки с разметкой.")
+    expected_schema = sorted((item["id"], item["slug"]) for item in result.class_schema or [])
+    schema = sorted((item.id, item.slug) for item in dataset.object_types)
+    if dataset.task != result.task or schema != expected_schema:
+        raise TrainingUIAPIError("Схема типов объектов актуального датасета несовместима с выбранной сетью. Нужно новое обучение либо прежний состав.")
+    channels = input_channels if input_channels is not None else job.config.get("train.input_channels")
+    if channels is not None and dataset.input_channels is not None and int(channels) != dataset.input_channels:
+        raise TrainingUIAPIError("Число каналов актуальных снимков несовместимо с выбранной сетью. Выберите прежний состав.")
+    return dataset
+
+
 def continuation_options(
     session: Session, result_id: uuid.UUID, config: TrainingUIAPIConfig,
 ) -> TrainingContinuationOptions:
@@ -118,12 +143,17 @@ def create_continuation_job(
     if existing is not None:
         if (any(existing.config.get(key) != getattr(request, name) for name, key in _LIMIT_KEYS.items())
             or any(bool(existing.config.get(key, False)) != value for key, value in selected_options.items())
-            or existing.config[CONTINUATION_KEY].get("checkpoint") != request.checkpoint):
+            or existing.config[CONTINUATION_KEY].get("checkpoint") != request.checkpoint
+            or existing.config[CONTINUATION_KEY].get("dataset_source", "original") != request.dataset_source):
             raise TrainingUIAPIError("Параметры повторной отправки изменены. Откройте диалог заново.")
         return existing
     if selected_options[POST_TRAINING_INFERENCE_CONFIG_KEY] and effective_inference_template_row(session, source.dataset_key) is None:
         raise TrainingUIAPIError("Классу не назначен шаблон инференса. Назначьте шаблон или отключите создание псевдоразметки.")
     _check_artifact(config, result.mlflow_run_id, LAST_ARTIFACT if request.checkpoint == "last" else BEST_ARTIFACT)
+    current = None
+    if request.dataset_source == "current":
+        with markup_read_lock(config):
+            current = _current_dataset(session, result, source, config)
     job_config = copy.deepcopy(source.config)
     for transient_key in (POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY):
         job_config.pop(transient_key, None)
@@ -134,15 +164,18 @@ def create_continuation_job(
         "mlflow_run_id": result.mlflow_run_id,
         "epoch": result.epoch if request.checkpoint == "best" else None,
         "checkpoint": request.checkpoint,
+        "dataset_source": request.dataset_source,
+        "source_dataset_version": result.dataset_version,
     }
     row = JobRow(
         type=JobType.TRAINING.value, source=JobSource.MANUAL.value,
         status=JobStatus.QUEUED.value,
         queue_position=next_queue_position(session, JobType.TRAINING, JobSource.MANUAL),
         dedup_key=dedup_key,
-        dataset_key=source.dataset_key, dataset_version=result.dataset_version,
-        dataset_name=source.dataset_name,
-        training_dataset_name=source.training_dataset_name or source.dataset_name,
+        dataset_key=current.key if current else source.dataset_key,
+        dataset_version=current.version if current else result.dataset_version,
+        dataset_name=current.name if current else source.dataset_name,
+        training_dataset_name=current.name if current else source.training_dataset_name or source.dataset_name,
         model_name=source.model_name, architecture=source.architecture,
         tile_size=source.tile_size, custom_dataset_id=source.custom_dataset_id,
         mlflow_experiment_id=source.mlflow_experiment_id,
@@ -153,8 +186,8 @@ def create_continuation_job(
     session.add(row)
     session.flush()
     session.add(TrainingResultRow(
-        source=JobSource.MANUAL.value, dataset_key=result.dataset_key,
-        dataset_version=result.dataset_version, class_key=result.class_key,
+        source=JobSource.MANUAL.value, dataset_key=current.key if current else result.dataset_key,
+        dataset_version=current.version if current else result.dataset_version, class_key=result.class_key,
         class_display_name=result.class_display_name, architecture=result.architecture,
         model_name=result.model_name, quality_metric=result.quality_metric,
         task=result.task, class_schema=copy.deepcopy(result.class_schema or []),
@@ -181,6 +214,7 @@ def _download(config: TrainingUIAPIConfig, run_id: str, artifact: str, root: Pat
 
 def build_continuation_config(
     session: Session, row: JobRow, config: TrainingUIAPIConfig, run_dir: Path,
+    *, current_dataset_config: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     lineage = row.config[CONTINUATION_KEY]
     run_id = lineage["mlflow_run_id"]
@@ -207,7 +241,22 @@ def build_continuation_config(
     if not isinstance(payload, dict) or not isinstance(payload.get("train"), dict) or not isinstance(payload.get("dataset"), dict):
         raise TrainingUIAPIError("В исходном запуске отсутствуют параметры обучения или датасета.")
     # Снимок содержит фактические параметры запуска; актуальный шаблон сюда не подмешивается.
-    _restore_dataset(payload["dataset"], config, run_id, root)
+    if lineage.get("dataset_source", "original") == "current":
+        source_result = session.get(TrainingResultRow, uuid.UUID(lineage["result_id"]))
+        if source_result is None or current_dataset_config is None:
+            raise TrainingUIAPIError("Не удалось восстановить источник продолжения обучения.")
+        with markup_read_lock(config):
+            current = _current_dataset(session, source_result, row, config, input_channels=payload["train"].get("input_channels"))
+            # Меняются только источники данных; параметры разбиения остаются от выбранной сети.
+            previous = payload["dataset"]
+            snapshot = current_dataset_config(current.key)
+            payload["dataset"] = {
+                key: value for key, value in previous.items()
+                if key not in {"images_dir", "annotations_dir", "scenes_file", "annotation_file", "hard_negative_annotation_file", "classes"}
+            } | snapshot
+            row.config = {**row.config, CONTINUATION_KEY: {**lineage, "dataset_version": row.dataset_version}}
+    else:
+        _restore_dataset(payload["dataset"], config, run_id, root)
     payload["runtime"] = {
         **payload.get("runtime", {}), "project_root": str(config.project_root),
         "scratch_root": str(run_dir / "scratch"), "logs_root": str(run_dir / "logs"),

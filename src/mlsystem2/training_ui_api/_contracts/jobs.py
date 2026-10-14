@@ -34,6 +34,9 @@ class TrainingContinuationCreate(BaseModel):
     additional_time_sec: int = Field(gt=0, strict=True)
     early_stopping_patience: int = Field(gt=0, strict=True)
     checkpoint: Literal["best", "last"] = "best"
+    dataset_source: Literal["original", "current"] = Field(
+        default="original", description="Прежний снимок датасета либо актуальный опубликованный состав на момент старта.",
+    )
     run_inference_after_training: bool | None = None
     secondary_priority: bool | None = None
     request_id: UUID

@@ -2992,6 +2992,7 @@ def _training_result_info(
         continued_from_result_id=continuation.get("result_id"),
         continued_from_epoch=continuation.get("epoch"),
         continued_from_checkpoint=continuation.get("checkpoint"),
+        continued_from_dataset_source=continuation.get("dataset_source", "original") if continuation else None,
         input_channels=_job_input_channels(job),
         quality_metric=row.quality_metric,
         task=row.task,

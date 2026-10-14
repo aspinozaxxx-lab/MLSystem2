@@ -3873,6 +3873,7 @@ function ResultsTable({
                       <small className="muted">{result.architecture}</small>
                       {family.stages.length > 1 ? <small className="training-stage-label">Этап {stageIndex + 1}{!result.continued_from_result_id ? " · исходная сеть" : ""}</small> : null}
                       {result.continued_from_result_id ? <small className="muted">{family.stages.some(stage => stage.id === result.continued_from_result_id) ? `От этапа ${family.stages.findIndex(stage => stage.id === result.continued_from_result_id) + 1}` : "Продолжение"} · {result.continued_from_checkpoint === "last" ? "последние веса" : `лучшие веса${result.continued_from_epoch != null ? ` эпохи ${result.continued_from_epoch}` : ""}`}</small> : null}
+                      {result.continued_from_result_id ? <small className="muted">{result.continued_from_dataset_source === "current" ? "Актуальный состав датасета" : "Прежний состав датасета"}</small> : null}
                     </span>
                   </td>
                   <td title="Статус">

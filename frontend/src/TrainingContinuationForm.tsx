@@ -13,6 +13,7 @@ export function TrainingContinuationForm({ result, options, run, closeModal, rel
 }) {
   const [busy, setBusy] = useState(false);
   const [checkpoint, setCheckpoint] = useState<"best" | "last">("best");
+  const [datasetSource, setDatasetSource] = useState<"original" | "current">("original");
   const sending = useRef(false);
   const [requestId] = useState(() => crypto.randomUUID());
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -24,6 +25,7 @@ export function TrainingContinuationForm({ result, options, run, closeModal, rel
       additional_time_sec: Math.round(Number(values.get("minutes")) * 60),
       early_stopping_patience: Number(values.get("patience")),
       checkpoint,
+      dataset_source: values.get("dataset_source") === "current" ? "current" : "original",
       run_inference_after_training: values.get("run_inference_after_training") === "on",
       secondary_priority: values.get("secondary_priority") === "on",
       request_id: requestId,
@@ -52,7 +54,15 @@ export function TrainingContinuationForm({ result, options, run, closeModal, rel
       <label className="field checkbox-field"><input type="radio" name="checkpoint" value="last" checked={checkpoint === "last"} disabled={!options.last_checkpoint_available} onChange={() => setCheckpoint("last")} />Последний</label>
       {!options.last_checkpoint_available ? <small className="muted">Последний чекпойнт не сохранён; доступны только лучшие веса.</small> : null}
     </fieldset>
-    <p className="muted">Исходная разметка датасета и остальные параметры обучения сохраняются. Новый этап начнётся от выбранных весов; счётчики и оптимизатор запускаются заново. Исходная сеть остаётся в результатах.</p>
+    <fieldset className="continuation-checkpoints" disabled={busy}>
+      <legend>На каком составе датасета учить</legend>
+      <label className="field checkbox-field"><input type="radio" name="dataset_source" value="original" checked={datasetSource === "original"} onChange={() => setDatasetSource("original")} />Прежний состав</label>
+      <label className="field checkbox-field"><input type="radio" name="dataset_source" value="current" checked={datasetSource === "current"} onChange={() => setDatasetSource("current")} />Актуальный состав</label>
+    </fieldset>
+    <p className="muted">{datasetSource === "current"
+      ? "При фактическом старте берётся опубликованный состав этого датасета: новые снимки и исправленные полигоны учитываются, удалённые снимки исключаются. Личные неопубликованные черновики не используются. После старта снимок разметки фиксируется."
+      : "Используется сохранённый состав и разметка выбранного обучения. Последующие изменения датасета не учитываются."}</p>
+    <p className="muted">Остальные параметры обучения сохраняются. Новый этап начнётся от выбранных весов; счётчики и оптимизатор запускаются заново. Исходная сеть остаётся в результатах.</p>
     <div className="continuation-fields">
       <label className="field"><span>Ещё времени, мин</span>
         <input name="minutes" type="number" min={1 / 60} step="any" required defaultValue={options.additional_time_sec / 60} disabled={busy} />

@@ -90,7 +90,7 @@ def test_completed_training_continuation_contract(monkeypatch) -> None:
 
     assert set(TrainingContinuationCreate.model_fields) == {
         "additional_epochs", "additional_time_sec", "early_stopping_patience", "checkpoint", "request_id",
-        "run_inference_after_training", "secondary_priority",
+        "run_inference_after_training", "secondary_priority", "dataset_source",
     }
     assert {"can_continue_training", "continued_from_result_id", "continued_from_checkpoint"} <= TrainingResultInfo.model_fields.keys()
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
@@ -100,6 +100,10 @@ def test_completed_training_continuation_contract(monkeypatch) -> None:
     assert {"get", "post"} <= path.keys()
     properties = schema["components"]["schemas"]["TrainingContinuationCreate"]["properties"]
     assert properties["checkpoint"]["enum"] == ["best", "last"]
+    assert properties["dataset_source"]["enum"] == ["original", "current"]
+    assert properties["dataset_source"]["default"] == "original"
+    assert "continued_from_dataset_source" in TrainingResultInfo.model_fields
+    assert Path("frontend/public/news/training-continuation-dataset-source.svg").is_file()
     assert properties["additional_epochs"]["exclusiveMinimum"] == 0
     assert properties["request_id"]["format"] == "uuid"
 

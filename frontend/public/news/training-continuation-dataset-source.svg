@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+  <title id="title">Дообучение: прежний или актуальный состав датасета</title>
+  <desc id="desc">Схема выбора: сохранённые веса сети, прежняя разметка или актуальные опубликованные снимки и контуры, фиксация ревизии при старте отдельного этапа.</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#8aaac4"/></marker></defs>
+  <rect width="1120" height="520" rx="24" fill="#0d1b2a"/>
+  <g font-family="Arial, sans-serif">
+    <text x="40" y="54" font-size="29" font-weight="700" fill="#f4f8fc">Те же веса — состав данных на выбор</text>
+    <text x="40" y="88" font-size="18" fill="#abc1d8">Схема: опубликованные правки можно включить в новый этап обучения</text>
+    <rect x="40" y="180" width="230" height="153" rx="14" fill="#193047" stroke="#45627c"/>
+    <text x="62" y="220" font-size="21" font-weight="700" fill="#fff">Выбранная сеть</text>
+    <text x="62" y="259" font-size="18" fill="#c8dae2">Лучшие или</text>
+    <text x="62" y="288" font-size="18" fill="#c8dae2">последние веса</text>
+    <path d="M278 255H312V192H352M312 255V357H352" fill="none" stroke="#8aaac4" stroke-width="3" marker-end="url(#arrow)"/>
+    <path d="M312 192H352" stroke="#8aaac4" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="365" y="130" width="350" height="130" rx="14" fill="#193047" stroke="#45627c"/>
+    <text x="387" y="166" font-size="22" font-weight="700" fill="#fff">Прежний состав</text>
+    <text x="387" y="203" font-size="17" fill="#c8dae2">Состав и разметка</text>
+    <text x="387" y="232" font-size="17" fill="#c8dae2">выбранного этапа</text>
+    <rect x="365" y="287" width="350" height="142" rx="14" fill="#123b42" stroke="#43868b"/>
+    <text x="387" y="324" font-size="22" font-weight="700" fill="#b0e9d8">Актуальный состав</text>
+    <text x="387" y="360" font-size="17" fill="#c8dae2">Новые снимки · правки контуров</text>
+    <text x="387" y="389" font-size="17" fill="#c8dae2">Без удалённых снимков</text>
+    <text x="387" y="414" font-size="15" fill="#9edbcc">Только опубликованные изменения</text>
+    <path d="M726 193H768V255H800M726 357H768V255" fill="none" stroke="#8aaac4" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="813" y="180" width="267" height="153" rx="14" fill="#193047" stroke="#45627c"/>
+    <text x="833" y="220" font-size="21" font-weight="700" fill="#fff">Отдельный этап</text>
+    <text x="833" y="259" font-size="17" fill="#c8dae2">Ревизия при старте</text>
+    <text x="833" y="288" font-size="17" fill="#c8dae2">Прежняя сеть сохранена</text>
+    <text x="40" y="480" font-size="18" fill="#abc1d8">Настройки обучения наследуются. Личные неопубликованные черновики не используются.</text>
+  </g>
+</svg>

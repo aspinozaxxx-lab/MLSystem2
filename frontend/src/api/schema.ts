@@ -5338,6 +5338,13 @@ export interface components {
              * @enum {string}
              */
             checkpoint: "best" | "last";
+            /**
+             * Dataset Source
+             * @description Прежний снимок датасета либо актуальный опубликованный состав на момент старта.
+             * @default original
+             * @enum {string}
+             */
+            dataset_source: "original" | "current";
             /** Run Inference After Training */
             run_inference_after_training?: boolean | null;
             /** Secondary Priority */
@@ -5466,6 +5473,8 @@ export interface components {
             continued_from_epoch?: number | null;
             /** Continued From Checkpoint */
             continued_from_checkpoint?: ("best" | "last") | null;
+            /** Continued From Dataset Source */
+            continued_from_dataset_source?: ("original" | "current") | null;
             /**
              * Input Channels
              * @default 4

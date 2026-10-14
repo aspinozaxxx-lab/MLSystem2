@@ -243,6 +243,7 @@ class TrainingResultInfo(BaseModel):
     continued_from_result_id: UUID | None = None
     continued_from_epoch: int | None = None
     continued_from_checkpoint: Literal["best", "last"] | None = None
+    continued_from_dataset_source: Literal["original", "current"] | None = None
     input_channels: int = Field(default=4, gt=0)
     quality_metric: Literal["pixel", "objects"] = "pixel"
     task: Literal["binary", "multiclass"] = "binary"

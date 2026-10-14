@@ -720,7 +720,10 @@ def _build_training_config(
     run_dir: Path,
 ) -> dict[str, Any]:
     if CONTINUATION_KEY in (row.config or {}):
-        return build_continuation_config(session, row, config, run_dir)
+        return build_continuation_config(
+            session, row, config, run_dir,
+            current_dataset_config=lambda key: _dataset_config(session, row, config, run_dir, dataset_key=key, use_dataset_images=True),
+        )
     flat = dict(row.config or {})
     pipeline_variant = str(_flat_value(flat, "train.pipeline_variant", "legacy"))
     if pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
@@ -1439,10 +1442,12 @@ def _dataset_config(
     row: JobRow,
     config: TrainingUIAPIConfig,
     run_dir: Path,
+    *, dataset_key: str | None = None, use_dataset_images: bool = False,
 ) -> dict[str, Any]:
     with markup_read_lock(config):
         result = _first_training_result(session, row)
-        dataset_key = result.class_key if result is not None else row.dataset_name
+        allow_name_fallback = dataset_key is None
+        dataset_key = dataset_key or (result.class_key if result is not None else row.dataset_name)
         if row.custom_dataset_id is not None or dataset_key == CUSTOM_KEY:
             custom = row.custom_dataset or session.get(CustomDatasetRow, row.custom_dataset_id)
             if custom is None:
@@ -1457,7 +1462,7 @@ def _dataset_config(
             }
 
         dataset = find_managed_dataset(session, config, dataset_key)
-        if dataset is None:
+        if dataset is None and allow_name_fallback:
             dataset = next(
                 (
                     item
@@ -1476,7 +1481,7 @@ def _dataset_config(
         if result is not None:
             result.dataset_version = dataset.version
         images_dir = str(
-            row.config.get("dataset.images_dir") or dataset.images_dir or config.images_root
+            (None if use_dataset_images else row.config.get("dataset.images_dir")) or dataset.images_dir or config.images_root
         )
         snapshot_dir = run_dir / "dataset_snapshot"
         if dataset.annotations_dir:

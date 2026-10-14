@@ -14903,6 +14903,16 @@
             "title": "Checkpoint",
             "default": "best"
           },
+          "dataset_source": {
+            "type": "string",
+            "enum": [
+              "original",
+              "current"
+            ],
+            "title": "Dataset Source",
+            "description": "Прежний снимок датасета либо актуальный опубликованный состав на момент старта.",
+            "default": "original"
+          },
           "run_inference_after_training": {
             "anyOf": [
               {
@@ -15234,6 +15244,21 @@
               }
             ],
             "title": "Continued From Checkpoint"
+          },
+          "continued_from_dataset_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "original",
+                  "current"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continued From Dataset Source"
           },
           "input_channels": {
             "type": "integer",
