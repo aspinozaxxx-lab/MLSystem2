@@ -49,9 +49,12 @@ def pseudo_markup_view(session: Session, config: TrainingUIAPIConfig, result_id:
     model = result.training_result
     dataset = find_managed_dataset(session, config, model.dataset_key or model.class_key) if model else None
     class_row = dataset_class_row(session, model.dataset_key or model.class_key) if model else None
+    checkpoint_kind, checkpoint_epoch = pseudo_checkpoint_details(
+        result, session.get(JobRow, result.job_id) if result.job_id is not None else None,
+    )
     return PseudoMarkupViewInfo(
         id=result.id, training_result_id=result.training_result_id,
-        checkpoint_epoch=model.epoch if model is not None else None,
+        checkpoint_epoch=checkpoint_epoch, checkpoint_kind=checkpoint_kind,
         model_name=model.model_name if model else "Сеть не указана",
         training_dataset_name=dataset.name if dataset else (model.class_display_name if model else "Не указан"),
         class_name=class_row.name if class_row else None,
@@ -60,6 +63,16 @@ def pseudo_markup_view(session: Session, config: TrainingUIAPIConfig, result_id:
         object_count=result.geojson_file.object_count, expected_image_count=result.image_count,
         scenes=scenes, warnings=warnings,
     )
+
+
+def pseudo_checkpoint_details(result: PseudoMarkupResultRow, job: JobRow | None) -> tuple[str, int | None]:
+    """Выбор и эпоха весов этой разметки; старые результаты использовали лучшие веса."""
+    snapshot = (job.config or {}) if job is not None else {}
+    kind = "last" if snapshot.get("checkpoint_kind") == "last" else "best"
+    epoch = snapshot.get("checkpoint_epoch")
+    if epoch is None and kind == "best" and result.training_result is not None:
+        epoch = result.training_result.epoch
+    return kind, int(epoch) if epoch is not None else None
 
 
 def pseudo_markup_raster(session: Session, config: TrainingUIAPIConfig, result_id: uuid.UUID, scene_id: str) -> Path:

@@ -200,6 +200,7 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         source_dataset_key: str | None = Form(default=None, alias="dataset_key"),
         image_folder_key: str | None = Form(default=None),
         training_result_id: str | None = Form(default=None),
+        checkpoint: Literal["best", "last"] = Form(default="best"),
         scenes_txt: UploadFile | None = File(default=None),
     ) -> JobDetail:
         parsed_training_result_id = uuid.UUID(training_result_id) if training_result_id else None
@@ -211,6 +212,7 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
             dataset_key=source_dataset_key,
             image_folder_key=image_folder_key,
             training_result_id=parsed_training_result_id,
+            checkpoint=checkpoint,
             scenes_name=scenes_name,
             scenes_content_type=scenes_txt.content_type if scenes_name is not None else None,
             scenes_bytes=scenes_bytes,

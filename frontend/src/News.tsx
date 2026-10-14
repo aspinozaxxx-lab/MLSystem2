@@ -14,6 +14,11 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "pseudo-markup-checkpoint-selection",
+  date: "2026-10-14",
+  title: "Выбор весов для ручной псевдоразметки",
+  updates: ["В результатах обучения при создании псевдоразметки можно выбрать лучший чекпойнт или последний сохранённый. По умолчанию используются лучшие веса; выбранный вариант и его эпоха показаны в результатах, просмотрщике и сравнении разметок."],
+}, {
   slug: "inference-compact-filter-direction",
   date: "2026-10-14",
   title: "Исправлена фильтрация участков при инференсе",

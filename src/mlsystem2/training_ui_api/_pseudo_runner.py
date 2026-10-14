@@ -4092,6 +4092,9 @@ def _summary(
         "source": {
             "run_id": config.get("mlflow_run_id"),
             "checkpoint": config.get("checkpoint_uri"),
+            "checkpoint_kind": config.get("checkpoint_kind") or "best",
+            "checkpoint_artifact_path": config.get("checkpoint_artifact_path"),
+            "checkpoint_sha256": config.get("checkpoint_sha256"),
             "threshold": config.get("threshold"),
             **({
                 "threshold_source": config.get("threshold_source"),

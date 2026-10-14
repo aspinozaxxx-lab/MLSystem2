@@ -69,6 +69,7 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
   }, [scene, effectiveClassId, layerKey, quality, attempt]);
   const info = useMemo<PseudoMarkupViewInfo | null>(() => view && scene ? {
     id: view.training_result_id, training_result_id: view.training_result_id,
+    checkpoint_kind: "best",
     model_name: view.model_name, training_dataset_name: view.training_dataset_name,
     source_dataset_name: `${scene.sample_name} · ${scene.name} · Ревизия ${scene.sample_revision}`,
     created_at: view.metric?.evaluated_at ?? "", geojson_url: scene.layers_url,

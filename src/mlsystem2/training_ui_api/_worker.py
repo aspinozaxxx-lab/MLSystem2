@@ -29,11 +29,14 @@ from mlsystem2.dataset_preparing.api import (
     load_dataset_manifest,
 )
 from mlsystem2.mlflow_adapter.api import (
+    download_run_artifact,
     get_best_training_checkpoint,
     get_finished_run_artifact,
     list_experiments,
 )
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowBestCheckpoint
+from mlsystem2.models.api import load_checkpoint
+from mlsystem2.models.contracts import LoadCheckpointRequest
 from mlsystem2.settings.api import load_settings
 
 from ._automation import AUTOMATION_KEY, sync_automation_once
@@ -835,6 +838,9 @@ def _build_pseudo_markup_config(
     config: TrainingUIAPIConfig,
     run_dir: Path,
 ) -> dict[str, Any]:
+    # Загрузка весов и сборка модели на CPU не удерживают блокировку источника разметки.
+    if (row.config or {}).get("checkpoint_kind") == "last":
+        row.config = _last_pseudo_checkpoint_snapshot(dict(row.config), config, run_dir)
     with markup_read_lock(config):
         if _is_dataset_editor_pseudo_job(row):
             state = (row.config or {}).get("editor_pseudo")
@@ -960,6 +966,9 @@ def _build_pseudo_markup_config(
             "mlflow_tracking_uri": config.mlflow_tracking_uri,
             "mlflow_run_id": snapshot.get("mlflow_run_id"),
             "checkpoint_uri": snapshot.get("checkpoint_uri"),
+            "local_checkpoint_path": snapshot.get("local_checkpoint_path"),
+            "checkpoint_kind": snapshot.get("checkpoint_kind") or "best",
+            "checkpoint_sha256": snapshot.get("checkpoint_sha256"),
             "checkpoint_artifact_path": (
                 snapshot.get("checkpoint_artifact_path") or "checkpoints/best.pt"
             ),
@@ -987,6 +996,50 @@ def _build_pseudo_markup_config(
             "device": "cuda",
             **_geoalert_runtime_config(config, inference_backend),
         }
+
+
+def _last_pseudo_checkpoint_snapshot(
+    snapshot: dict[str, Any], config: TrainingUIAPIConfig, run_dir: Path,
+) -> dict[str, Any]:
+    """Зафиксировать метаданные последних весов, не подмешивая эпоху или порог лучших."""
+    run_id = snapshot.get("mlflow_run_id")
+    artifact_path = snapshot.get("checkpoint_artifact_path")
+    if not run_id or artifact_path != "checkpoints/final.pt" or snapshot.get("external_model"):
+        raise RuntimeError("В задании повреждён выбор последнего нативного чекпойнта.")
+    if get_finished_run_artifact(config.mlflow_tracking_uri, str(run_id), artifact_path) is None:
+        raise RuntimeError("Последний чекпойнт checkpoints/final.pt больше недоступен в завершённом MLflow run.")
+    downloaded = download_run_artifact(
+        tracking_uri=config.mlflow_tracking_uri, run_id=str(run_id),
+        artifact_path=artifact_path, dst_dir=run_dir / "checkpoint",
+    )
+    path = Path(downloaded.local_path)
+    loaded = load_checkpoint(LoadCheckpointRequest(checkpoint_uri=str(path), map_location="cpu"))
+    metadata = dict(loaded.artifact.metadata or {})
+    parameters = dict(loaded.model.spec.parameters or {})
+    variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
+    if variant == "next_gen2":
+        threshold = NEXT_GEN2_INFERENCE_THRESHOLD
+    elif variant in {"object_f1", "object_f1_v2"}:
+        threshold = (parameters.get("object_separation") or {}).get("foreground_threshold", 0.5)
+    else:
+        threshold = metadata.get("confidence_threshold", metadata.get("val_best_threshold"))
+    if threshold is None:
+        raise RuntimeError("В последнем чекпойнте отсутствует порог confidence_threshold/val_best_threshold.")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        **snapshot,
+        "local_checkpoint_path": str(path),
+        "checkpoint_sha256": digest.hexdigest(),
+        "checkpoint_epoch": metadata.get("epoch"),
+        "checkpoint_threshold": float(threshold),
+        "checkpoint_f1_score": metadata.get("val_quality_f1"),
+        "checkpoint_metric_name": None,
+        "checkpoint_metadata": metadata,
+        "checkpoint_model_parameters": parameters,
+    }
 
 
 def _build_pseudolabel_aoi_config(

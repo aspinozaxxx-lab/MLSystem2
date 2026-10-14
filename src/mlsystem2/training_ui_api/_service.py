@@ -11,7 +11,7 @@ import uuid
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -93,6 +93,7 @@ from ._models import (
     TrainingTemplateRow,
 )
 from ._processes import terminate_job_process
+from ._pseudo_viewer import pseudo_checkpoint_details
 from ._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
@@ -1588,7 +1589,10 @@ def create_pseudo_markup_job(
     scenes_bytes: bytes | None,
     config: TrainingUIAPIConfig,
     secondary_priority: bool = False,
+    checkpoint: Literal["best", "last"] = "best",
 ) -> JobDetail:
+    if checkpoint not in {"best", "last"}:
+        raise TrainingUIAPIError("Выберите лучший или последний чекпойнт.")
     ensure_seed_templates(session)
     dataset_key = (dataset_key or "").strip() or None
     image_folder_key = (image_folder_key or "").strip().strip("/").replace("\\", "/") or None
@@ -1607,6 +1611,7 @@ def create_pseudo_markup_job(
     training_result = _resolve_training_result(session, training_result_id)
     if training_result is not None and training_result.class_key != class_key:
         raise TrainingUIAPIError("Выбранная модель обучена для другого датасета")
+    checkpoint_config = _checkpoint_config(session, training_result, config, checkpoint=checkpoint)
     training_job = (
         session.get(JobRow, training_result.job_id)
         if training_result is not None and training_result.job_id is not None
@@ -1745,7 +1750,7 @@ def create_pseudo_markup_job(
             else None,
             "inference_template_config": inference_template_config,
             SECONDARY_PRIORITY_CONFIG_KEY: secondary_priority,
-            **_checkpoint_config(session, training_result, config),
+            **checkpoint_config,
         },
     )
     session.add(row)
@@ -1821,6 +1826,7 @@ def ensure_test_sample_pseudo_markup_job(
         job = session.get(JobRow, existing.job_id)
         if (
             job is not None
+            and (job.config or {}).get("checkpoint_kind") != "last"
             and pseudo_markup_covers_dataset(session, existing, sample.dataset_key, config)
             and job.status
             not in {
@@ -1883,7 +1889,7 @@ def ensure_test_sample_batch_dataset_pseudo_markup_job(
     ).all()
     for existing in existing_rows:
         job = session.get(JobRow, existing.job_id) if existing.job_id is not None else None
-        if job is not None and job.status not in {
+        if job is not None and (job.config or {}).get("checkpoint_kind") != "last" and job.status not in {
             JobStatus.FAILED.value,
             JobStatus.CANCELLED.value,
         }:
@@ -2224,16 +2230,23 @@ def _checkpoint_config(
     session: Session,
     row: TrainingResultRow | None,
     config: TrainingUIAPIConfig,
+    *,
+    checkpoint: Literal["best", "last"] = "best",
 ) -> dict[str, object]:
     if row is None or row.mlflow_run_id is None:
+        if checkpoint == "last":
+            raise TrainingUIAPIError("Для последнего чекпойнта выберите завершённую обученную сеть с сохранённым запуском MLflow.")
         return {}
     try:
         external_manifest = external_result_manifest(session, row)
     except ExternalModelError as exc:
         raise TrainingUIAPIError(str(exc)) from exc
     if external_manifest is not None:
+        if checkpoint == "last":
+            raise TrainingUIAPIError("У импортированной сети доступны только сохранённые веса; последнего нативного чекпойнта нет.")
         payload: dict[str, object] = {
             "mlflow_run_id": row.mlflow_run_id,
+            "checkpoint_kind": "best",
             "checkpoint_artifact_path": external_manifest.artifact_path,
             "checkpoint_threshold": external_manifest.score_threshold,
             "external_model": external_model_payload(external_manifest),
@@ -2249,19 +2262,35 @@ def _checkpoint_config(
         if artifact is not None and artifact.artifact_uri is not None:
             payload["checkpoint_uri"] = artifact.artifact_uri
         return payload
+    if checkpoint == "last":
+        if row.status != ResultStatus.OK.value:
+            raise TrainingUIAPIError("Последний чекпойнт доступен только у успешно завершённого обучения.")
+        try:
+            artifact = get_finished_run_artifact(config.mlflow_tracking_uri, row.mlflow_run_id, "checkpoints/final.pt")
+        except MLflowAdapterError as exc:
+            raise TrainingUIAPIError("Не удалось проверить последний чекпойнт в MLflow. Попробуйте ещё раз.") from exc
+        if artifact is None:
+            raise TrainingUIAPIError("В завершённом обучении нет последнего чекпойнта checkpoints/final.pt. Выберите лучший чекпойнт; после остановки с сохранением лучшего последний не создаётся.")
+        return {
+            "mlflow_run_id": row.mlflow_run_id,
+            "checkpoint_kind": "last",
+            "checkpoint_artifact_path": artifact.artifact_path,
+            "checkpoint_uri": artifact.artifact_uri,
+        }
     payload: dict[str, object] = {
         "mlflow_run_id": row.mlflow_run_id,
+        "checkpoint_kind": "best",
         "checkpoint_artifact_path": "checkpoints/best.pt",
     }
-    checkpoint = _best_training_checkpoint(row, config)
-    if checkpoint is not None:
+    best_checkpoint = _best_training_checkpoint(row, config)
+    if best_checkpoint is not None:
         payload.update(
             {
-                "checkpoint_uri": checkpoint.artifact_uri,
-                "checkpoint_metric_name": checkpoint.metric_name,
-                "checkpoint_f1_score": checkpoint.f1_score,
-                "checkpoint_epoch": checkpoint.epoch,
-                "checkpoint_threshold": checkpoint.threshold,
+                "checkpoint_uri": best_checkpoint.artifact_uri,
+                "checkpoint_metric_name": best_checkpoint.metric_name,
+                "checkpoint_f1_score": best_checkpoint.f1_score,
+                "checkpoint_epoch": best_checkpoint.epoch,
+                "checkpoint_threshold": best_checkpoint.threshold,
             }
         )
     return payload
@@ -2995,10 +3024,14 @@ def _pseudo_markup_info(
     row: PseudoMarkupResultRow,
     jobs_by_id: dict[uuid.UUID, JobRow] | None = None,
 ) -> PseudoMarkupResultInfo:
+    checkpoint_kind, checkpoint_epoch = pseudo_checkpoint_details(
+        row, _job_from_map(session, row.job_id, jobs_by_id),
+    )
     return PseudoMarkupResultInfo(
         id=row.id,
         job_id=row.job_id,
-        checkpoint_epoch=row.training_result.epoch if row.training_result is not None else None,
+        checkpoint_epoch=checkpoint_epoch,
+        checkpoint_kind=checkpoint_kind,
         source=JobSource(row.source),
         dataset_key=row.dataset_key,
         dataset_version=row.dataset_version,

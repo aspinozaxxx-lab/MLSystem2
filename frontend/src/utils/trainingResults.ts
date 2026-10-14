@@ -2,6 +2,12 @@ import type { TrainingResultInfo } from "../api/types";
 
 export type TrainingResultFamily = { id: string; stages: TrainingResultInfo[] };
 
+/** Старые псевдоразметки без выбора чекпойнта используют лучшие веса. */
+export function pseudoCheckpointLabel(result: { checkpoint_kind?: "best" | "last"; checkpoint_epoch?: number | null }): string {
+  const label = result.checkpoint_kind === "last" ? "Последние веса" : "Лучшие веса";
+  return `${label}${result.checkpoint_epoch != null ? ` · эпоха ${result.checkpoint_epoch}` : ""}`;
+}
+
 /** Собирает продолжения по связям результатов, сохраняя псевдоразметки у их сети. */
 export function trainingResultFamilies(results: TrainingResultInfo[]): TrainingResultFamily[] {
   const byId = new Map(results.map(result => [result.id, result]));

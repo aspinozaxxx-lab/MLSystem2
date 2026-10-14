@@ -2289,10 +2289,12 @@ def _latest_covering_pseudo_result(
 ) -> PseudoMarkupResultRow | None:
     rows = session.scalars(
         select(PseudoMarkupResultRow)
+        .outerjoin(JobRow, JobRow.id == PseudoMarkupResultRow.job_id)
         .where(
             PseudoMarkupResultRow.training_result_id == training_result_id,
             PseudoMarkupResultRow.status == ResultStatus.OK.value,
             PseudoMarkupResultRow.geojson_file_id.is_not(None),
+            JobRow.config["checkpoint_kind"].as_string().is_distinct_from("last"),
         )
         .options(
             selectinload(PseudoMarkupResultRow.scenes_file),

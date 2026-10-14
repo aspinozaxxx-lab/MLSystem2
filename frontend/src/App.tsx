@@ -83,7 +83,7 @@ import type {
 } from "./api/types";
 import { TrainingContinuationForm } from "./TrainingContinuationForm";
 import { PseudoComparisonProvider, PseudoComparisonTray, PseudoCompareButton } from "./PseudoComparisonSelection";
-import { trainingResultFamilies } from "./utils/trainingResults";
+import { pseudoCheckpointLabel, trainingResultFamilies } from "./utils/trainingResults";
 import {
   defaultTrainingZipModelName,
   displayStoredFileName,
@@ -3967,7 +3967,7 @@ function ResultsTable({
                 <tbody>
                   {(result.pseudo_markup_results || []).map((item) => (
                     <tr className="pseudo-result-row" key={item.id}>
-                      <td title="ИСТОЧНИК"><span className="source-lines">{imageSourceLabel(item, datasets, imageFolders)}<small className="muted">{item.checkpoint_epoch != null ? `Лучшие веса · эпоха ${item.checkpoint_epoch}${family.stages.length > 1 ? ` этапа ${stageIndex + 1}` : ""}` : "Сохранённые веса сети"}</small></span></td>
+                      <td title="ИСТОЧНИК"><span className="source-lines">{imageSourceLabel(item, datasets, imageFolders)}<small className="muted">{pseudoCheckpointLabel(item)}{item.checkpoint_epoch != null && family.stages.length > 1 ? ` этапа ${stageIndex + 1}` : ""}</small></span></td>
                       <td title="Статус">
                         <span className="status-stack">
                           {resultStatusBadge(item.status, "inference", item.progress, item.job_id, undefined, showJobLog)}
@@ -3977,7 +3977,7 @@ function ResultsTable({
                       <td title="GeoJSON">{item.geojson_file ? <span className="pseudo-download-actions">
                         {geojsonDownloadLink(item.geojson_file)}
                         {item.status === "ok" ? <a className="secondary icon-button" href={`#/pseudo-markup/${item.id}`} title="Посмотреть псевдоразметку на мозаике снимков" aria-label="Посмотреть псевдоразметку на мозаике снимков"><MapIcon size={15} /></a> : null}
-                        {item.status === "ok" ? <PseudoCompareButton id={item.id} label={`${payload.class_name || "Класс"} · ${payload.dataset_name} · ${result.model_name} · ${item.source_dataset_name} · ${formatDateTime(item.created_at)}${item.checkpoint_epoch != null ? ` · эпоха ${item.checkpoint_epoch}` : ""}`} /> : null}
+                        {item.status === "ok" ? <PseudoCompareButton id={item.id} label={`${payload.class_name || "Класс"} · ${payload.dataset_name} · ${result.model_name} · ${item.source_dataset_name} · ${formatDateTime(item.created_at)} · ${pseudoCheckpointLabel(item)}`} /> : null}
                       </span> : "—"}</td>
                       <td title="Создано" data-label="Создано">{pseudoCreatedLabel(item)}</td>
                       <td className="action-cell">
@@ -4004,7 +4004,7 @@ function ResultsTable({
   );
 }
 
-function PseudoMarkupForm({
+export function PseudoMarkupForm({
   datasetKey,
   result,
   datasets,
@@ -4023,7 +4023,10 @@ function PseudoMarkupForm({
   closeModal: () => void;
   reload: () => Promise<void>;
 }) {
+  const [error, setError] = useState("");
   const imageryType = imageryTypeForInputChannels(result.input_channels);
+  const imported = result.architecture === "external_torchscript";
+  const trainingDataset = datasets.find((dataset) => dataset.key === datasetKey);
   const compatibleDatasets = imageryType
     ? datasets.filter(
         (dataset) => dataset.key !== "custom" && dataset.imagery_type === imageryType,
@@ -4035,6 +4038,7 @@ function PseudoMarkupForm({
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!inferenceAvailable) return;
+    setError("");
     const source = new FormData(event.currentTarget);
     const sourceDatasetKey = String(source.get("dataset_key") || "");
     const imageFolderKey = String(source.get("image_folder_key") || "");
@@ -4047,10 +4051,19 @@ function PseudoMarkupForm({
     }
     const request = new FormData();
     request.set("training_result_id", result.id);
+    request.set("checkpoint", imported ? "best" : String(source.get("checkpoint") || "best"));
     if (sourceDatasetKey) request.set("dataset_key", sourceDatasetKey);
     if (imageFolderKey) request.set("image_folder_key", imageFolderKey);
     if (hasFile && file instanceof File) request.set("scenes_txt", file);
-    const created = await run(() => apiForm<JobDetail>(`/results/datasets/${encodeURIComponent(datasetKey)}/pseudo-markup`, request));
+    const created = await run(async () => {
+      try {
+        return await apiForm<JobDetail>(`/results/datasets/${encodeURIComponent(datasetKey)}/pseudo-markup`, request);
+      } catch (reason) {
+        if (reason instanceof ApiError && reason.status === 401) throw reason;
+        setError(reason instanceof Error ? reason.message : "Не удалось создать псевдоразметку.");
+        return undefined;
+      }
+    });
     if (created) {
       closeModal();
       await reload();
@@ -4058,7 +4071,20 @@ function PseudoMarkupForm({
   };
   return (
     <form className="form-stack" onSubmit={submit}>
+      <div className="continuation-source">
+        <strong>Сеть: {result.model_name}</strong>
+        {trainingDataset ? <span className="muted">Обучена на: {trainingDataset.name}</span> : null}
+        <span className="muted">Обучение: {formatDateTime(result.trained_at || result.created_at)}</span>
+      </div>
+      {error ? <div className="error-text" role="alert">{error}</div> : null}
       {!inferenceAvailable ? <div className="inference-template-warning" role="alert">Классу не назначен шаблон инференса. Чтобы создать псевдоразметку, <a href="#/templates/inference" onClick={closeModal}>назначьте шаблон</a> в разделе «Инференс».</div> : null}
+      <fieldset className="continuation-checkpoints">
+        <legend>Чекпойнт для псевдоразметки</legend>
+        <label className="field checkbox-field"><input type="radio" name="checkpoint" value="best" defaultChecked />Лучший{!imported && result.epoch != null ? ` · эпоха ${result.epoch}` : ""}</label>
+        <label className="field checkbox-field"><input type="radio" name="checkpoint" value="last" disabled={imported} />Последний</label>
+        <small className="muted">{imported ? "У импортированной сети доступны только сохранённые веса." : "Лучший выбран по результатам валидации. Последний — веса последней завершённой эпохи, если они сохранены. Если чекпойнт недоступен, запуск не создаётся; другие веса не подставляются."}</small>
+      </fieldset>
+      {!imported ? <p className="muted">Выбор относится только к этой псевдоразметке. Тестовая F1, автоматическая разметка и подсказки редактора используют лучшие веса.</p> : null}
       {imageryType ? (
         <p className="muted">
           Доступны только снимки типа «{imageryTypeLabel(imageryType)}», совместимые с {result.input_channels}-канальной моделью.

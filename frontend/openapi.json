@@ -6040,6 +6040,15 @@
             ],
             "title": "Training Result Id"
           },
+          "checkpoint": {
+            "type": "string",
+            "enum": [
+              "best",
+              "last"
+            ],
+            "title": "Checkpoint",
+            "default": "best"
+          },
           "scenes_txt": {
             "anyOf": [
               {
@@ -10374,6 +10383,15 @@
             ],
             "title": "Checkpoint Epoch"
           },
+          "checkpoint_kind": {
+            "type": "string",
+            "enum": [
+              "best",
+              "last"
+            ],
+            "title": "Checkpoint Kind",
+            "default": "best"
+          },
           "source": {
             "$ref": "#/components/schemas/JobSource",
             "default": "manual"
@@ -10612,6 +10630,15 @@
               }
             ],
             "title": "Checkpoint Epoch"
+          },
+          "checkpoint_kind": {
+            "type": "string",
+            "enum": [
+              "best",
+              "last"
+            ],
+            "title": "Checkpoint Kind",
+            "default": "best"
           },
           "model_name": {
             "type": "string",

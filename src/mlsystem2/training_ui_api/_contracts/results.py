@@ -28,6 +28,7 @@ class PseudoMarkupResultInfo(BaseModel):
     id: UUID
     job_id: UUID | None = None
     checkpoint_epoch: int | None = None
+    checkpoint_kind: Literal["best", "last"] = "best"
     source: JobSource = JobSource.MANUAL
     dataset_key: str | None = None
     dataset_version: str | None = None
@@ -63,6 +64,7 @@ class PseudoMarkupViewInfo(BaseModel):
     id: UUID
     training_result_id: UUID | None = None
     checkpoint_epoch: int | None = None
+    checkpoint_kind: Literal["best", "last"] = "best"
     model_name: str
     source_dataset_name: str
     training_dataset_name: str

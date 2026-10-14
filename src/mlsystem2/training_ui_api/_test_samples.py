@@ -508,9 +508,11 @@ def _test_sample_batch_dataset_option(
 
     candidates = session.scalars(
         select(PseudoMarkupResultRow)
+        .outerjoin(JobRow, JobRow.id == PseudoMarkupResultRow.job_id)
         .where(
             PseudoMarkupResultRow.dataset_key == dataset.key,
             PseudoMarkupResultRow.training_result_id == training_result.id,
+            JobRow.config["checkpoint_kind"].as_string().is_distinct_from("last"),
         )
         .options(selectinload(PseudoMarkupResultRow.scenes_file))
         .order_by(
@@ -2793,11 +2795,13 @@ def dataset_test_sample_pseudo_markup(
 
     candidates = session.scalars(
         select(PseudoMarkupResultRow)
+        .outerjoin(JobRow, JobRow.id == PseudoMarkupResultRow.job_id)
         .where(
             PseudoMarkupResultRow.status == "ok",
             PseudoMarkupResultRow.dataset_key == dataset_key,
             PseudoMarkupResultRow.geojson_file_id.is_not(None),
             PseudoMarkupResultRow.training_result_id == training_result_id,
+            JobRow.config["checkpoint_kind"].as_string().is_distinct_from("last"),
         )
         .options(
             selectinload(PseudoMarkupResultRow.scenes_file),
@@ -4516,9 +4520,11 @@ def test_sample_pseudo_markup_info(
         )
     candidates = session.scalars(
         select(PseudoMarkupResultRow)
+        .outerjoin(JobRow, JobRow.id == PseudoMarkupResultRow.job_id)
         .where(
             PseudoMarkupResultRow.dataset_key == row.dataset_key,
             PseudoMarkupResultRow.training_result_id == target.id,
+            JobRow.config["checkpoint_kind"].as_string().is_distinct_from("last"),
         )
         .options(selectinload(PseudoMarkupResultRow.scenes_file))
         .order_by(

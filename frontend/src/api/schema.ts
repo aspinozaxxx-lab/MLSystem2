@@ -2137,6 +2137,12 @@ export interface components {
             image_folder_key?: string | null;
             /** Training Result Id */
             training_result_id?: string | null;
+            /**
+             * Checkpoint
+             * @default best
+             * @enum {string}
+             */
+            checkpoint: "best" | "last";
             /** Scenes Txt */
             scenes_txt?: string | null;
         };
@@ -3684,6 +3690,12 @@ export interface components {
             job_id?: string | null;
             /** Checkpoint Epoch */
             checkpoint_epoch?: number | null;
+            /**
+             * Checkpoint Kind
+             * @default best
+             * @enum {string}
+             */
+            checkpoint_kind: "best" | "last";
             /** @default manual */
             source: components["schemas"]["JobSource"];
             /** Dataset Key */
@@ -3763,6 +3775,12 @@ export interface components {
             training_result_id?: string | null;
             /** Checkpoint Epoch */
             checkpoint_epoch?: number | null;
+            /**
+             * Checkpoint Kind
+             * @default best
+             * @enum {string}
+             */
+            checkpoint_kind: "best" | "last";
             /** Model Name */
             model_name: string;
             /** Source Dataset Name */

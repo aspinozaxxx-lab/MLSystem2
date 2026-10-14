@@ -205,7 +205,7 @@ def test_pseudo_markup_view_contract(monkeypatch) -> None:
 
     assert set(PseudoMarkupSceneInfo.model_fields) == {"id", "name", "raster_url", "footprint_url", "bounds", "has_alpha", "has_nir", "nodata"}
     assert set(PseudoMarkupViewInfo.model_fields) == {
-        "id", "training_result_id", "checkpoint_epoch", "model_name", "source_dataset_name", "training_dataset_name", "created_at",
+        "id", "training_result_id", "checkpoint_epoch", "checkpoint_kind", "model_name", "source_dataset_name", "training_dataset_name", "created_at",
         "geojson_url", "object_count", "expected_image_count", "scenes", "warnings", "class_name",
     }
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")

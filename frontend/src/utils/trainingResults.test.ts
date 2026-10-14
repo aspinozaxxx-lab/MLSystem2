@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { TrainingResultInfo } from "../api/types";
-import { trainingResultFamilies } from "./trainingResults";
+import { pseudoCheckpointLabel, trainingResultFamilies } from "./trainingResults";
 
 const result = (id: string, day: number, parent?: string): TrainingResultInfo => ({
   id, created_at: `2026-10-${String(day).padStart(2, "0")}T12:00:00Z`, model_name: "Сеть",
   architecture: "smp_unet_resnet34", status: "ok", continued_from_result_id: parent,
   source: "manual", pipeline_variant: "legacy", validation_fold: 0, is_primary: false,
   can_continue_training: true, input_channels: 4, quality_metric: "pixel", task: "binary",
+});
+
+describe("использованные веса псевдоразметки", () => {
+  it("отличает последний чекпойнт от лучшего и использует фактическую эпоху", () => {
+    expect(pseudoCheckpointLabel({ checkpoint_kind: "last", checkpoint_epoch: 28 })).toBe("Последние веса · эпоха 28");
+    expect(pseudoCheckpointLabel({ checkpoint_kind: "best", checkpoint_epoch: 7 })).toBe("Лучшие веса · эпоха 7");
+  });
+
+  it("сохраняет совместимость старой псевдоразметки и не придумывает неизвестную эпоху", () => {
+    expect(pseudoCheckpointLabel({ checkpoint_epoch: 7 })).toBe("Лучшие веса · эпоха 7");
+    expect(pseudoCheckpointLabel({})).toBe("Лучшие веса");
+    expect(pseudoCheckpointLabel({ checkpoint_kind: "last", checkpoint_epoch: null })).toBe("Последние веса");
+  });
 });
 
 describe("связанные этапы обучения", () => {

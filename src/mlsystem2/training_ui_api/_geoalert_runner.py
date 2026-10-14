@@ -921,6 +921,9 @@ def _pseudo_summary(
         "source": {
             "run_id": config.get("mlflow_run_id"),
             "checkpoint": config.get("checkpoint_uri"),
+            "checkpoint_kind": config.get("checkpoint_kind") or "best",
+            "checkpoint_artifact_path": config.get("checkpoint_artifact_path"),
+            "checkpoint_sha256": config.get("checkpoint_sha256"),
             "threshold": config.get("threshold"),
             "f1_score": config.get("checkpoint_f1_score"),
             "epoch": config.get("checkpoint_epoch"),
