@@ -190,9 +190,8 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
       new Style({ stroke: new Stroke({ color: "#111827", width: 6 }) }),
       new Style({ stroke: new Stroke({ color: "#fbbf24", width: 3 }) }),
     ] });
-    const vector = new VectorSource({ features: new GeoJSON().readFeatures(geojson, {
-      dataProjection: comparison ? "EPSG:3857" : "EPSG:4326", featureProjection: "EPSG:3857",
-    }) });
+    // Геометрии добавляет общий эффект ниже: не разбираем большой GeoJSON дважды.
+    const vector = new VectorSource();
     markupSource.current = vector;
     const markup = new VectorImageLayer({
       source: vector, opacity: comparison ? 1 : 0.8,

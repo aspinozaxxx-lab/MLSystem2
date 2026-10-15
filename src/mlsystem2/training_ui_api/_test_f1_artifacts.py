@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import hashlib
+import gzip
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import numpy as np
@@ -125,7 +128,6 @@ def test_f1_object_score(mask_path: str, mtime_ns: int, size: int, class_id: int
             "false_negative": np.count_nonzero(np.unique(reference)) - tp}, reconstructed
 
 
-@lru_cache(maxsize=4)
 def test_f1_layers(
     mask_path: str, mtime_ns: int, size: int, transform_values: tuple[float, ...],
     crs: str, class_id: int | None, metric: str = "pixel",
@@ -150,10 +152,46 @@ def test_f1_layers(
                      fn=(true_instances > 0) & ~matched_truth)
     transform = Affine(*transform_values)
     features = []
-    for layer, mask in masks.items():
-        for geometry, _ in shapes(mask.astype(np.uint8), mask=mask, transform=transform):
-            features.append({
-                "type": "Feature", "properties": {"test_f1_layer": layer},
-                "geometry": transform_geom(crs, "EPSG:3857", geometry),
-            })
+    # Без общей среды каждый полигон повторно создаёт GDAL/AWS-сессию.
+    with rasterio.Env():
+        for layer, mask in masks.items():
+            for geometry, _ in shapes(mask.astype(np.uint8), mask=mask, transform=transform):
+                features.append({
+                    "type": "Feature", "properties": {"test_f1_layer": layer},
+                    "geometry": transform_geom(crs, "EPSG:3857", geometry),
+                })
     return {"type": "FeatureCollection", "features": features}
+
+
+_LAYER_CONTENT_CACHE: OrderedDict[tuple, bytes] = OrderedDict()
+_LAYER_CONTENT_LOCK = Lock()
+_LAYER_CONTENT_LIMIT = 64 * 1024 * 1024
+_LAYER_CONTENT_BYTES = 0
+
+
+def test_f1_layer_content(
+    mask_path: str, mtime_ns: int, size: int, transform_values: tuple[float, ...],
+    crs: str, class_id: int | None, metric: str = "pixel",
+    source: tuple[str, int, int, str] | None = None, schema: tuple[tuple[int, str], ...] = (),
+) -> bytes:
+    """Кэшировать сжатый JSON, а не миллионы Python-объектов координат."""
+    global _LAYER_CONTENT_BYTES
+    key = mask_path, mtime_ns, size, transform_values, crs, class_id, metric, source, schema
+    with _LAYER_CONTENT_LOCK:
+        if key in _LAYER_CONTENT_CACHE:
+            _LAYER_CONTENT_CACHE.move_to_end(key)
+            return _LAYER_CONTENT_CACHE[key]
+    content = gzip.compress(json.dumps(test_f1_layers(*key), ensure_ascii=False, allow_nan=False,
+                                      separators=(",", ":")).encode("utf-8"), compresslevel=1, mtime=0)
+    with _LAYER_CONTENT_LOCK:
+        # Одновременный запрос мог уже опубликовать тот же неизменяемый ответ.
+        if key in _LAYER_CONTENT_CACHE:
+            _LAYER_CONTENT_CACHE.move_to_end(key)
+            return _LAYER_CONTENT_CACHE[key]
+        if len(content) <= _LAYER_CONTENT_LIMIT:
+            _LAYER_CONTENT_CACHE[key] = content
+            _LAYER_CONTENT_BYTES += len(content)
+            while _LAYER_CONTENT_BYTES > _LAYER_CONTENT_LIMIT or len(_LAYER_CONTENT_CACHE) > 128:
+                _, removed = _LAYER_CONTENT_CACHE.popitem(last=False)
+                _LAYER_CONTENT_BYTES -= len(removed)
+    return content

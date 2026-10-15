@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
+import hashlib
 import uuid
 from contextlib import suppress
 from functools import partial
@@ -10,7 +12,7 @@ from threading import Event
 from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -78,6 +80,22 @@ async def _comparison_read(http_request, operation):
             await watcher
 
 
+def _accepts_gzip(value: str) -> bool:
+    encodings = {}
+    for item in value.lower().split(","):
+        encoding, *options = item.strip().split(";")
+        quality = 1.0
+        for option in options:
+            name, _, parameter = option.strip().partition("=")
+            if name == "q":
+                try:
+                    quality = float(parameter)
+                except ValueError:
+                    quality = 0.0
+        encodings[encoding] = quality
+    return 0 < encodings.get("gzip", encodings.get("*", 0)) <= 1
+
+
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
     @app.post("/api/v1/results/training/{result_id}/test-f1", response_model=TrainingResultTestF1Info | None)
     def post_training_test_f1(result_id: uuid.UUID, db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)):
@@ -127,11 +145,20 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         return prepare_test_f1_view(db, ctx.config, result_id)
 
     @app.get("/api/v1/results/training/{result_id}/test-f1/layers/{scene_id}")
-    def get_test_f1_layers(result_id: uuid.UUID, scene_id: str, class_id: int | None = None,
+    def get_test_f1_layers(result_id: uuid.UUID, scene_id: str, request: Request, class_id: int | None = None,
                            metric: Literal["pixel", "objects"] = "pixel",
-                           db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)) -> JSONResponse:
-        return JSONResponse(test_f1_scene_layers(db, ctx.config, result_id, scene_id, class_id, metric),
-                            headers={"Cache-Control": "private, no-store"})
+                           db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)) -> Response:
+        content = test_f1_scene_layers(db, ctx.config, result_id, scene_id, class_id, metric)
+        compressed = _accepts_gzip(request.headers.get("Accept-Encoding", ""))
+        etag = f'"{"gzip" if compressed else "identity"}-{hashlib.sha256(content).hexdigest()}"'
+        headers = {"Cache-Control": "private, no-cache", "Vary": "Accept-Encoding", "ETag": etag}
+        # Авторизация и принадлежность снимка проверены до условного ответа.
+        if any(value.strip().removeprefix("W/") in {etag, "*"}
+               for value in request.headers.get("If-None-Match", "").split(",")):
+            return Response(status_code=304, headers=headers)
+        if compressed:
+            headers["Content-Encoding"] = "gzip"
+        return Response(content if compressed else gzip.decompress(content), media_type="application/json", headers=headers)
 
     @app.get("/api/v1/results/training/{result_id}/test-f1/raster/{scene_id}")
     def get_test_f1_raster(result_id: uuid.UUID, scene_id: str, v: str | None = None,

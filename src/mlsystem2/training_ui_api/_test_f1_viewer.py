@@ -16,7 +16,7 @@ from ._config import TrainingUIAPIConfig
 from ._models import JobRow, TrainingResultRow, TrainingResultTestMetricRow, TestSampleRow
 from ._pseudo_viewer import _raster_metadata
 from ._raster_http import raster_revision
-from ._test_f1_artifacts import test_f1_layers, test_f1_object_score
+from ._test_f1_artifacts import test_f1_layer_content, test_f1_object_score
 from ._test_samples import queue_training_result_test_f1, training_result_test_f1_info
 from .contracts import JobSource, TestF1SceneInfo, TestF1ScoreInfo, TestF1ViewInfo, TrainingUIAPIError
 
@@ -266,7 +266,7 @@ def test_f1_raster(session: Session, config: TrainingUIAPIConfig, result_id: uui
 def test_f1_scene_layers(
     session: Session, config: TrainingUIAPIConfig, result_id: uuid.UUID, scene_id: str, class_id: int | None,
     metric: str = "pixel",
-) -> dict[str, Any]:
+) -> bytes:
     root, scene = _scene(session, config, result_id, scene_id)
     target = scene.get("target_class_id")
     allowed = {int(item["id"]) for item in scene["class_schema"]}
@@ -279,4 +279,4 @@ def test_f1_scene_layers(
     path = root / f"{scene['id']}.npz"
     stat = path.stat()
     source = _object_source(session, config, scene) if metric == "objects" and not scene.get("object_layers_available") else None
-    return test_f1_layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], class_id, metric, source, _object_schema(scene))
+    return test_f1_layer_content(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], class_id, metric, source, _object_schema(scene))

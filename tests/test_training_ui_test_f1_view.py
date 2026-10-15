@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -142,7 +143,7 @@ def test_legacy_view_preparation_and_metric_switch_never_enqueue_inference(tmp_p
     assert view.metric.object_f1 == pytest.approx(2 / 3)
     assert not view.warnings
     for mode in ("pixel", "objects", "pixel", "objects"):
-        assert viewer.test_f1_scene_layers(session, config, result_id, scene["public_id"], None, mode)["features"]
+        assert json.loads(gzip.decompress(viewer.test_f1_scene_layers(session, config, result_id, scene["public_id"], None, mode)))["features"]
     sample.content_revision = 2
     restored = viewer.test_f1_view(session, config, result_id)
     assert restored.scenes[0].objects.f1 == 1
