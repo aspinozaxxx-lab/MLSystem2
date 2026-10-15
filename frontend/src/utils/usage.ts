@@ -9,7 +9,7 @@ export const usagePages = {
   test_editor: "Редактор тестовой разметки", results: "Результаты",
   dataset_results: "Результаты датасета", job: "Задание",
   pseudo_view: "Просмотр псевдоразметки", pseudo_compare: "Сравнение псевдоразметок",
-  test_f1: "Просмотр тестового F1", news: "Новости", feedback: "Обращения",
+  test_f1: "Просмотр тестового F1", news: "Новости",
 } as const;
 
 export type UsagePage = keyof typeof usagePages;
@@ -29,7 +29,7 @@ export const usageActions: Record<string, string> = {
   test_delete: "Удаление тестовой разметки", test_optimize: "Оптимизация тестовой разметки",
   primary_select: "Выбор основной сети или разметки", pseudo_delete: "Удаление псевдоразметки",
   model_export: "Экспорт модели", markup_export: "Экспорт разметки", scene_export: "Создание списка сцен",
-  file_download: "Скачивание файла", automation_save: "Настройка автоматизации", feedback_send: "Отправка обращения",
+  file_download: "Скачивание файла", automation_save: "Настройка автоматизации",
 };
 
 export function usagePageForRoute(route: readonly string[]): UsagePage {
@@ -40,7 +40,7 @@ export function usagePageForRoute(route: readonly string[]): UsagePage {
   if (head === "test-markups") return second === "create" ? "test_create" : second ? "test_editor" : "test_catalog";
   return ({ start: "start", queue: "queue", automation: "automation", classes: "classes",
     "dataset-editor": "dataset_editor", "model-export": "model_export", "scene-list-export": "scene_export",
-    "test-f1": "test_f1", jobs: "job", news: "news", feedback: "feedback" } as Record<string, UsagePage>)[head] ?? "home";
+    "test-f1": "test_f1", jobs: "job", news: "news" } as Record<string, UsagePage>)[head] ?? "home";
 }
 
 export function usagePageViewed(page: UsagePage): void {

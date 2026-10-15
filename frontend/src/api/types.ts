@@ -2,10 +2,6 @@ import type { components } from "./schema";
 
 export type UsageConfig = components["schemas"]["UsageConfig"];
 
-export type FeedbackCreate = components["schemas"]["FeedbackCreate"];
-export type FeedbackInfo = components["schemas"]["FeedbackInfo"];
-export type FeedbackListResponse = components["schemas"]["FeedbackListResponse"];
-
 export type PseudoMarkupViewInfo = components["schemas"]["PseudoMarkupViewInfo"];
 export type PseudoMarkupComparisonCounts = components["schemas"]["PseudoMarkupComparisonCounts"];
 export type PseudoMarkupComparisonLayers = components["schemas"]["PseudoMarkupComparisonLayers"];

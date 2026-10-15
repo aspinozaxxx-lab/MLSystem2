@@ -119,7 +119,6 @@ import { TestMarkupCreatePage } from "./TestMarkupCreatePage";
 import { useTestMarkupClasses } from "./useTestMarkupClasses";
 import { ClassNavigation, useRememberedClass } from "./ClassNavigation";
 import { NewsPage, NewsSection } from "./News";
-import { FeedbackButton, FeedbackSection } from "./Feedback";
 import { useUsage } from "./useUsage";
 import { usagePageViewed } from "./utils/usage";
 import { configFieldTooltip, trainingConfigForTemplate, trainingConfigSchema, trainingPipelineLabel } from "./utils/trainingConfig";
@@ -323,7 +322,6 @@ function RoutedPage(context: {
   if (!context.bootstrap) return <LoadingPage text="Загрузка справочников" />;
   const props = { ...context, bootstrap: context.bootstrap };
   if (head === "news") return <NewsPage slug={second} />;
-  if (head === "feedback") return <FeedbackSection feedbackId={second} />;
   if (head === "pseudo-markup" && second === "compare") return <Suspense fallback={<LoadingPage text="Загрузка сравнения псевдоразметок" />}><PseudoComparisonPage ids={props.route[2] ?? ""} username={props.username} /></Suspense>;
   if (head === "pseudo-markup" && second) return <Suspense fallback={<LoadingPage text="Загрузка просмотра псевдоразметки" />}><PseudoMarkupPage resultId={second} username={props.username} /></Suspense>;
   if (head === "start") return <StartPage {...props} />;
@@ -469,7 +467,6 @@ function Shell({
             <BarChart3 size={16} />
             <span className="nav-label">Результаты</span>
           </a>
-          <FeedbackButton />
           <button type="button" title={`Выйти: ${user}`} aria-label={`Выйти: ${user}`} onClick={onLogout}>
             <LogOut size={16} />
             <span className="nav-label">Выйти</span>
@@ -569,7 +566,6 @@ function HomePage({ bootstrap }: RoutedPageProps) {
           </a>
         </>} />
       </div>
-      <FeedbackSection />
       <NewsSection />
     </>
   );

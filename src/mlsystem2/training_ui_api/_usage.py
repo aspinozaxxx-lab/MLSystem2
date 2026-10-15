@@ -21,7 +21,7 @@ def action_for_request(method: str, route: str) -> str | None:
         return None
     path = route.removeprefix("/api/v1/")
     exact = {
-        "training-jobs": "training_start", "feedback": "feedback_send",
+        "training-jobs": "training_start",
         "results/training/{result_id}/continue": "training_continue",
         "results/datasets/{dataset_key}/pseudo-markup": "pseudo_create",
         "results/datasets/{dataset_key}/test-f1": "test_f1_calculate",
@@ -34,8 +34,6 @@ def action_for_request(method: str, route: str) -> str | None:
         "test-sample-batches": "test_create", "test-samples": "test_create",
         "scene-list-export": "scene_export", "markup-export": "markup_export",
     }
-    if path == "feedback" and method != "POST":
-        return None
     if path in exact:
         return exact[path]
     if path.startswith(("training-templates", "inference-templates")):

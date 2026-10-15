@@ -46,7 +46,7 @@ EXPECTED_API = {
     "train_pipeline.api": ["run_train_pipeline"],
     "inference.api": ["run_inference", "create_object_scene", "separate_objects", "object_window_origins", "object_separation_config"],
     "inference_pipeline.api": ["run_inference_pipeline"],
-    "training_ui_api.api": ["create_app", "get_openapi_schema", "main", "worker_main", "feedback_main"],
+    "training_ui_api.api": ["create_app", "get_openapi_schema", "main", "worker_main"],
 }
 
 

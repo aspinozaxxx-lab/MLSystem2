@@ -64,7 +64,7 @@ def test_explicit_action_header_has_identity_and_polling_has_none(usage_client):
     ("POST", "results/training/{result_id}/test-f1/view"),
     ("PUT", "dataset-editor/datasets/{dataset_key}/drafts/{annotation_name}"),
     ("PUT", "test-sample-batches/options/{dataset_key}/settings"),
-    ("POST", "test-samples/reconcile"), ("PATCH", "feedback/{feedback_id}"),
+    ("POST", "test-samples/reconcile"),
 ])
 def test_background_operations_are_not_feature_usage(method, path):
     assert action_for_request(method, f"/api/v1/{path}") is None
