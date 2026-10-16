@@ -212,7 +212,7 @@ def test_next_gen2_uses_existing_public_contracts() -> None:
 
     for dto in (TrainSettings, TrainConfig, TileDataloaderRequest, JobDetail, JobSummary, TrainingResultInfo):
         assert dto.model_json_schema()["properties"]["pipeline_variant"]["enum"] == [
-            "legacy", "next_gen", "next_gen2", "object_f1", "object_f1_v2",
+            "legacy", "next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2",
         ]
     assert TileSplitRequest.model_json_schema()["properties"]["strategy"]["enum"] == [
         "window_random", "scene_fold", "scene_groups",
@@ -222,6 +222,18 @@ def test_next_gen2_uses_existing_public_contracts() -> None:
     assert TileSplitRequest.model_json_schema()["properties"]["test_fraction"]["default"] == 0.0
     assert TileDataloaderRequest.model_json_schema()["properties"]["mode"]["enum"] == ["train", "val", "test"]
     assert TrainConfig.model_fields["class_weights"].default_factory() == []
+
+
+def test_adaptive_sampling_public_contracts() -> None:
+    from mlsystem2.tile_preparation.contracts import AdaptiveSamplingController, SamplingFeedback
+    from mlsystem2.train.contracts import EpochMetrics
+
+    assert set(SamplingFeedback.model_fields) == {
+        "empty_tiles", "false_positive_tiles", "empty_pixels", "false_positive_pixels",
+        "positive_pixels", "true_positive_pixels",
+    }
+    assert {"set_epoch", "observe_train", "update_feedback", "snapshot"} <= set(vars(AdaptiveSamplingController))
+    assert EpochMetrics.model_fields["adaptive_sampling"].default_factory() == {}
 
 
 def test_pseudo_markup_view_contract(monkeypatch) -> None:

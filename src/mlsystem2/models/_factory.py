@@ -165,7 +165,7 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
         raise ModelsError("object f1 поддерживает SegFormer B0/B1/B2/B3")
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
-    if spec.parameters.get("pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"} and (
+    if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"} and (
         spec.name not in {_SEGFORMER_B0, *_SMP_ENCODERS}
         or spec.input_channels not in (3, 4)
         or (spec.parameters.get("pipeline_variant") in {"object_f1", "object_f1_v2"} and spec.output_channels != 1)
@@ -183,7 +183,7 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
                 "std": [0.229, 0.224, 0.225, 0.229][:spec.input_channels],
             }
             return ModelHandle(spec=spec, model=_InputPreprocessingWrapper(model, preprocessing))
-        if spec.parameters.get("pipeline_variant") == "next_gen2" and spec.output_channels == 1:
+        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3"} and spec.output_channels == 1:
             parameters = {**spec.parameters, "binary_output": "foreground_logit_minus_background_logit"}
             if spec.pretrained:
                 parameters["pretrained_source"] = f"smp-hub/{_SMP_ENCODERS[spec.name]}.imagenet"
@@ -220,7 +220,7 @@ def _ensure_torch_for_smp() -> None:
 def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True):
     smp = _import_smp()
     _ensure_torch_for_smp()
-    notebook = spec.parameters.get("pipeline_variant") == "next_gen2"
+    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3"}
     if spec.pretrained and spec.input_channels not in (3, 4):
         raise ModelsError("Предобученная SegFormer поддерживает RGB или RGB+NIR (3 или 4 канала).")
     pretrained = spec.pretrained and initialize_pretrained
@@ -284,7 +284,7 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
 
     model_config = _SEGFORMER_CONFIGS[spec.name]
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
-    is_next_gen2 = spec.parameters.get("pipeline_variant") == "next_gen2"
+    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3"}
     if is_next_gen2:
         head_channels = 2 if spec.output_channels == 1 else spec.output_channels
         if not initialize_pretrained:
@@ -434,7 +434,7 @@ def _set_first_patch_projection(model, projection) -> None:
 
 
 def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "object_f1", "object_f1_v2"}:
+    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         return ModelHandle(spec=spec, model=model)
     preprocessing = spec.parameters.get("preprocessing")
     if not isinstance(preprocessing, dict):

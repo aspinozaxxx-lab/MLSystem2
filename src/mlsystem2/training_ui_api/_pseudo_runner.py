@@ -1,4 +1,4 @@
-﻿"""Запуск псевдоразметки для training UI API."""
+"""Запуск псевдоразметки для training UI API."""
 
 from __future__ import annotations
 
@@ -367,7 +367,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             )
             config = _native_inference_config(loaded, config)
             _apply_native_object_precision(torch, config)
-            if config.get("pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
+            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
                 threshold = float(config["threshold"])
                 profile = _postprocess_profile_from_config(
                     _POSTPROCESS_NONE, config.get("postprocess_config")
@@ -445,7 +445,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     device=device,
                     postprocess_profile=profile,
                     object_types=list(config.get("object_types") or []),
-                    **({"notebook": True, "batch_size": int(config["batch_size"])} if config.get("pipeline_variant") == "next_gen2" else {}),
+                    **({"notebook": True, "batch_size": int(config["batch_size"])} if config.get("pipeline_variant") in {"next_gen2", "next_gen3"} else {}),
                 )
                 predicted_instances = None
             with warnings.catch_warnings():
@@ -1230,7 +1230,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             )
             config = _native_inference_config(loaded, config)
             _apply_native_object_precision(torch, config)
-            if config.get("pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
+            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
                 threshold = float(config["threshold"])
                 postprocess_profile = _postprocess_profile_from_config(
                     _POSTPROCESS_NONE, config.get("postprocess_config")
@@ -1583,11 +1583,11 @@ def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str
                 "batch_size": next_gen2_inference_batch_size(int(metadata.get("sample_size") or config.get("tile_size") or 512), str(getattr(spec, "name", "smp_segformer_b0"))),
                 "inference_merge": "gaussian_instances", "threshold_source": f"{variant}_profile",
                 **({"inference_precision": "fp32_no_tf32"} if variant == "object_f1_v2" else {})}
-    if variant != "next_gen2":
+    if variant not in {"next_gen2", "next_gen3"}:
         return config
     return {
         **config,
-        "pipeline_variant": "next_gen2",
+        "pipeline_variant": variant,
         "threshold": NEXT_GEN2_INFERENCE_THRESHOLD,
         "batch_size": next_gen2_inference_batch_size(
             int(metadata.get("sample_size") or config.get("tile_size") or 512),
@@ -1905,7 +1905,7 @@ def _infer_scene(
                     postprocess_profile=postprocess_profile, confidence_map=result.probabilities[0])
             finally:
                 accumulator.close()
-        if config.get("pipeline_variant") == "next_gen2":
+        if config.get("pipeline_variant") in {"next_gen2", "next_gen3"}:
             mask_window = Window(0, 0, dataset.width, dataset.height)
             mask, confidence_map = _infer_notebook_scene_mask(
                 dataset=dataset, input_indexes=input_indexes, input_channels=input_channels,
@@ -3403,7 +3403,7 @@ def _configured_postprocess_profile(
     config: dict[str, Any],
     fallback_image_count: int,
 ) -> _PostprocessProfile:
-    if config.get("pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
+    if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         return _POSTPROCESS_NONE
     name = config.get("postprocess_profile")
     if name is None:
@@ -3927,7 +3927,7 @@ def _checkpoint_inference_window(
     variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
     # Сетка eval-ноутбука независима от нарезки нового обучения без нахлёста.
     checkpoint_stride = (
-        max(1, checkpoint_tile_size // 2) if variant in {"next_gen2", "object_f1", "object_f1_v2"}
+        max(1, checkpoint_tile_size // 2) if variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
         else core_size if checkpoint_context else int(stride)
     )
     if checkpoint_stride <= 0 or checkpoint_stride > core_size:
@@ -4115,7 +4115,7 @@ def _summary(
                 "threshold_source": config.get("threshold_source"),
                 "inference_merge": config.get("inference_merge"),
                 "batch_size": config.get("batch_size"),
-            } if config.get("pipeline_variant") == "next_gen2" else {}),
+            } if config.get("pipeline_variant") in {"next_gen2", "next_gen3"} else {}),
             "f1_score": config.get("checkpoint_f1_score"),
             "epoch": config.get("checkpoint_epoch"),
         },

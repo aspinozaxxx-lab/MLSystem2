@@ -70,6 +70,30 @@ NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
 NEXT_GEN2_EDITABLE_KEYS = {
     "train.pretrained", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
 }
+NEXT_GEN3_DEFAULT_CONFIG = {**NEXT_GEN2_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen3"}
+NEXT_GEN3_DESCRIPTION = (
+    "Next-gen3 — SegFormer с автоматической балансировкой объектов и фона. "
+    "Профиль наследует архитектуры, min-max, аугментации, loss, optimizer и полную validation next-gen2. "
+    "Любой допустимый пиксель объекта делает тайл положительным; nodata и неразмеченные зоны исключены из loss и метрик. "
+    "Пустой тайл считается фоном только в пределах принятой зоны разметки: пропущенные объекты остаются ошибкой эталона.\n\n"
+    "Число шагов фиксируется на весь запуск. Бюджет — все информативные тайлы плюс не больше восьми фонов на каждый, "
+    "с резервом фона 256 тайлов или 32 на снимок, если столько доступно. "
+    "При крайне редких объектах бюджет ограничен 20 примерами на информативный тайл; резерв охватывается ротацией. "
+    "Суммарный бюджет не превышает полный train. Каждый информативный тайл показывается минимум один и максимум четыре раза за эпоху. "
+    "Фон внутри эпохи уникален и сменяется по снимкам и пространственным зонам; до 25% квоты занимают сложные отрицательные примеры, "
+    "найденные только на train, остальные выбираются ротацией. При малом числе фоновых тайлов используются все.\n\n"
+    "После двух прогревочных эпох доля фона меняется шагом до пяти процентных пунктов по сглаженным ошибкам полной validation "
+    "на фиксированном пороге 0,5. Рост ложных срабатываний увеличивает долю фона; падение полноты объектов защищает положительные примеры. "
+    "Доля фона ограничена 25–90%, если доступно достаточно обоих типов; при дефиците берётся весь фон. "
+    "Пределы квот и повторов имеют приоритет. Test не управляет балансировкой. "
+    "Квоты, ошибки, причины решений, seed и состояние сохраняются в checkpoint и MLflow.\n\n"
+    "Выберите next-gen3 в конвейере шаблона или ручного запуска; дополнительных коэффициентов не требуется. "
+    "Лучший checkpoint выбирается по минимуму validation loss, test оценивается один раз. "
+    "Оконное разбиение 60/20/20 с перекрытием наследуется от next-gen2: географическая независимость не обеспечивается. "
+    "Качество подтверждайте на отдельной территории. Инференс сохраняет Gaussian-сборку и порог 0,9; "
+    "порог обратной связи 0,5 не является метрикой внешнего инференса. "
+    "При продолжении от весов новый этап заново запускает балансировщик, как optimizer и scheduler."
+)
 NEXT_GEN2_DESCRIPTION = (
     "Профиль на основе segFormer_train_hlam_main_v2.ipynb для выбранной архитектуры SegFormer. "
     "SegFormer B0/B1/B2/B3 использует соответствующий encoder MiT и новую голову. "
@@ -155,21 +179,23 @@ OBJECT_F1_V2_DESCRIPTION = (
 
 
 def fixed_pipeline_defaults(variant: str) -> dict[str, Any]:
+    if variant == "next_gen3":
+        return NEXT_GEN3_DEFAULT_CONFIG
     if variant == "object_f1_v2":
         return OBJECT_F1_V2_DEFAULT_CONFIG
     return OBJECT_F1_DEFAULT_CONFIG if variant == "object_f1" else NEXT_GEN2_DEFAULT_CONFIG
 
 
 CONFIG_SCHEMA: dict[str, Any] = {
-    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG, "object_f1": OBJECT_F1_DEFAULT_CONFIG, "object_f1_v2": OBJECT_F1_V2_DEFAULT_CONFIG},
-    "pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION, "object_f1": OBJECT_F1_DESCRIPTION, "object_f1_v2": OBJECT_F1_V2_DESCRIPTION},
+    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG, "next_gen3": NEXT_GEN3_DEFAULT_CONFIG, "object_f1": OBJECT_F1_DEFAULT_CONFIG, "object_f1_v2": OBJECT_F1_V2_DEFAULT_CONFIG},
+    "pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION, "next_gen3": NEXT_GEN3_DESCRIPTION, "object_f1": OBJECT_F1_DESCRIPTION, "object_f1_v2": OBJECT_F1_V2_DESCRIPTION},
     "fields": [
         {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
             "tooltip": "Сначала выберите архитектуру. legacy — прежнее обучение; next-gen2 — профиль ноутбука с выбором весов по validation loss. object f1 обучает области и границы, выбирая лучшие веса по объектной F1 полных проверочных снимков. object f1 v2 различает фон, внутренность и широкую границу, восстанавливает полные отдельные полигоны и фильтрует мелкий шум. Оба объектных профиля предназначены для бинарных датасетов и SegFormer B0/B1/B2/B3. Подробности внизу формы.",
-            "options": ["legacy", "next_gen2", "object_f1", "object_f1_v2"],
+            "options": ["legacy", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"],
         },
         {
             "key": "dataset.val_fraction",
@@ -697,10 +723,10 @@ def sanitize_template_config(
     result = {
         key: value for key, value in (fallback or BASE_DEFAULT_CONFIG).items() if key in CONFIG_KEYS
     }
-    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
+    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         result.update(BASE_DEFAULT_CONFIG)
     if (
-        (config or {}).get("train.pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}
+        (config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
         and result.get("train.pipeline_variant") != (config or {}).get("train.pipeline_variant")
     ):
         result.update(fixed_pipeline_defaults(str((config or {}).get("train.pipeline_variant"))))
@@ -713,7 +739,7 @@ def sanitize_template_config(
     if result.get("train.pipeline_variant") in {"object_f1", "object_f1_v2"} and architecture not in OBJECT_F1_MODEL_NAMES:
         label = "object f1 v2" if result.get("train.pipeline_variant") == "object_f1_v2" else "object f1"
         raise TrainingUIAPIError(f"{label} доступен для SegFormer B0/B1/B2/B3")
-    if result.get("train.pipeline_variant") in {"next_gen2", "object_f1", "object_f1_v2"}:
+    if result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         result.update({key: value for key, value in fixed_pipeline_defaults(str(result["train.pipeline_variant"])).items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = result.get("tile_preparation.tile_size")
         if not isinstance(tile_size, (int, float)) or tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
@@ -869,7 +895,7 @@ def _template(
     legacy_defaults = deepcopy(BASE_DEFAULT_CONFIG)
     if default_config.get("train.pipeline_variant") == "legacy":
         legacy_defaults.update(default_config)
-    schema["fields"][0]["options"] = ["legacy", "next_gen2"]
+    schema["fields"][0]["options"] = ["legacy", "next_gen2", "next_gen3"]
     if architecture in OBJECT_F1_MODEL_NAMES:
         schema["fields"][0]["options"].extend(["object_f1", "object_f1_v2"])
     schema["pipeline_defaults"] = {"legacy": legacy_defaults}
@@ -883,6 +909,9 @@ def _template(
     if architecture in NEXT_GEN2_MODEL_BATCH_SIZES:
         schema["pipeline_defaults"]["next_gen2"] = {
             **NEXT_GEN2_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
+        }
+        schema["pipeline_defaults"]["next_gen3"] = {
+            **NEXT_GEN3_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
         }
     else:
         schema["fields"][0]["options"] = ["legacy"]

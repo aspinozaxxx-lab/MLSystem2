@@ -18,7 +18,7 @@ export function trainingConfigForTemplate(
   if (preset && next["train.pipeline_variant"] !== variant) Object.assign(next, preset);
   if (task === "multiclass") {
     next["train.pipeline_variant"] = variant;
-    next["train.loss"] = variant === "next_gen2" ? "cross_entropy_tversky" : "cross_entropy_dice";
+    next["train.loss"] = ["next_gen2", "next_gen3"].includes(variant) ? "cross_entropy_tversky" : "cross_entropy_dice";
   }
   if (pretrainedChoice !== null && template?.architecture.startsWith("smp_segformer_")) {
     next["train.pretrained"] = pretrainedChoice;
@@ -33,7 +33,7 @@ export function trainingConfigSchema(
 ): ConfigSchema | undefined {
   if (!schema) return undefined;
   const allowedLosses =
-    ["next_gen2", "object_f1", "object_f1_v2"].includes(pipelineVariant)
+    ["next_gen2", "next_gen3", "object_f1", "object_f1_v2"].includes(pipelineVariant)
       ? ["cross_entropy_tversky"]
       : task === "multiclass"
       ? ["cross_entropy", "cross_entropy_dice"]
@@ -96,7 +96,7 @@ export function configWithField(
   nextValue: unknown,
   pipelineDefaults?: Record<string, JsonRecord>,
 ): JsonRecord {
-  if (["next_gen2", "object_f1", "object_f1_v2"].includes(String(value["train.pipeline_variant"])) && ![
+  if (["next_gen2", "next_gen3", "object_f1", "object_f1_v2"].includes(String(value["train.pipeline_variant"])) && ![
     "train.pipeline_variant", "train.pretrained", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
   ].includes(key)) return value;
   const preset = key === "train.pipeline_variant" ? pipelineDefaults?.[String(nextValue)] : undefined;
@@ -104,7 +104,7 @@ export function configWithField(
   if (key === "train.pipeline_variant" && typeof value["train.pretrained"] === "boolean") {
     next["train.pretrained"] = value["train.pretrained"];
   }
-  if (["next_gen2", "object_f1", "object_f1_v2"].includes(String(next["train.pipeline_variant"]))) {
+  if (["next_gen2", "next_gen3", "object_f1", "object_f1_v2"].includes(String(next["train.pipeline_variant"]))) {
     const tileSize = Number(next["tile_preparation.tile_size"]);
     next["tile_preparation.stride"] = tileSize / 2;
     next["tile_preparation.context"] = 0;
@@ -125,7 +125,7 @@ export function trainingConfigFieldVisible(
 ): boolean {
   if (key.startsWith("next_gen.")) return false;
   if (key === "train.pretrained") return Boolean(architecture?.startsWith("smp_segformer_"));
-  if (["next_gen2", "object_f1", "object_f1_v2"].includes(pipelineVariant)) return [
+  if (["next_gen2", "next_gen3", "object_f1", "object_f1_v2"].includes(pipelineVariant)) return [
     "train.pipeline_variant", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
   ].includes(key);
   return true;

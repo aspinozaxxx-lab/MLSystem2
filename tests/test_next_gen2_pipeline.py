@@ -681,7 +681,8 @@ def test_mlflow_preserves_old_loss_selection_and_reads_new_f1_selection(
 
 
 @pytest.mark.parametrize("channels", [3, 4])
-def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_path, monkeypatch, channels):
+@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3"])
+def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_path, monkeypatch, channels, variant):
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
     torch.set_num_threads(2)
@@ -693,7 +694,7 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
     settings_path = tmp_path / "settings.yaml"
     train = {key.split(".", 1)[1]: value for key, value in NEXT_GEN2_DEFAULT_CONFIG.items() if key.startswith("train.")}
     train.update({"model_name": "segformer_b0", "input_channels": channels, "output_channels": 1,
-                  "epochs": 2, "device": "cpu"})
+                  "epochs": 2, "device": "cpu", "pipeline_variant": variant})
     settings = SystemSettings.model_validate({
         "runtime": {"project_root": str(tmp_path), "scratch_root": str(tmp_path / "scratch"),
                     "logs_root": str(tmp_path / "logs"), "cleanup_scratch_after_mlflow_log": False},
@@ -741,13 +742,19 @@ def test_complete_pipeline_uses_notebook_loaders_and_saves_native_artifacts(tmp_
     assert pretrained_calls[0][1]["num_labels"] == 2
     assert pretrained_calls[0][1]["use_safetensors"] is True
     trained = logged[0]
-    assert trained.diagnostics["pipeline_variant"] == "next_gen2"
+    assert trained.diagnostics["pipeline_variant"] == variant
     split = trained.diagnostics["split_manifest"]["train"]
     assert len(split["indices"]["val"]) == len(split["indices"]["test"]) == 25
     assert not split["spatial_purge"]
     assert trained.diagnostics["test_metrics"]["threshold"] == 0.5
     payload = torch.load(trained.best_checkpoint_path, map_location="cpu", weights_only=False)
-    assert payload["metadata"]["pipeline_variant"] == "next_gen2"
+    assert payload["metadata"]["pipeline_variant"] == variant
+    if variant == "next_gen3":
+        policy = payload["model_spec"]["parameters"]["sampler"]
+        assert policy["version"] == "adaptive_background_v1"
+        assert policy["positive_repeats_max"] == 4
+        assert payload["metadata"]["adaptive_sampling"]["policy"] == policy
+        assert len(trained.diagnostics["adaptive_sampling"]["history"]) == 2
     assert payload["metadata"]["val_loss"] == min(e.val_loss for e in trained.history)
     assert trained.diagnostics["test_metrics"]["checkpoint_epoch"] == payload["metadata"]["epoch"]
     assert payload["metadata"]["checkpoint_selection_metric"] == "val_loss"

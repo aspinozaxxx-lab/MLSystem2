@@ -1,4 +1,4 @@
-﻿"""Создание torch DataLoader для тайлов."""
+"""Создание torch DataLoader для тайлов."""
 
 from __future__ import annotations
 
@@ -71,12 +71,18 @@ def create_tile_dataloader(
     except Exception as exc:
         raise TilePreparationError("Не удалось подготовить Dataset тайлов") from exc
 
-    if request.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
+    if request.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         # Сохраняем порядок и потребление генератора случайных чисел исходных DataLoader.
-        sampler = (
-            WeightedRandomSampler(dataset.sampling_weights(), num_samples=len(dataset), replacement=True)
-            if request.mode == "train" else None
-        )
+        if request.pipeline_variant == "next_gen3" and request.mode == "train":
+            from ._adaptive_sampling import AdaptiveBackgroundSampler
+
+            sampler = AdaptiveBackgroundSampler(dataset.adaptive_sampling_tiles(), seed=tile_settings.seed)
+            LOGGER.info("next-gen3: обучающий пул и бюджет эпохи: %s", sampler.snapshot()["pool"])
+        else:
+            sampler = (
+                WeightedRandomSampler(dataset.sampling_weights(), num_samples=len(dataset), replacement=True)
+                if request.mode == "train" else None
+            )
         kwargs = {
             "dataset": dataset, "batch_size": request.batch_size, "sampler": sampler,
             "shuffle": False, "num_workers": tile_settings.num_workers,
@@ -92,6 +98,9 @@ def create_tile_dataloader(
             # Workers пересоздаются, чтобы RNG основной программы потреблялся как при workers=0.
             kwargs["prefetch_factor"] = 2
         loader = DataLoader(**kwargs)
+        if request.pipeline_variant == "next_gen3":
+            loader.selected_tiles = len(sampler) if request.mode == "train" else len(dataset)
+            loader.selected_batches = len(loader)
         LOGGER.info(
             "Загрузчик %s (%s): workers=%s, prefetch_factor=%s, "
             "persistent_workers=%s, pin_memory=%s, batch_size=%s, start_method=%s, timeout=%s",
@@ -591,6 +600,10 @@ def _collate_tile_batch(samples: list[tuple[np.ndarray, np.ndarray, dict[str, ob
         "tile_background": tile_background,
         "tile_category": tile_categories,
     }
+    if any("sample_index" in meta for meta in metas):
+        if not all("sample_index" in meta for meta in metas):
+            raise TilePreparationError("В batch присутствуют неполные индексы тайлов")
+        batch_meta["sample_indices"] = [int(meta["sample_index"]) for meta in metas]
     if any("valid_pixels" in meta for meta in metas):
         if not all("valid_pixels" in meta for meta in metas):
             raise TilePreparationError("В batch присутствуют неполные valid pixel masks.")
@@ -660,7 +673,7 @@ def _seed_tile_worker(worker_id: int) -> None:
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None and hasattr(worker_info.dataset, "close"):
         worker_info.dataset.close()
-    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) in {"next_gen2", "object_f1", "object_f1_v2"}:
+    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         import cv2
 
         cv2.setNumThreads(1)

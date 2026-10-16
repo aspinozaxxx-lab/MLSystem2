@@ -107,7 +107,7 @@ def test_segformer_templates_offer_supported_pipelines() -> None:
     assert "segformer_b0" not in templates
     for name, template in templates.items():
         schema = template["config_schema"]
-        expected = ["legacy", "next_gen2"] if "segformer" in name else ["legacy"]
+        expected = ["legacy", "next_gen2", "next_gen3"] if "segformer" in name else ["legacy"]
         if "segformer" in name:
             expected.extend(["object_f1", "object_f1_v2"])
             assert schema["pipeline_defaults"]["object_f1"]["train.batch_size"] == next_gen2_train_batch_size(512, name)

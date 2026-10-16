@@ -126,7 +126,7 @@ class TrainSettings(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "object_f1", "object_f1_v2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"] = "legacy"
     model_name: str
     input_channels: int = Field(default=4, gt=0)
     output_channels: int = Field(default=1, gt=0)
@@ -155,7 +155,7 @@ class TrainSettings(BaseModel):
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
         if self.task == "multiclass" and self.loss not in multiclass_losses | {"cross_entropy_tversky"}:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
-        if self.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
+        if self.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
             if self.loss != "cross_entropy_tversky":
                 raise ValueError("next-gen2 требует CrossEntropy + Tversky")
             if self.pipeline_variant in {"object_f1", "object_f1_v2"} and self.task != "binary":
@@ -236,7 +236,7 @@ class SystemSettings(BaseModel):
             or self.train.quality_metric != "objects"
         ):
             raise ValueError("object f1 требует SegFormer B0/B1/B2/B3 и объектовую метрику")
-        if self.train.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
+        if self.train.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
             batch_sizes = {
                 "segformer_b0": (16, 8, 4, 2), "smp_segformer_b0": (16, 8, 4, 2),
                 "smp_segformer_b1": (8, 4, 2, 1), "smp_segformer_b2": (4, 2, 1, 1),

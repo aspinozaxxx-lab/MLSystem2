@@ -74,6 +74,8 @@
 - `val/performed` — `0/1` для разреженной next-gen validation
 - `val/scene/{scene_id}/{pixel_f1|pixel_precision|pixel_recall|fixed_0_5_*}` — для next-gen
 - `val/fixed_0_5_pixel_f1`, `val/fixed_0_5_pixel_precision`, `val/fixed_0_5_pixel_recall` — для next-gen
+- Только next-gen3: `sampling/draws`, `sampling/foreground_draws`, `sampling/background_draws`, `sampling/background_fraction`, `sampling/unique_foreground`, `sampling/unique_background`, `sampling/positive_repeats_max_observed`, `sampling/hard_background_draws`, `sampling/background_groups`, `sampling/next_background_draws`, `sampling/next_background_fraction`.
+- Только next-gen3: `val/empty_pixel_fpr`, `val/empty_tile_fpr`, `val/foreground_recall` и их сглаженные варианты с суффиксом `_ema`. Счётчики и причины не превращаются в числовые метрики: полная структура `EpochMetrics.adaptive_sampling` сохраняется в `reports/sampling/epoch_NNNN.json`, итоговая — `reports/adaptive_sampling.json`; test включает отдельную диагностику ошибок фона. Пиковая VRAM next-gen3 использует существующую `train/peak_vram_bytes`.
 
 `log_training_metrics` пишет только итоговые run-level метрики без `step`:
 

@@ -34,8 +34,9 @@ def test_onnx_preserves_probabilities_instead_of_thresholding(tmp_path):
 
 @pytest.mark.parametrize("override", [None, 0.8])
 @pytest.mark.parametrize("tile_size,channels", [(512, 4), (768, 3), (1024, 4), (1536, 3)])
-def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, override, tile_size, channels):
-    metadata = {"pipeline_variant": "next_gen2", "sample_size": tile_size,
+@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3"])
+def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, override, tile_size, channels, variant):
+    metadata = {"pipeline_variant": variant, "sample_size": tile_size,
                 "inference_context": 0, "confidence_threshold": 0.5}
     loaded = SimpleNamespace(
         artifact=SimpleNamespace(metadata=metadata),
@@ -59,6 +60,7 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
                 config = inner.read("floodings/config.pbtxt").decode()
         expected_threshold = 0.9 if override is None else override
         assert info["threshold"] == expected_threshold
+        assert info["pipeline_variant"] == variant
         assert info["threshold_source"] == ("next_gen2_eval_notebook" if override is None else "request")
         assert info["inference_stride"] == tile_size // 2
         assert calls[0]["input_channels"] == channels

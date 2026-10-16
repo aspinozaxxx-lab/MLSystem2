@@ -101,7 +101,7 @@ def get_best_training_checkpoint(
         notebook_losses = (
             client.get_metric_history(run_id, "val/loss")
             # Старые запуски действительно сохраняли best по loss; их веса не переписываем.
-            if tags.get("pipeline_variant") == "next_gen2"
+            if tags.get("pipeline_variant") in {"next_gen2", "next_gen3"}
             and tags.get("checkpoint_selection_metric", "val_loss") == "val_loss"
             else None
         )
@@ -414,6 +414,16 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
                 mlflow.log_metric(name, value, step=metrics.epoch)
         if metrics.learning_rate is not None:
             mlflow.log_metric("train/learning_rate", metrics.learning_rate, step=metrics.epoch)
+        if metrics.adaptive_sampling:
+            current = metrics.adaptive_sampling.get("current", {})
+            for key, value in current.items():
+                if key != "epoch" and isinstance(value, (int, float)) and not isinstance(value, bool):
+                    mlflow.log_metric(f"sampling/{key}", value, step=metrics.epoch)
+            for key, value in current.get("rates", {}).items():
+                mlflow.log_metric(f"val/{key}", value, step=metrics.epoch)
+            for key, value in current.get("ema", {}).items():
+                mlflow.log_metric(f"val/{key}_ema", value, step=metrics.epoch)
+            _log_dict(metrics.adaptive_sampling, f"reports/sampling/epoch_{metrics.epoch:04d}.json")
         if hasattr(mlflow, "set_tag"):
             mlflow.set_tag("quality_metric", metrics.quality_metric)
         if not metrics.validation_performed:
@@ -583,6 +593,7 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
         "inference_merge_comparison": "reports/inference_merge_comparison.json",
         "checkpoint_selection": "reports/checkpoint_selection.json",
         "test_metrics": "reports/test_metrics.json",
+        "adaptive_sampling": "reports/adaptive_sampling.json",
     }
     for key, artifact_path in diagnostic_artifacts.items():
         value = diagnostics.get(key)

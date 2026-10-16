@@ -88,10 +88,11 @@ export function trainingSummary({
   return `${modelName.replace(" (next-gen)", "")} на «${datasetName}», ${trainingPipelineLabel(variant)}. `
     + (modelName.toLowerCase().includes("segformer") ? `${value["train.pretrained"] ? "Предобученные веса ImageNet" : "Случайная инициализация весов"}. ` : "")
     + `Тайлы ${trainingNumber(tile.size)} × ${trainingNumber(tile.size)} px, центр ${trainingNumber(tile.core)} × ${trainingNumber(tile.core)} px; `
-    + (["next_gen2", "object_f1", "object_f1_v2"].includes(variant) ? `шаг ${trainingNumber(tile.size / 2)} px, train/validation/test 60/20/20${objectF1 ? " по независимым снимкам; " + (variant === "object_f1_v2" ? "фон, внутренность и широкая граница" : "область и границы") : ""}. ` : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
+    + (["next_gen2", "next_gen3", "object_f1", "object_f1_v2"].includes(variant) ? `шаг ${trainingNumber(tile.size / 2)} px, train/validation/test 60/20/20${objectF1 ? " по независимым снимкам; " + (variant === "object_f1_v2" ? "фон, внутренность и широкая граница" : "область и границы") : ""}. ` : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
     + `Batch size ${trainingNumber(value["train.batch_size"])}, LR ${value["train.learning_rate"] ?? "—"}. `
     + `Максимум ${trainingNumber(value["train.epochs"])} эпох${time == null || time === "" ? "" : `, лимит ${trainingNumber(Number(time) / 60)} мин`}; `
-    + `ранняя остановка после ${trainingNumber(value["train.early_stopping_patience"])} ${patienceUnit} без улучшения${variant === "next_gen2" ? " validation loss" : objectF1 ? " object F1 после выделения объектов" : ""}. `
+    + `ранняя остановка после ${trainingNumber(value["train.early_stopping_patience"])} ${patienceUnit} без улучшения${["next_gen2", "next_gen3"].includes(variant) ? " validation loss" : objectF1 ? " object F1 после выделения объектов" : ""}. `
+    + (variant === "next_gen3" ? "Фон подбирается автоматически по ошибкам полной валидации; число шагов эпохи ограничено и постоянно. " : "")
     + `${secondaryPriority ? "Второстепенный" : "Обычный"} приоритет.`
     + (runInferenceAfterTraining ? " После успешного обучения — псевдоразметка всех снимков датасета." : "");
 }

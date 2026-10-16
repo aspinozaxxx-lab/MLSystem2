@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-labelledby="title desc">
+  <title id="title">Схема автоматической балансировки next-gen3</title>
+  <desc id="desc">Только обучающие тайлы: объекты и сменяемый разнообразный фон. Полная валидация передаёт доли ошибок для следующей эпохи. Тест не участвует в управлении.</desc>
+  <rect width="1200" height="600" rx="28" fill="#0f2135"/>
+  <g font-family="Arial, sans-serif" fill="#eef6fc">
+    <text x="60" y="62" font-size="30" font-weight="bold">Следующая эпоха — с учётом ошибок фона</text>
+    <text x="60" y="100" font-size="19" fill="#b7cbdc">Поясняющая схема, не результаты испытаний</text>
+    <rect x="60" y="145" width="300" height="192" rx="16" fill="#164c46"/>
+    <text x="85" y="185" font-size="24">Обучающие тайлы</text>
+    <text x="85" y="228" font-size="19">Объекты: не теряем малые</text>
+    <text x="85" y="266" font-size="19">Фон: ротация по территориям</text>
+    <text x="85" y="304" font-size="19">До 25% — сложные примеры</text>
+    <rect x="445" y="145" width="290" height="192" rx="16" fill="#22496a"/>
+    <text x="470" y="185" font-size="24">Обучение</text>
+    <text x="470" y="228" font-size="19">Постоянный бюджет шагов</text>
+    <text x="470" y="266" font-size="19">Не более 4 повторов</text>
+    <text x="470" y="304" font-size="19">Редкие объекты защищены</text>
+    <rect x="820" y="145" width="320" height="192" rx="16" fill="#493e68"/>
+    <text x="845" y="185" font-size="24">Полная валидация</text>
+    <text x="845" y="228" font-size="19">Доли ложных срабатываний</text>
+    <text x="845" y="266" font-size="19">Контроль полноты объектов</text>
+    <text x="845" y="304" font-size="19">Постоянный порог 0,5</text>
+    <path d="M370 240h60m-12-10 12 10-12 10M745 240h60m-12-10 12 10-12 10" stroke="#8bd3ee" stroke-width="4" fill="none"/>
+    <path d="M980 350v60H210v-60m-10 12 10-12 10 12" stroke="#86e6bd" stroke-width="4" fill="none"/>
+    <text x="377" y="453" font-size="22" fill="#86e6bd">Плавная корректировка доли фона</text>
+    <text x="60" y="526" font-size="20">Тест проверяет лучшие веса один раз и не влияет на выборку.</text>
+    <text x="60" y="562" font-size="18" fill="#b7cbdc">Оконное разбиение не гарантирует независимость территории; внешний тест нужен отдельно.</text>
+  </g>
+</svg>

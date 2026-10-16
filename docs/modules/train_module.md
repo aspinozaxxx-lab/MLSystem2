@@ -20,9 +20,12 @@
 - `TrainRequest` - поля `model`, `train_loader`, `val_loader`, optional `test_loader`, `config`, `checkpoint_dir`, `sample_size`, `run_metadata`.
 - `TrainResult` - история/checkpoint/порог/остановка и `diagnostics`.
 
+`TrainConfig.pipeline_variant` дополнен `next_gen3`: прежний loss и критерий next-gen2, обязательная valid-mask и адаптивный train-сэмплер. `EpochMetrics.adaptive_sampling` по умолчанию пуст: только next-gen3 сохраняет квоты, нормированные ошибки полной validation, сглаживание и причину следующего решения. После test контроллер не вызывается. Checkpoint и итоговая диагностика сохраняют полное состояние и историю; продолжение от весов начинает новый контроллер. Правила — в `docs/architecture.md`.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `models.contracts` - публичный контракт модели, которую нужно обучить.
+- `tile_preparation.contracts` — метка отрицательных примеров, `SamplingFeedback` и протокол `AdaptiveSamplingController`; частные реализации загрузчиков не импортируются.
 - `models.api` - сохранить best/final checkpoint через публичный API.
 - `metrics.api` - сопоставить объекты один к одному и рассчитать объектовую F1.
 - `inference.api/contracts` — общая сборка вероятностей, выделение ID и сохранённые параметры разделения для object_f1 и object_f1_v2.

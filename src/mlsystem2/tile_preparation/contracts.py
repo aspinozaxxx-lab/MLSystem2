@@ -1,9 +1,9 @@
-﻿"""Публичные контракты подготовки тайлов."""
+"""Публичные контракты подготовки тайлов."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -13,6 +13,40 @@ class TilePreparationError(RuntimeError):
 
 
 HARD_NEGATIVE_LABEL = -1
+
+
+class SamplingFeedback(BaseModel):
+    """Счётчики полной validation на фиксированном пороге 0,5, без идентификаторов тайлов."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    empty_tiles: int = Field(default=0, ge=0)
+    false_positive_tiles: int = Field(default=0, ge=0)
+    empty_pixels: int = Field(default=0, ge=0)
+    false_positive_pixels: int = Field(default=0, ge=0)
+    positive_pixels: int = Field(default=0, ge=0)
+    true_positive_pixels: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> Self:
+        if (self.false_positive_tiles > self.empty_tiles
+                or self.false_positive_pixels > self.empty_pixels
+                or self.true_positive_pixels > self.positive_pixels):
+            raise ValueError("Счётчики ошибок и верных обнаружений превышают соответствующий объём проверки")
+        return self
+
+
+@runtime_checkable
+class AdaptiveSamplingController(Protocol):
+    """Управление train-сэмплером; validation передаёт только агрегированные счётчики."""
+
+    def set_epoch(self, epoch: int) -> None: ...
+
+    def observe_train(self, indices: list[int], scores: list[float | None]) -> None: ...
+
+    def update_feedback(self, feedback: SamplingFeedback) -> None: ...
+
+    def snapshot(self, *, include_state: bool = False) -> dict: ...
 
 
 class TileClassAnnotation(BaseModel):
@@ -79,7 +113,7 @@ class TileDataloaderRequest(BaseModel):
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
     include_object_instances: bool = False
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "object_f1", "object_f1_v2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"] = "legacy"
     collect_band_histogram: bool = False
     input_channels: int | None = Field(default=None, gt=0)
 
@@ -129,7 +163,7 @@ class TileDataloaderRequest(BaseModel):
                 raise ValueError("object f1 требует binary и вход RGB или RGB+NIR")
             if not self.include_object_instances or self.max_batches_per_epoch is not None:
                 raise ValueError("object f1 требует маски объектов и полные эпохи")
-        elif self.pipeline_variant == "next_gen2":
+        elif self.pipeline_variant in {"next_gen2", "next_gen3"}:
             if self.tile_split is None or self.tile_split.strategy != "window_random":
                 raise ValueError("next-gen2 требует разбиение по тайлам")
             if self.tile_split.spatial_purge or self.tile_split.test_fraction != 0.2 or self.tile_split.val_fraction != 0.2:
@@ -142,7 +176,9 @@ class TileDataloaderRequest(BaseModel):
 
 
 __all__ = [
+    "AdaptiveSamplingController",
     "HARD_NEGATIVE_LABEL",
+    "SamplingFeedback",
     "TileClassAnnotation",
     "TileClassDefinition",
     "TileDataloaderRequest",

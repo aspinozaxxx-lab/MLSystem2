@@ -21,6 +21,7 @@ from mlsystem2.models.contracts import LoadCheckpointRequest, SaveCheckpointRequ
 from mlsystem2.tile_preparation.contracts import HARD_NEGATIVE_LABEL
 
 from ._object_f1 import object_loss, validate_objects
+from ._sampling_feedback import BackgroundErrors, adaptive_controller
 from .contracts import CheckpointArtifact, EpochMetrics, TrainError, TrainProgressEvent
 from .contracts import TrainProgressSink, TrainRequest, TrainResult
 
@@ -140,8 +141,11 @@ def train_model(
 
     model = request.model.model
     config = request.config
+    sampling = adaptive_controller(request.train_loader) if config.pipeline_variant == "next_gen3" else None
+    if config.pipeline_variant == "next_gen3" and sampling is None:
+        raise TrainError("next-gen3 требует адаптивный train-сэмплер")
     device = torch.device(config.device)
-    if config.pipeline_variant in {"next_gen", "object_f1", "object_f1_v2"} and str(device).startswith("cuda"):
+    if config.pipeline_variant in {"next_gen", "next_gen3", "object_f1", "object_f1_v2"} and str(device).startswith("cuda"):
         torch.cuda.reset_peak_memory_stats(device)
     model.to(device)
 
@@ -150,7 +154,7 @@ def train_model(
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
     )
-    if config.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
+    if config.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="min", patience=3, factor=0.5,
         )
@@ -190,6 +194,8 @@ def train_model(
         try:
             for epoch in range(1, config.epochs + 1):
                 pause_controller.pause_if_requested()
+                if sampling is not None:
+                    sampling.set_epoch(epoch)
                 _emit(progress_sink, epoch, "epoch_started", None)
                 epoch_started = perf_counter()
                 epoch_learning_rate = float(optimizer.param_groups[0]["lr"])
@@ -243,7 +249,17 @@ def train_model(
                     pause_controller=pause_controller,
                 )
                 _ensure_finite_scalar(float(val["loss"]), "val_loss", epoch)
-                if config.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}:
+                if sampling is not None:
+                    from mlsystem2.tile_preparation.contracts import SamplingFeedback
+
+                    sampling.update_feedback(SamplingFeedback(**val["sampling_feedback"]))
+                    current = sampling.snapshot()["current"]
+                    logging.getLogger(__name__).info(
+                        "next-gen3, эпоха %s: объекты=%s, фон=%s, следующая доля фона=%.3f; %s",
+                        epoch, current["foreground_draws"], current["background_draws"],
+                        current["next_background_fraction"], current["reason"],
+                    )
+                if config.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
                     scheduler.step(float(val["loss"]))
                 elif config.pipeline_variant == "next_gen":
                     scheduler.step(float(val["quality_f1"]))
@@ -253,6 +269,7 @@ def train_model(
                 metrics = EpochMetrics(
                     epoch=epoch,
                     validation_performed=True,
+                    adaptive_sampling=sampling.snapshot() if sampling is not None else {},
                     train_loss=train_epoch["loss"],
                     val_loss=val["loss"],
                     train_region_loss=train_epoch.get("region_loss"),
@@ -298,7 +315,7 @@ def train_model(
                 history.append(metrics)
                 last_validation_metrics = metrics
 
-                score = -float(metrics.val_loss) if config.pipeline_variant == "next_gen2" else _checkpoint_score(metrics)
+                score = -float(metrics.val_loss) if config.pipeline_variant in {"next_gen2", "next_gen3"} else _checkpoint_score(metrics)
                 if score > best_score:
                     best_score = score
                     best_metrics = metrics
@@ -337,7 +354,9 @@ def train_model(
             final_checkpoint = str(final_checkpoint_path)
             artifacts.append(CheckpointArtifact(uri=str(final_checkpoint_path), label="final"))
         diagnostics: dict[str, Any] = {}
-        if config.pipeline_variant == "next_gen2" and best_metrics is not None:
+        if sampling is not None:
+            diagnostics["adaptive_sampling"] = sampling.snapshot(include_state=True)
+        if config.pipeline_variant in {"next_gen2", "next_gen3"} and best_metrics is not None:
             diagnostics["checkpoint_selection"] = {
                 "metric": "val_loss", "mode": "min", "epoch": best_metrics.epoch,
                 "val_loss": best_metrics.val_loss,
@@ -382,9 +401,11 @@ def train_model(
                 diagnostics["test_metrics"].update(
                     object_separation=test["object_separation"], per_scene_metrics=test["per_scene_metrics"],
                 )
+            if config.pipeline_variant == "next_gen3":
+                diagnostics["test_metrics"]["background_errors"] = test["sampling_feedback"]
             test_model.to(torch.device("cpu"))
             _release_training_cuda(torch, device)
-        if config.pipeline_variant in {"next_gen", "object_f1", "object_f1_v2"}:
+        if config.pipeline_variant in {"next_gen", "next_gen3", "object_f1", "object_f1_v2"}:
             diagnostics["peak_vram_bytes"] = (
                 int(torch.cuda.max_memory_allocated(device))
                 if str(device).startswith("cuda")
@@ -705,11 +726,13 @@ def _train_epoch(
     batches = 0
     has_optimizer_step = False
     nonfinite_gradient_skips = 0
+    sampling = adaptive_controller(loader) if config.pipeline_variant == "next_gen3" else None
+    background_errors = BackgroundErrors() if sampling is not None else None
     epoch_started = last_report = perf_counter()
     for batch_index, batch in enumerate(loader, start=1):
         images, masks, meta = _split_batch(batch, epoch, batch_index, "train")
         images = images.to(
-            device=device, dtype=torch.float32, non_blocking=config.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}
+            device=device, dtype=torch.float32, non_blocking=config.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
         )
         masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
         valid_pixels = _prepare_valid_pixels(torch, meta, config, device, masks)
@@ -725,7 +748,7 @@ def _train_epoch(
             _validate_binary_targets(torch, masks, epoch, batch_index, "train")
         optimizer.zero_grad(set_to_none=True)
         logits = _forward_logits(
-            torch, model, images, masks, binary_two_logits=config.pipeline_variant == "next_gen2" and config.task == "binary"
+            torch, model, images, masks, binary_two_logits=config.pipeline_variant in {"next_gen2", "next_gen3"} and config.task == "binary"
         )
         _ensure_finite_tensor(torch, logits, "logits", epoch, batch_index, "train")
         logits, masks, hard_negative_pixels = _crop_supervision_tensors(
@@ -759,10 +782,16 @@ def _train_epoch(
                 valid_pixels,
             )
         _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "train")
-        loss_weight = int(images.shape[0]) if config.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"} else 1
+        if sampling is not None:
+            scores = background_errors.observe(torch, logits, masks, valid_pixels, class_hard_negative_pixels)
+            indices = meta.get("sample_indices") if isinstance(meta, dict) else None
+            if indices is None:
+                raise TrainError("next-gen3: train batch не содержит индексы тайлов")
+            sampling.observe_train(indices, scores)
+        loss_weight = int(images.shape[0]) if config.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"} else 1
         loss.backward()
         bad_gradient = _first_nonfinite_gradient(
-            torch, model, combine=config.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}
+            torch, model, combine=config.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
         )
         if bad_gradient is not None:
             nonfinite_gradient_skips += 1
@@ -777,7 +806,7 @@ def _train_epoch(
                     "Слишком много non-finite gradients за эпоху: "
                     f"epoch={epoch}, nonfinite_gradient_skips={nonfinite_gradient_skips}"
                 )
-            if config.pipeline_variant == "next_gen2":
+            if config.pipeline_variant in {"next_gen2", "next_gen3"}:
                 raise TrainError("next-gen2: обнаружен неконечный градиент")
             total_loss += float(loss.detach().item()) * loss_weight
             loss_denominator += loss_weight
@@ -793,7 +822,7 @@ def _train_epoch(
                 break
             continue
         grad_norm = None
-        if config.pipeline_variant not in {"next_gen2", "object_f1", "object_f1_v2"}:
+        if config.pipeline_variant not in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             _ensure_finite_tensor(torch, grad_norm, "grad_norm", epoch, batch_index, "train")
         optimizer.step()
@@ -853,7 +882,8 @@ def _validate_epoch(
 
     model.eval()
     next_gen = config.pipeline_variant == "next_gen"
-    next_gen2 = config.pipeline_variant == "next_gen2"
+    next_gen2 = config.pipeline_variant in {"next_gen2", "next_gen3"}
+    background_errors = BackgroundErrors() if config.pipeline_variant == "next_gen3" else None
     total_loss = 0.0
     loss_denominator = 0
     batches = 0
@@ -895,7 +925,7 @@ def _validate_epoch(
         for batch_index, batch in enumerate(loader, start=1):
             images, masks, meta = _split_batch(batch, epoch, batch_index, "val")
             images = images.to(
-                device=device, dtype=torch.float32, non_blocking=config.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}
+                device=device, dtype=torch.float32, non_blocking=config.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
             )
             masks, hard_negative_pixels = _prepare_supervision_masks(torch, masks, config, device)
             valid_pixels = _prepare_valid_pixels(torch, meta, config, device, masks)
@@ -928,6 +958,8 @@ def _validate_epoch(
             batches += 1
 
             probs = torch.softmax(logits, dim=1)[:, 1:2] if next_gen2 else torch.sigmoid(logits)
+            if background_errors is not None:
+                background_errors.observe(torch, logits, masks, valid_pixels)
             true = masks >= 0.5
             if next_gen:
                 if valid_pixels is None:
@@ -1210,6 +1242,7 @@ def _validate_epoch(
         "fixed_0_5_pixel_recall": fixed_0_5_recall,
         "per_scene_metrics": per_scene_metrics,
         "metric_warnings": metric_warnings,
+        **({"sampling_feedback": background_errors.feedback().model_dump()} if background_errors is not None else {}),
     }
 
 
@@ -1422,7 +1455,8 @@ def _validate_multiclass_epoch(
     total_loss = 0.0
     loss_denominator = 0
     batches = 0
-    thresholds = (0.5,) if config.pipeline_variant == "next_gen2" else MULTICLASS_THRESHOLD_CANDIDATES
+    background_errors = BackgroundErrors() if config.pipeline_variant == "next_gen3" else None
+    thresholds = (0.5,) if config.pipeline_variant in {"next_gen2", "next_gen3"} else MULTICLASS_THRESHOLD_CANDIDATES
     threshold_stats: dict[float, dict[int, dict[str, int]]] = {
         threshold: {} for threshold in thresholds
     }
@@ -1477,15 +1511,17 @@ def _validate_multiclass_epoch(
                 valid_pixels,
             )
             _ensure_finite_tensor(torch, loss, "loss", epoch, batch_index, "val")
-            loss_weight = int(images.shape[0]) if config.pipeline_variant == "next_gen2" else 1
+            loss_weight = int(images.shape[0]) if config.pipeline_variant in {"next_gen2", "next_gen3"} else 1
             total_loss += float(loss.detach().item()) * loss_weight
             loss_denominator += loss_weight
             batches += 1
 
             probabilities = torch.softmax(logits, dim=1)
+            if background_errors is not None:
+                background_errors.observe(torch, logits, masks, valid_pixels, class_hard_negative_pixels)
             confidence, raw_labels = torch.max(probabilities, dim=1)
             for threshold in thresholds:
-                below_threshold = confidence <= threshold if config.pipeline_variant == "next_gen2" else confidence < threshold
+                below_threshold = confidence <= threshold if config.pipeline_variant in {"next_gen2", "next_gen3"} else confidence < threshold
                 labels = torch.where(
                     (raw_labels > 0) & below_threshold,
                     torch.zeros_like(raw_labels),
@@ -1592,6 +1628,7 @@ def _validate_multiclass_epoch(
         "foreground_pixel_f1": best["foreground_f1"],
         "foreground_pixel_precision": best["foreground_precision"],
         "foreground_pixel_recall": best["foreground_recall"],
+        **({"sampling_feedback": background_errors.feedback().model_dump()} if background_errors is not None else {}),
         "per_class_metrics": best["per_class"],
         "metric_warnings": best["warnings"],
         "threshold_sweep": {
@@ -1762,7 +1799,7 @@ def _prepare_supervision_masks(torch, masks, config, device):
         target = torch.where(hard_negative_pixels, torch.zeros_like(raw), raw)
         return target, hard_negative_pixels
     raw = masks.to(
-        device=device, dtype=torch.float32, non_blocking=config.pipeline_variant in {"next_gen2", "object_f1", "object_f1_v2"}
+        device=device, dtype=torch.float32, non_blocking=config.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
     )
     hard_negative_pixels = raw == float(HARD_NEGATIVE_LABEL)
     target = torch.where(hard_negative_pixels, torch.zeros_like(raw), raw)
@@ -1786,7 +1823,7 @@ def _prepare_class_hard_negative_pixels(torch, meta, config, device):
 
 def _prepare_valid_pixels(torch, meta, config, device, masks):
     if not isinstance(meta, dict) or meta.get("valid_pixels") is None:
-        if config.pipeline_variant in {"next_gen", "object_f1", "object_f1_v2"}:
+        if config.pipeline_variant in {"next_gen", "next_gen3", "object_f1", "object_f1_v2"}:
             raise TrainError("Batch не содержит маску допустимых пикселей")
         return None
     value = meta["valid_pixels"].to(device=device, dtype=torch.bool)
@@ -1807,7 +1844,7 @@ def _loss(
     valid_pixels=None,
 ):
     normalization_mask = valid_pixels if config.pipeline_variant != "next_gen" else None
-    if config.pipeline_variant == "next_gen2":
+    if config.pipeline_variant in {"next_gen2", "next_gen3"}:
         from segmentation_models_pytorch.losses import TverskyLoss
 
         target = masks.long() if config.task == "multiclass" else masks[:, 0].long()
@@ -2336,11 +2373,11 @@ def _save_training_checkpoint(
         "seed": request.config.seed,
         "train_config": _checkpoint_train_config(request.config),
     }
-    if request.config.pipeline_variant in {"next_gen", "next_gen2", "object_f1", "object_f1_v2"}:
+    if request.config.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         metadata.update(
             {
                 "pipeline_variant": request.config.pipeline_variant,
-                "checkpoint_selection_metric": "val_loss" if request.config.pipeline_variant == "next_gen2" else "val/object_f1" if request.config.pipeline_variant in {"object_f1", "object_f1_v2"} else "quality_f1",
+                "checkpoint_selection_metric": "val_loss" if request.config.pipeline_variant in {"next_gen2", "next_gen3"} else "val/object_f1" if request.config.pipeline_variant in {"object_f1", "object_f1_v2"} else "quality_f1",
                 "run_metadata": dict(request.run_metadata),
                 "validation_performed": metrics.validation_performed,
                 "val_per_scene_metrics": metrics.val_per_scene_metrics,
@@ -2356,6 +2393,8 @@ def _save_training_checkpoint(
         metadata["object_separation"] = metrics.val_object_separation
         metadata["object_threshold_sweep"] = metrics.val_object_threshold_sweep
         metadata["train_config"]["object_separation"] = metrics.val_object_separation
+    if request.config.pipeline_variant == "next_gen3":
+        metadata["adaptive_sampling"] = adaptive_controller(request.train_loader).snapshot(include_state=True)
     save_checkpoint(
         SaveCheckpointRequest(
             model=request.model,
@@ -2371,7 +2410,7 @@ def _checkpoint_train_config(config) -> dict[str, object]:
         if config.pipeline_variant == "legacy"
         else set()
     )
-    if config.pipeline_variant not in {"next_gen2", "object_f1", "object_f1_v2"}:
+    if config.pipeline_variant not in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
         excluded.add("class_weights")
     if config.pipeline_variant != "object_f1_v2":
         excluded.update({"object_separation", "calibrate_object_threshold"})
