@@ -1502,9 +1502,10 @@ def _dataset_config(
             snapshot_dir.mkdir(parents=True, exist_ok=True)
             for source_file in geojson_files:
                 shutil.copy2(source_file, snapshot_dir / source_file.name)
-            manifest_file = source_dir / ".mlsystem2-dataset.json"
-            if manifest_file.is_file():
-                shutil.copy2(manifest_file, snapshot_dir / manifest_file.name)
+            for manifest_name in (".mlsystem2-dataset.json", ".mlsystem2-annotation-selections.json"):
+                manifest_file = source_dir / manifest_name
+                if manifest_file.is_file():
+                    shutil.copy2(manifest_file, snapshot_dir / manifest_file.name)
             return {
                 "images_dir": images_dir,
                 "annotations_dir": str(snapshot_dir),

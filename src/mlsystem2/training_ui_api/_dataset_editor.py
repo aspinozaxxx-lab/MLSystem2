@@ -1,4 +1,4 @@
-"""Git-backed редактор per-image датасетов MLMarkup."""
+"""Редактор датасетов: сущности разметки в БД, публикация собранных файлов в MLMarkup."""
 
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ from mlsystem2.dataset_preparing.api import (
 )
 
 from ._config import TrainingUIAPIConfig
+from ._annotation_versions import AnnotationCatalog, apply_plan, merge_plans, source_path
 from ._markup_lock import markup_read_lock, markup_write_lock
 from ._combined_dataset import (
     build_combined_dataset,
@@ -54,6 +55,8 @@ from ._dataset_catalog import (
 from ._datasets import RASTER_SUFFIXES, build_image_index, build_per_image_index
 from ._external_models import external_model_payload
 from ._models import (
+    AnnotationPublicationRow,
+    DatasetAnnotationRow,
     DatasetClassRow,
     DatasetEditorDraftRow,
     DatasetRow,
@@ -74,6 +77,8 @@ from ._pseudolabel import _select_model
 from ._raster_valid_data import valid_data_footprint
 from ._queueing import DATASET_EDITOR_PSEUDO_OPERATION, next_queue_position
 from .contracts import (
+    AnnotationVersionDetail,
+    AnnotationVersionDraft,
     DatasetEditorDatasetInfo,
     DatasetEditorDatasetListResponse,
     DatasetEditorCopyResult,
@@ -330,10 +335,13 @@ def list_editor_scenes(
             dataset_key,
             allow_missing=True,
         )
+        scenes = _scene_infos(config, dataset, source_dir)
+        if not dataset.managed:
+            scenes = [_versioned_scene(scene, _annotation_catalog(session, config, dataset, scene.annotation_name)) for scene in scenes]
         scenes = _attach_draft_summaries(
             session,
             dataset,
-            _scene_infos(config, dataset, source_dir),
+            scenes,
             username,
         )
         primary = dataset_training_result(
@@ -374,10 +382,14 @@ def editor_scene_detail(
                 _read_geojson(_annotation_path(source_dir, annotation_name)), image_path,
             )
         footprint = valid_data_footprint(image_path)
+        catalog = None if dataset.managed else _annotation_catalog(session, config, dataset, annotation_name)
+        if catalog is not None and scene.revision != _NEW_SCENE_REVISION:
+            scene = _versioned_scene(scene, catalog)
         return DatasetEditorSceneDetail(
             scene=scene,
             geojson=_clip_geojson_to_footprint(published_geojson, footprint),
             valid_data_footprint=dict(mapping(footprint)),
+            annotation_versions=catalog.catalog() if catalog else None,
             draft=(
                 _draft_info(
                     draft_row,
@@ -502,6 +514,7 @@ def save_editor_draft(
     base_revision: str,
     geojson: dict[str, Any],
     deleted: bool = False,
+    annotation_versions: AnnotationVersionDraft | None = None,
     username: str,
 ) -> DatasetEditorDraftInfo:
     """Сохранить проверенный черновик в БД без Git-коммита и инференса."""
@@ -521,38 +534,156 @@ def save_editor_draft(
             previous_payload = _reproject_editor_geojson(
                 _read_geojson(_annotation_path(source_dir, scene.annotation_name)), image_path,
             )
-        normalized_geojson = _normalize_editor_geojson(
-            geojson,
-            previous_payload,
-            dataset,
-            image_path=image_path,
-        )
-        normalized_geojson = _clip_geojson_to_footprint(
-            normalized_geojson,
-            valid_data_footprint(image_path),
-        )
-        _validate_editor_geojson(normalized_geojson, image_path, dataset)
-        _validate_preserved_properties(previous_payload, normalized_geojson)
+        version_state = annotation_versions
+        if not dataset.managed and base_revision != _NEW_SCENE_REVISION:
+            catalog = _annotation_catalog(session, config, dataset, annotation_name)
+            scene = _versioned_scene(scene, catalog)
+            version_state = version_state or catalog.initial_draft()
+            if version_state is not None:
+                version_state = catalog.prepare(version_state, geojson,
+                    lambda payload, previous: _normalize_version_payload(payload, previous, dataset, image_path),
+                    display=(lambda payload: _display_version_payload(payload, image_path)) if annotation_versions else None)
+                selected_edit = next((edit for edit in version_state.edits if edit.id == version_state.selected_id), None)
+                normalized_geojson = (selected_edit.geojson if selected_edit else
+                    _display_version_payload(catalog.versions[str(version_state.selected_id)].geojson, image_path))
+        elif version_state is not None:
+            raise TrainingUIAPIError("Выбор версии доступен после публикации снимка в исходном датасете класса")
+        if version_state is None:
+            normalized_geojson = _normalize_version_payload(geojson, previous_payload, dataset, image_path)
         if row is None:
             created_at = datetime.now(timezone.utc)
             row = DatasetEditorDraftRow(
-                dataset_key=dataset.key,
-                annotation_name=scene.annotation_name,
-                username=username,
-                base_revision=base_revision,
-                geojson=normalized_geojson,
-                deleted=deleted,
-                created_at=created_at,
-                updated_at=created_at,
+                dataset_key=dataset.key, annotation_name=scene.annotation_name, username=username,
+                base_revision=base_revision, geojson=normalized_geojson, deleted=deleted,
+                annotation_versions=version_state.model_dump(mode="json") if version_state else None,
+                created_at=created_at, updated_at=created_at,
             )
             session.add(row)
         else:
             row.base_revision = base_revision
             row.geojson = normalized_geojson
             row.deleted = deleted
+            row.annotation_versions = version_state.model_dump(mode="json") if version_state else None
             row.updated_at = datetime.now(timezone.utc)
         session.flush()
         return _draft_info(row, dataset, scene.revision)
+
+
+def _normalize_version_payload(geojson: dict[str, Any], previous_payload: dict[str, Any],
+                               dataset: DatasetInfo, image_path: Path, *, clip: bool = True) -> dict[str, Any]:
+    normalized_geojson = _normalize_editor_geojson(geojson, previous_payload, dataset, image_path=image_path)
+    if clip:
+        normalized_geojson = _clip_geojson_to_footprint(normalized_geojson, valid_data_footprint(image_path))
+    _validate_editor_geojson(normalized_geojson, image_path, dataset)
+    _validate_preserved_properties(previous_payload, normalized_geojson)
+    return normalized_geojson
+
+
+def _annotation_catalog(session: Session, config: TrainingUIAPIConfig, dataset: DatasetInfo,
+                        annotation_name: str) -> AnnotationCatalog:
+    def ensure_bindings(row: DatasetRow) -> None:
+        known = set(session.scalars(select(DatasetAnnotationRow.annotation_name)
+            .where(DatasetAnnotationRow.dataset_id == row.id)).all())
+        peer = dataset.model_copy(update={"key": row.key})
+        for path in _direct_annotation_files(source_path(config, row, annotation_name).parent):
+            if path.name not in known:
+                AnnotationCatalog(session, config, peer, _image_path_for_annotation(peer, path.name), path.name)
+
+    return AnnotationCatalog(session, config, dataset, _image_path_for_annotation(dataset, annotation_name), annotation_name,
+                             ensure_bindings=ensure_bindings)
+
+
+def _display_version_payload(payload: dict[str, Any], image_path: Path) -> dict[str, Any]:
+    return _clip_geojson_to_footprint(_reproject_editor_geojson(payload, image_path), valid_data_footprint(image_path))
+
+
+def _versioned_scene(scene: DatasetEditorSceneInfo, catalog: AnnotationCatalog) -> DatasetEditorSceneInfo:
+    info = catalog.catalog()
+    version = next((version for version in info.versions if version.id == info.selected_id), None)
+    binding = catalog.bindings.get(catalog.dataset_row.id)
+    return scene.model_copy(update={
+        "image_id": info.image_id, "annotation_version_id": info.selected_id,
+        "annotation_version_name": version.name if version else None, "annotation_version_count": len(info.versions),
+        "revision": (hashlib.sha256(f"{scene.revision}:{binding.version_id}:{binding.revision}".encode()).hexdigest()
+                     if binding else scene.revision),
+    })
+
+
+def editor_annotation_version(session: Session, config: TrainingUIAPIConfig, dataset_key: str,
+                              annotation_name: str, version_id: uuid.UUID) -> AnnotationVersionDetail:
+    dataset, _source = _editor_dataset_context(session, config, dataset_key)
+    catalog = _annotation_catalog(session, config, dataset, _safe_annotation_name(annotation_name))
+    version = catalog.versions.get(str(version_id))
+    if version is None:
+        raise TrainingUIAPIError("Версия не найдена в этом снимке и классе")
+    image_path = _image_path_for_annotation(dataset, annotation_name)
+    return AnnotationVersionDetail(catalog=catalog.catalog(), version_id=version_id,
+        geojson=_display_version_payload(version.geojson, image_path))
+
+
+def _prepare_annotation_publication(session: Session, plan: dict[str, Any], username: str) -> AnnotationPublicationRow | None:
+    if not plan["versions"] and not plan["bindings"]:
+        return None
+    row = AnnotationPublicationRow(id=uuid.uuid4(), username=username, payload=plan, completed=False)
+    session.add(row)
+    # Импорт прежних разметок и намерение переживают аварийное завершение HTTP-процесса.
+    session.commit()
+    return row
+
+
+def _complete_annotation_publication(session: Session, publication: AnnotationPublicationRow | None, commit: str) -> None:
+    if publication is None:
+        return
+    apply_plan(session, publication.payload)
+    publication.commit_sha = commit
+    publication.completed = True
+    session.flush()
+
+
+def _record_annotation_commit(session: Session, publication: AnnotationPublicationRow | None, commit: str) -> None:
+    if publication is not None:
+        publication.commit_sha = commit
+        session.commit()
+
+
+def _cancel_annotation_publication(session: Session, publication: AnnotationPublicationRow | None, *, confirmed_absent: bool = False) -> None:
+    # Неопределённый результат push проверяется по trailer после успешного fetch.
+    # Ответ сети мог потеряться уже после принятия коммита удалённым репозиторием.
+    if publication is not None and (publication.commit_sha is None or confirmed_absent):
+        session.delete(publication)
+        session.commit()
+
+
+def recover_annotation_publications(session: Session, config: TrainingUIAPIConfig) -> None:
+    """Закончить подтверждённую Git-публикацию до чтения или изменения каталога версий."""
+    pending = session.scalars(select(AnnotationPublicationRow).where(AnnotationPublicationRow.completed.is_(False))
+                              .order_by(AnnotationPublicationRow.created_at)).all()
+    if not pending:
+        return
+    _ensure_editor_clone(config)
+    _fetch_editor_clone(config)
+    for publication in pending:
+        trailer = f"MLSystem2-Annotation-Publication: {publication.id}"
+        remote = f"origin/{config.mlmarkup_editor_branch}"
+        commit = _git(config, "log", remote, "-1", "--format=%H", "--fixed-strings", f"--grep={trailer}").stdout.strip()
+        if commit:
+            _git(config, "merge", "--ff-only", remote)
+        else:
+            local = _git(config, "log", f"{remote}..HEAD", "-1", "--format=%H", "--fixed-strings", f"--grep={trailer}").stdout.strip()
+            if local:
+                commit = _push_with_retry(config, expected_revisions={PurePosixPath(path): revision
+                    for path, revision in publication.payload.get("expected_revisions", {}).items()})
+            else:
+                _restore_editor_paths(config, [PurePosixPath(path) for path in publication.payload.get("paths", [])])
+                _cancel_annotation_publication(session, publication, confirmed_absent=True)
+                continue
+        _complete_annotation_publication(session, publication, commit)
+        for draft in publication.payload.get("drafts", []):
+            session.execute(delete(DatasetEditorDraftRow).where(
+                DatasetEditorDraftRow.dataset_key == draft["dataset_key"],
+                DatasetEditorDraftRow.annotation_name == draft["annotation_name"],
+                DatasetEditorDraftRow.username == publication.username))
+        session.commit()
 
 
 def discard_editor_drafts(
@@ -612,6 +743,8 @@ def publish_editor_drafts(
                 if not row.deleted
             ],
             deletions=[(row.annotation_name, row.base_revision) for row in active if row.deleted],
+            version_states={row.annotation_name: AnnotationVersionDraft.model_validate(row.annotation_versions)
+                            for row in active if row.annotation_versions},
             username=username,
         )
     for row in discarded:
@@ -1036,7 +1169,8 @@ def add_editor_scenes(
                     *(path.as_posix() for path in relative_files),
                 )
             raise
-        scenes = _scene_infos(config, dataset, source_dir)
+        scenes = [_versioned_scene(scene, _annotation_catalog(session, config, dataset, scene.annotation_name))
+                  for scene in _scene_infos(config, dataset, source_dir)]
         added_names = {name for name, _path in names.values()}
         return DatasetEditorMutationResult(
             commit=commit,
@@ -1071,6 +1205,7 @@ def publish_editor_scenes(
     *,
     scenes: list[tuple[str, str, dict[str, Any]]],
     deletions: list[tuple[str, str]] | None = None,
+    version_states: dict[str, AnnotationVersionDraft] | None = None,
     username: str,
 ) -> DatasetEditorMutationResult:
     deletions = deletions or []
@@ -1094,6 +1229,9 @@ def publish_editor_scenes(
                 deletions=deletions,
                 username=username,
             )
+        catalogs: dict[str, AnnotationCatalog] = {}
+        version_states = version_states or {}
+        physical_revisions: dict[PurePosixPath, str | None] = {}
         resolved: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
         resolved_deletions: list[tuple[str, str, Path, PurePosixPath]] = []
         footprint_deletions: list[tuple[PurePosixPath, str | None]] = []
@@ -1107,7 +1245,13 @@ def publish_editor_scenes(
             annotation_path = _annotation_path(source_dir, safe_name)
             relative_path = _repo_relative(config, annotation_path)
             current_revision = _blob_revision(config, "HEAD", relative_path)
-            if current_revision != (None if revision == _NEW_SCENE_REVISION else revision):
+            physical_revisions[relative_path] = current_revision
+            if revision != _NEW_SCENE_REVISION:
+                catalogs[safe_name] = _annotation_catalog(session, config, dataset, safe_name)
+                expected_revision = _versioned_scene(_scene_by_annotation(config, dataset, source_dir, safe_name), catalogs[safe_name]).revision
+            else:
+                expected_revision = _NEW_SCENE_REVISION if current_revision is None else current_revision
+            if revision not in (expected_revision, current_revision):
                 conflicts.append(safe_name)
             resolved.append(
                 (safe_name, revision, geojson, annotation_path, relative_path)
@@ -1117,7 +1261,9 @@ def publish_editor_scenes(
             annotation_path = _annotation_path(source_dir, scene.annotation_name)
             relative_path = _repo_relative(config, annotation_path)
             current_revision = _blob_revision(config, "HEAD", relative_path)
-            if current_revision != revision:
+            physical_revisions[relative_path] = current_revision
+            catalogs[scene.annotation_name] = _annotation_catalog(session, config, dataset, scene.annotation_name)
+            if revision not in (current_revision, _versioned_scene(scene, catalogs[scene.annotation_name]).revision):
                 conflicts.append(scene.annotation_name)
             resolved_deletions.append(
                 (scene.annotation_name, revision, annotation_path, relative_path)
@@ -1136,6 +1282,7 @@ def publish_editor_scenes(
                 "Разметка уже изменена другим пользователем: " + ", ".join(conflicts)
             )
 
+        version_plans = [catalogs[name].plan(version_states.get(name), remove_scene=True) for name, _revision in deletions]
         prepared: list[tuple[str, str, dict[str, Any], Path, PurePosixPath]] = []
         footprint_updates: list[tuple[Path, PurePosixPath, str | None, dict[str, Any]]] = []
         for annotation_name, revision, geojson, annotation_path, relative_path in resolved:
@@ -1144,14 +1291,28 @@ def publish_editor_scenes(
             else:
                 image_path = _matched_image_path(dataset, source_dir, annotation_name)
                 previous_payload = _reproject_editor_geojson(_read_geojson(annotation_path), image_path)
-            normalized_geojson = _normalize_editor_geojson(
-                geojson,
-                previous_payload,
-                dataset,
-                image_path=image_path,
-            )
-            _validate_editor_geojson(normalized_geojson, image_path, dataset)
-            _validate_preserved_properties(previous_payload, normalized_geojson)
+            state = version_states.get(annotation_name)
+            catalog = catalogs.get(annotation_name)
+            selected_without_edit = False
+            if catalog is not None:
+                state = state or catalog.initial_draft()
+                if state is not None:
+                    state = catalog.prepare(state, geojson,
+                        lambda payload, previous: _normalize_version_payload(payload, previous, dataset, image_path, clip=False),
+                        display=(lambda payload: _display_version_payload(payload, image_path)) if annotation_name in version_states else None)
+                    version_plans.append(catalog.plan(state))
+                    selected_edit = next((edit for edit in state.edits if edit.id == state.selected_id), None)
+                    selected_without_edit = selected_edit is None
+                    geojson = selected_edit.geojson if selected_edit else catalog.versions[str(state.selected_id)].geojson
+                    previous_payload = geojson
+            if selected_without_edit:
+                normalized_geojson = geojson
+            else:
+                normalized_geojson = _normalize_editor_geojson(
+                    geojson, previous_payload, dataset, image_path=image_path,
+                )
+                _validate_editor_geojson(normalized_geojson, image_path, dataset)
+                _validate_preserved_properties(previous_payload, normalized_geojson)
             prepared.append(
                 (
                     annotation_name,
@@ -1172,6 +1333,9 @@ def publish_editor_scenes(
                 )
             )
 
+        version_plan = merge_plans(version_plans)
+        version_files = {PurePosixPath(path): payload for path, payload in version_plan["files"].items()}
+        version_expected = {path: _blob_revision(config, "HEAD", path) for path in version_files}
         relative_paths = [item[4] for item in prepared]
         footprint_update_paths = [item[1] for item in footprint_updates]
         deletion_paths = [item[3] for item in resolved_deletions]
@@ -1181,19 +1345,28 @@ def publish_editor_scenes(
             *footprint_update_paths,
             *deletion_paths,
             *footprint_deletion_paths,
+            *version_files,
         ]
+        expected_revisions = {**physical_revisions, **{item[1]: item[2] for item in footprint_updates},
+                              **dict(footprint_deletions), **version_expected}
+        version_plan["expected_revisions"] = {path.as_posix(): revision for path, revision in expected_revisions.items()}
+        version_plan["paths"] = [path.as_posix() for path in all_relative_paths]
+        version_plan["drafts"] = [{"dataset_key": dataset.key, "annotation_name": name} for name in [*[item[0] for item in prepared], *[item[0] for item in resolved_deletions]]]
+        publication = _prepare_annotation_publication(session, version_plan, username)
         try:
             source_dir.mkdir(parents=True, exist_ok=True)
             for _name, _revision, geojson, annotation_path, _relative_path in prepared:
                 _write_geojson_atomic(annotation_path, geojson)
             for footprint_path, _relative, _revision, payload in footprint_updates:
                 _write_geojson_atomic(footprint_path, payload)
-            if relative_paths or footprint_update_paths:
+            for relative, payload in version_files.items():
+                _write_geojson_atomic(config.mlmarkup_editor_root.joinpath(*relative.parts), payload)
+            if relative_paths or footprint_update_paths or version_files:
                 _git(
                     config,
                     "add",
                     "--",
-                    *(path.as_posix() for path in [*relative_paths, *footprint_update_paths]),
+                    *(path.as_posix() for path in dict.fromkeys([*relative_paths, *footprint_update_paths, *version_files])),
                 )
             if deletion_paths:
                 _git(
@@ -1212,21 +1385,20 @@ def publish_editor_scenes(
                     f"Обновить разметку датасета {dataset.dataset_name or dataset.name} "
                     f"({change_count} снимка)"
                 )
-            commit = _commit(config, subject, username)
+            commit = _commit(config, subject, username, publication_id=publication.id if publication else None)
+            _record_annotation_commit(session, publication, commit)
             commit = _push_with_retry(
                 config,
-                expected_revisions={
-                    **{item[4]: None if item[1] == _NEW_SCENE_REVISION else item[1] for item in prepared},
-                    **{item[1]: item[2] for item in footprint_updates},
-                    **{item[3]: item[1] for item in resolved_deletions},
-                    **dict(footprint_deletions),
-                },
+                expected_revisions=expected_revisions,
             )
         except Exception:
             _restore_editor_paths(config, all_relative_paths)
+            _cancel_annotation_publication(session, publication)
             raise
+        _complete_annotation_publication(session, publication, commit)
         updated_scenes = {
-            item.annotation_name: item for item in _scene_infos(config, dataset, source_dir)
+            item.annotation_name: _versioned_scene(item, _annotation_catalog(session, config, dataset, item.annotation_name))
+            for item in _scene_infos(config, dataset, source_dir)
         }
         if prepared:
             session.execute(
@@ -1273,6 +1445,8 @@ def delete_editor_scene(
     with _editor_read_lock(config):
         dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
         scene = _scene_by_annotation(config, dataset, source_dir, annotation_name)
+        if not dataset.managed:
+            scene = _versioned_scene(scene, _annotation_catalog(session, config, dataset, annotation_name))
         if scene.revision != revision:
             raise DatasetEditorConflict("Разметка уже изменена другим пользователем")
         geojson = _read_geojson(_annotation_path(source_dir, scene.annotation_name))
@@ -1346,7 +1520,8 @@ def copy_editor_dataset(
             )
 
         try:
-            shutil.copytree(source_dir, target_dir, copy_function=shutil.copy2)
+            shutil.copytree(source_dir, target_dir, copy_function=shutil.copy2,
+                            ignore=shutil.ignore_patterns(".mlsystem2-annotation-selections.json"))
             _git(config, "add", "--", target_relative.as_posix())
             commit = _commit(
                 config,
@@ -1805,20 +1980,39 @@ def rebuild_editor_dataset(
             candidate_files,
         )
         expected_revisions = {path: _blob_revision(config, "HEAD", path) for path in tracked_paths}
-        _replace_dataset_files_atomically(
-            source_dir,
-            output_files,
-            candidate_manifest,
-            dataset,
-        )
+        version_plans = []
+        for path in _direct_annotation_files(source_dir):
+            catalog = _annotation_catalog(session, config, dataset, path.name)
+            if path.name not in output_files:
+                version_plans.append(catalog.plan(None, remove_scene=True))
+                continue
+            version_state = catalog.initial_draft()
+            if version_state is not None:
+                image_path = _image_path_for_annotation(dataset, path.name)
+                version_state = catalog.prepare(version_state, output_files[path.name],
+                    lambda payload, previous: _normalize_version_payload(payload, previous, dataset, image_path, clip=False))
+                version_plans.append(catalog.plan(version_state))
+        version_plan = merge_plans(version_plans)
+        version_files = {PurePosixPath(path): payload for path, payload in version_plan["files"].items()}
+        expected_revisions.update({path: _blob_revision(config, "HEAD", path) for path in version_files})
+        version_plan["expected_revisions"] = {path.as_posix(): revision for path, revision in expected_revisions.items()}
+        version_plan["paths"] = [path.as_posix() for path in expected_revisions]
+        publication = _prepare_annotation_publication(session, version_plan, username)
         target_relative = _repo_relative(config, source_dir)
         try:
+            _replace_dataset_files_atomically(source_dir, output_files, candidate_manifest, dataset)
+            for relative, payload in version_files.items():
+                _write_geojson_atomic(config.mlmarkup_editor_root.joinpath(*relative.parts), payload)
             _git(config, "add", "-A", "--", target_relative.as_posix())
+            if version_files:
+                _git(config, "add", "--", *(path.as_posix() for path in version_files))
             commit = _commit(
                 config,
                 (f"Пересобрать датасет {dataset.dataset_name or dataset.name} в режиме {mode}"),
                 username,
+                publication_id=publication.id if publication else None,
             )
+            _record_annotation_commit(session, publication, commit)
             commit = _push_with_retry(
                 config,
                 expected_revisions=expected_revisions,
@@ -1838,15 +2032,10 @@ def rebuild_editor_dataset(
                 },
             )
         except Exception:
-            _git_optional(
-                config,
-                "restore",
-                "--staged",
-                "--worktree",
-                "--",
-                target_relative.as_posix(),
-            )
+            _restore_editor_paths(config, list(expected_revisions))
+            _cancel_annotation_publication(session, publication)
             raise
+        _complete_annotation_publication(session, publication, commit)
         preview_path.unlink(missing_ok=True)
         scenes = _scene_infos(config, dataset, source_dir)
         return DatasetEditorRebuildResult(
@@ -2965,7 +3154,37 @@ def _publish_managed_editor_scenes(
                     )
             mutations.pop(key)
 
-    expected_revisions: dict[PurePosixPath, str | None] = {}
+    version_plans = []
+    for (source_key, annotation_name), (_path, payload, revision) in mutations.items():
+        if revision is None:
+            continue
+        source_dataset = _managed_editor_dataset(session, config, source_key)
+        catalog = _annotation_catalog(session, config, source_dataset, annotation_name)
+        version_state = catalog.initial_draft()
+        if version_state is not None:
+            image_path = _image_path_for_annotation(source_dataset, annotation_name)
+            version_state = catalog.prepare(version_state, payload,
+                lambda candidate, previous: _normalize_version_payload(candidate, previous, source_dataset, image_path, clip=False))
+            version_plans.append(catalog.plan(version_state))
+    for source in source_specs:
+        source_dataset = _managed_editor_dataset(session, config, source.dataset.key)
+        for annotation_name, _revision in deletions:
+            path = _editor_source_dir(config, source_dataset) / annotation_name
+            if path.is_file():
+                catalog = _annotation_catalog(session, config, source_dataset, annotation_name)
+                version_plans.append(catalog.plan(None, remove_scene=True))
+    version_plan = merge_plans(version_plans)
+    version_files = {PurePosixPath(path): payload for path, payload in version_plan["files"].items()}
+    expected_revisions: dict[PurePosixPath, str | None] = {
+        path: _blob_revision(config, "HEAD", path) for path in version_files
+    }
+    expected_revisions.update(deletion_paths)
+    for (_source_key, _annotation), (path, _payload, revision) in mutations.items():
+        expected_revisions[_repo_relative(config, path)] = revision
+    version_plan["expected_revisions"] = {path.as_posix(): revision for path, revision in expected_revisions.items()}
+    version_plan["paths"] = [path.as_posix() for path in expected_revisions]
+    version_plan["drafts"] = [{"dataset_key": dataset.key, "annotation_name": name} for name, _revision, _payload in normalized]
+    publication = _prepare_annotation_publication(session, version_plan, username)
     written_paths: list[PurePosixPath] = []
     try:
         for (_source_key, annotation_name), (path, payload, revision) in mutations.items():
@@ -2984,6 +3203,10 @@ def _publish_managed_editor_scenes(
                 footprint_relative = _repo_relative(config, footprint)
                 expected_revisions[footprint_relative] = None
                 written_paths.append(footprint_relative)
+        for relative, payload in version_files.items():
+            _write_geojson_atomic(config.mlmarkup_editor_root.joinpath(*relative.parts), payload)
+            if relative not in written_paths:
+                written_paths.append(relative)
         if written_paths:
             _git(config, "add", "--", *(path.as_posix() for path in written_paths))
         if deletion_paths:
@@ -2996,13 +3219,17 @@ def _publish_managed_editor_scenes(
                 config,
                 f"Опубликовать правки управляемого датасета {dataset.dataset_name or dataset.name}",
                 username,
+                publication_id=publication.id if publication else None,
             )
+            _record_annotation_commit(session, publication, commit)
             commit = _push_with_retry(config, expected_revisions=expected_revisions)
         else:
             commit = _git(config, "rev-parse", "HEAD").stdout.strip()
     except Exception:
         _restore_editor_paths(config, [*written_paths, *deletion_paths])
+        _cancel_annotation_publication(session, publication)
         raise
+    _complete_annotation_publication(session, publication, commit)
 
     for annotation_name, image_path in new_images.items():
         session.add(ManagedDatasetSceneRow(
@@ -3358,6 +3585,7 @@ def _draft_summary(
         class_counts=class_counts,
         updated_at=row.updated_at,
         annotation_zone_count=_zone_count(dict(row.geojson)),
+        selected_version_id=(row.annotation_versions or {}).get("selected_id"),
     )
 
 
@@ -3371,6 +3599,7 @@ def _draft_info(
     return DatasetEditorDraftInfo(
         **_draft_summary(row, dataset, current_revision).model_dump(),
         geojson=dict(row.geojson) if geojson is None else geojson,
+        annotation_versions=AnnotationVersionDraft.model_validate(row.annotation_versions) if row.annotation_versions else None,
     )
 
 
@@ -4075,7 +4304,7 @@ def _git_optional(
         raise DatasetEditorGitError(f"Не удалось запустить Git: {exc}") from exc
 
 
-def _commit(config: TrainingUIAPIConfig, subject: str, username: str) -> str:
+def _commit(config: TrainingUIAPIConfig, subject: str, username: str, *, publication_id: uuid.UUID | None = None) -> str:
     safe_username = " ".join(username.replace("\r", " ").replace("\n", " ").split())
     author_name = safe_username or "unknown"
     author_email = (
@@ -4090,12 +4319,13 @@ def _commit(config: TrainingUIAPIConfig, subject: str, username: str) -> str:
         "-c",
         f"user.email={author_email}",
         "commit",
+        *(["--allow-empty"] if publication_id else []),
         "--author",
         f"{author_name} <{author_email}>",
         "-m",
         subject,
         "-m",
-        f"MLSystem2-User: {author_name}",
+        (f"MLSystem2-Annotation-Publication: {publication_id}\n" if publication_id else "") + f"MLSystem2-User: {author_name}",
     )
     return _git(config, "rev-parse", "HEAD").stdout.strip()
 

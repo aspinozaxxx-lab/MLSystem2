@@ -485,6 +485,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Прочитать вариант разметки снимка в текущем классе */
+        get: operations["annotation_version_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__versions__version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import": {
         parameters: {
             query?: never;
@@ -2173,6 +2190,91 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AnnotationVersionCatalog */
+        AnnotationVersionCatalog: {
+            /**
+             * Image Id
+             * Format: uuid
+             */
+            image_id: string;
+            /** Revision */
+            revision: string;
+            /** Selected Id */
+            selected_id?: string | null;
+            /** Versions */
+            versions: components["schemas"]["AnnotationVersionInfo"][];
+        };
+        /** AnnotationVersionDetail */
+        AnnotationVersionDetail: {
+            catalog: components["schemas"]["AnnotationVersionCatalog"];
+            /**
+             * Version Id
+             * Format: uuid
+             */
+            version_id: string;
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
+        };
+        /** AnnotationVersionDraft */
+        AnnotationVersionDraft: {
+            /** Catalog Revision */
+            catalog_revision: string;
+            /**
+             * Selected Id
+             * Format: uuid
+             */
+            selected_id: string;
+            /** Edits */
+            edits?: components["schemas"]["AnnotationVersionEdit"][];
+            /** Replacements */
+            replacements?: {
+                [key: string]: string;
+            };
+        };
+        /** AnnotationVersionEdit */
+        AnnotationVersionEdit: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Source Id */
+            source_id?: string | null;
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
+        };
+        /** AnnotationVersionInfo */
+        AnnotationVersionInfo: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /** Usages */
+            usages?: components["schemas"]["AnnotationVersionUsage"][];
+        };
+        /** AnnotationVersionUsage */
+        AnnotationVersionUsage: {
+            /** Dataset Key */
+            dataset_key: string;
+            /** Dataset Name */
+            dataset_name: string;
+            /**
+             * Indirect
+             * @default false
+             */
+            indirect: boolean;
+        };
         /** AppLink */
         AppLink: {
             /** Key */
@@ -2594,10 +2696,13 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Selected Version Id */
+            selected_version_id?: string | null;
             /** Geojson */
             geojson: {
                 [key: string]: unknown;
             };
+            annotation_versions?: components["schemas"]["AnnotationVersionDraft"] | null;
         };
         /** DatasetEditorDraftSummary */
         DatasetEditorDraftSummary: {
@@ -2635,6 +2740,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Selected Version Id */
+            selected_version_id?: string | null;
         };
         /** DatasetEditorImportRequest */
         DatasetEditorImportRequest: {
@@ -2862,6 +2969,7 @@ export interface components {
              * @default false
              */
             deleted: boolean;
+            annotation_versions?: components["schemas"]["AnnotationVersionDraft"] | null;
         };
         /** DatasetEditorSaveSceneRequest */
         DatasetEditorSaveSceneRequest: {
@@ -2884,6 +2992,7 @@ export interface components {
                 [key: string]: unknown;
             };
             draft?: components["schemas"]["DatasetEditorDraftInfo"] | null;
+            annotation_versions?: components["schemas"]["AnnotationVersionCatalog"] | null;
         };
         /** DatasetEditorSceneInfo */
         DatasetEditorSceneInfo: {
@@ -2913,6 +3022,17 @@ export interface components {
                 [key: string]: number;
             };
             draft?: components["schemas"]["DatasetEditorDraftSummary"] | null;
+            /** Image Id */
+            image_id?: string | null;
+            /** Annotation Version Id */
+            annotation_version_id?: string | null;
+            /** Annotation Version Name */
+            annotation_version_name?: string | null;
+            /**
+             * Annotation Version Count
+             * @default 0
+             */
+            annotation_version_count: number;
         };
         /** DatasetEditorSceneListResponse */
         DatasetEditorSceneListResponse: {
@@ -6464,6 +6584,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetEditorDraftInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    annotation_version_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__versions__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnotationVersionDetail"];
                 };
             };
             /** @description Validation Error */

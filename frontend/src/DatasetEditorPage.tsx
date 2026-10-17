@@ -50,6 +50,8 @@ import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, 
 import "ol/ol.css";
 
 import { ApiError, apiDownloadGet, apiJson, downloadBlob } from "./api/client";
+import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
+import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
 import { useRememberedClass } from "./ClassNavigation";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
 import { isCompactLayout, useCompactLayout } from "./utils/useCompactLayout";
@@ -162,6 +164,8 @@ type EditorScene = {
   class_counts: Record<string, number>;
   revision: string;
   draft: DraftSummary | null;
+  annotation_version_count?: number;
+  annotation_version_name?: string | null;
 };
 
 type DraftSummary = {
@@ -176,13 +180,14 @@ type DraftSummary = {
   updated_at: string;
 };
 
-type DraftInfo = DraftSummary & { geojson: JsonObject };
+type DraftInfo = DraftSummary & { geojson: JsonObject; annotation_versions?: AnnotationVersionDraft | null };
 
 type SceneDetail = {
   scene: EditorScene;
   geojson: JsonObject;
   valid_data_footprint: JsonObject;
   draft: DraftInfo | null;
+  annotation_versions?: AnnotationVersionCatalog | null;
 };
 type PseudoMarkupInfo = {
   status: "unavailable" | "ready" | "queued" | "running" | "failed";
@@ -206,6 +211,7 @@ type SceneDraft = DraftState & {
   hasServerDraft: boolean;
   serverDraftStale: boolean;
   serverUpdatedAt: string | null;
+  versionCatalog?: AnnotationVersionCatalog | null;
 };
 type DraftMap = Record<string, SceneDraft>;
 type RasterFolder = { name: string; path: string };
@@ -694,12 +700,17 @@ export function DatasetEditorPage({
         || loadedScenesDatasetKeyRef.current !== key
         || activeAnnotationRef.current !== name
       ) return;
-      const baseline = { geojson: payload.geojson, newFeatureIndexes: [], deleted: false };
+      const versionCatalog = payload.annotation_versions;
+      const initialVersions: AnnotationVersionDraft | undefined = versionCatalog?.selected_id
+        ? { catalog_revision: versionCatalog.revision, selected_id: versionCatalog.selected_id, edits: [], replacements: {} }
+        : undefined;
+      const baseline: DraftSnapshot = { geojson: payload.geojson, newFeatureIndexes: [], deleted: false, annotationVersions: initialVersions };
       const draftSnapshot = payload.draft
         ? {
             geojson: payload.draft.geojson,
             newFeatureIndexes: draftNewFeatureIndexes(payload.geojson, payload.draft.geojson),
             deleted: payload.draft.deleted,
+            annotationVersions: payload.draft.annotation_versions || initialVersions,
           }
         : baseline;
       const scene = {
@@ -720,6 +731,7 @@ export function DatasetEditorPage({
           serverUpdatedAt: payload.draft?.updated_at || null,
           history: [],
           normalized: Boolean(payload.draft),
+          versionCatalog,
         },
       }));
       setEditMode(initialEditMode());
@@ -802,6 +814,7 @@ export function DatasetEditorPage({
               base_revision: draft.baseRevision,
               geojson: sent.geojson,
               deleted: Boolean(sent.deleted),
+              ...(!testSampleId ? { annotation_versions: sent.annotationVersions || null } : {}),
             },
           },
         );
@@ -812,6 +825,7 @@ export function DatasetEditorPage({
           geojson: saved.geojson,
           newFeatureIndexes: [...sent.newFeatureIndexes],
           deleted: saved.deleted,
+          annotationVersions: saved.annotation_versions || sent.annotationVersions,
         };
         changeDrafts((current) => {
           const currentDraft = current[name];
@@ -1056,6 +1070,7 @@ export function DatasetEditorPage({
         newFeaturesRef.current,
       ),
       deleted: Boolean(draft.current.deleted),
+      annotationVersions: draft.current.annotationVersions,
     };
   }, []);
 
@@ -1241,12 +1256,12 @@ export function DatasetEditorPage({
     let holeTarget: Feature<Geometry> | null = null;
     let vertexSelectionTimer: number | null = null;
 
-    const normalized = vectorSnapshot(
+    const normalized = { ...vectorSnapshot(
       vectorSource,
       crs,
       draft.current.geojson,
       newFeaturesRef.current,
-    );
+    ), annotationVersions: draft.current.annotationVersions };
     if (!draft.normalized) {
       updateDraft(name, (current) => ({
         ...current,
@@ -1769,6 +1784,28 @@ export function DatasetEditorPage({
     restoreActiveSnapshot(restored.current);
   }, [changeDrafts, restoreActiveSnapshot]);
 
+  const changeAnnotationVersion = (next: DraftSnapshot, previous: DraftSnapshot) => {
+    const before = captureActiveSnapshot();
+    if (!before || !snapshotsEqual(before, previous)) {
+      window.alert("Разметка изменилась во время загрузки версии. Повторите переключение после завершения правки.");
+      return;
+    }
+    updateDraft(activeAnnotationRef.current, (draft) => ({
+      ...draft, current: cloneSnapshot(next), history: appendHistory(draft.history, before), normalized: true,
+    }));
+    restoreActiveSnapshot(next);
+    setEditMode(initialEditMode());
+  };
+
+  const loadAnnotationVersion = async (id: string) => {
+    const key = datasetKeyRef.current;
+    const name = activeAnnotationRef.current;
+    const response = await run(() => apiJson<AnnotationVersionDetail>(
+      `${editorPath(key)}/scenes/${encodeURIComponent(name)}/versions/${encodeURIComponent(id)}`,
+    ));
+    return key === datasetKeyRef.current && name === activeAnnotationRef.current ? response : undefined;
+  };
+
   const deleteSelectedVertices = useCallback((): boolean => {
     const selections = selectedVerticesRef.current;
     const modify = modifyRef.current;
@@ -2046,7 +2083,7 @@ export function DatasetEditorPage({
       <header className="page-header">
         <div className="page-title">
           <h1>{testSampleId ? "Редактор тестовой разметки" : "Редактор датасетов"}</h1>
-          <p>{testSampleId ? `${selectedDataset?.name || "Тестовая разметка"} · черновики сохраняются отдельно, F1 пересчитывается вручную` : "Один GeoJSON на снимок · черновики сохраняются на сервере и публикуются отдельно"}</p>
+          <p>{testSampleId ? `${selectedDataset?.name || "Тестовая разметка"} · черновики сохраняются отдельно, F1 пересчитывается вручную` : "Версии разметки снимков · черновики сохраняются на сервере и публикуются отдельно"}</p>
           {testSampleId ? <a href={`#/test-markups/${testSampleId}`}>К составу и метрикам разметки</a> : null}
         </div>
         {publication ? (
@@ -2211,6 +2248,11 @@ export function DatasetEditorPage({
               {sortedScenes.map((scene) => {
                 const draft = drafts[scene.annotation_name];
                 const summary = scene.draft;
+                const versionState = draft?.current.annotationVersions;
+                const versionCount = draft?.versionCatalog ? new Set([
+                  ...draft.versionCatalog.versions.map((version) => version.id),
+                  ...(versionState?.edits || []).map((version) => version.id),
+                ].filter((id) => !(id in (versionState?.replacements || {})))).size : scene.annotation_version_count;
                 const counts = draft
                   ? sceneCounts(scene, draft)
                   : summary
@@ -2240,6 +2282,7 @@ export function DatasetEditorPage({
                   >
                     <span className="dataset-editor-scene-name">
                       <strong>{scene.image_name}</strong>
+                      {versionCount ? <small className="badge" title={scene.annotation_version_name || "Версии разметки снимка"}>Версий: {versionCount}</small> : null}
                       {scene.revision === NEW_SCENE_REVISION ? <span className="badge warning">новый · черновик</span> : null}
                       {deleted ? <span className="badge warning">к удалению</span> : null}
                       {changed ? <i className="dataset-editor-dirty-dot" aria-label="Есть неопубликованные изменения" /> : null}
@@ -2531,6 +2574,13 @@ export function DatasetEditorPage({
                       </button>
                     ))}
                   </div>
+                ) : null}
+                {!testSampleId && activeDraft.versionCatalog && activeDraft.current.annotationVersions ? (
+                  <DatasetAnnotationVersions key={`${datasetKey}:${activeDraft.scene.annotation_name}`}
+                    catalog={activeDraft.versionCatalog} snapshot={activeDraft.current}
+                    publishedGeojson={activeDraft.baseline.geojson}
+                    disabled={busy || drawInProgress || Boolean(activeDraft.current.deleted)}
+                    loadVersion={loadAnnotationVersion} onChange={changeAnnotationVersion} />
                 ) : null}
                 <div className="dataset-editor-map-shell">
                   <div

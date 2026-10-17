@@ -196,12 +196,75 @@ class DatasetEditorDraftRow(Base):
     base_revision: Mapped[str] = mapped_column(String(128))
     geojson: Mapped[dict[str, Any]] = mapped_column(_json_type())
     deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    annotation_versions: Mapped[dict[str, Any] | None] = mapped_column(_json_type(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class AnnotationImageRow(Base):
+    """Стабильная сущность подготовленного снимка, общая для классов."""
+
+    __tablename__ = "annotation_images"
+    __table_args__ = (UniqueConstraint("imagery_type", "relative_path", name="uq_annotation_images_path"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    imagery_type: Mapped[str] = mapped_column(String(32))
+    relative_path: Mapped[str] = mapped_column(String(2048))
+    annotation_name: Mapped[str] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnnotationVersionRow(Base):
+    """Редактируемый вариант разметки снимка в одном классе."""
+
+    __tablename__ = "annotation_versions"
+    __table_args__ = (Index("ix_annotation_versions_class_image", "class_id", "image_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    image_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("annotation_images.id", ondelete="RESTRICT"))
+    class_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("dataset_classes.id", ondelete="RESTRICT"))
+    name: Mapped[str] = mapped_column(String(240))
+    geojson: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DatasetAnnotationRow(Base):
+    """Выбор версии снимка в датасете; данные самой разметки не дублируются."""
+
+    __tablename__ = "dataset_annotations"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "image_id", name="uq_dataset_annotations_image"),
+        UniqueConstraint("dataset_id", "annotation_name", name="uq_dataset_annotations_name"),
+        Index("ix_dataset_annotations_version", "version_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dataset_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"))
+    image_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("annotation_images.id", ondelete="RESTRICT"))
+    version_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("annotation_versions.id", ondelete="RESTRICT"))
+    annotation_name: Mapped[str] = mapped_column(String(512))
+    materialized_hash: Mapped[str] = mapped_column(String(64))
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class AnnotationPublicationRow(Base):
+    """Журнал завершения публикации при разрыве между Git и транзакцией БД."""
+
+    __tablename__ = "annotation_publications"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username: Mapped[str] = mapped_column(String(180))
+    payload: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class TrainingTemplateRow(Base):

@@ -213,7 +213,9 @@ def test_dataset_editor_requires_auth_and_lists_counts_and_raster_ranges(
     assert scenes[0]["total_count"] == 3
     assert scenes[0]["positive_count"] == 2
     assert scenes[0]["hard_negative_count"] == 1
-    assert len(scenes[0]["revision"]) == 40
+    assert len(scenes[0]["revision"]) == 64
+    assert scenes[0]["annotation_version_count"] == 1
+    assert scenes[0]["image_id"]
     empty_path = quote(env.empty_dataset_key, safe="")
     empty_scenes = env.client.get(f"/api/v1/dataset-editor/datasets/{empty_path}/scenes")
     assert empty_scenes.status_code == 200

@@ -19,7 +19,7 @@ from sqlalchemy import select
 from ._dataset_catalog import dataset_class_row, find_managed_dataset
 from ._dataset_editor import (
     DatasetEditorConflict, DatasetEditorImportClippingRequired,
-    _clip_geojson_to_footprint, _dataset_images_root, _draft_info, _empty_annotation_payload,
+    _clip_geojson_to_footprint, _dataset_images_root, _draft_info, _draft_summary, _empty_annotation_payload,
     _file_revision, _footprint_covers_geometry, _image_path_for_annotation,
     _normalize_editor_geojson, _read_geojson, _safe_annotation_name, _safe_raster_path,
     _reproject_editor_geojson,
@@ -108,14 +108,14 @@ def sample_editor_scenes(session, config, sample_id, username):
                 revision=revision or "missing", total_count=tile.object_count,
                 positive_count=tile.object_count, hard_negative_count=0,
                 class_counts=dict(tile.class_object_counts or {}),
-                draft=_draft_info(draft, dataset, revision).model_dump(exclude={"geojson"}) if draft else None,
+                draft=_draft_summary(draft, dataset, revision) if draft else None,
             ))
         for name, draft in drafts.items():
             scenes.append(DatasetEditorSceneInfo(
                 scene_id=name, annotation_name=name, image_name=name,
                 raster_url=f"/api/v1/test-samples/{sample_id}/editor/rasters/{name}",
                 revision="new", total_count=0, positive_count=0, hard_negative_count=0,
-                draft=_draft_info(draft, dataset, "new").model_dump(exclude={"geojson"}),
+                draft=_draft_summary(draft, dataset, "new"),
             ))
         info = DatasetEditorDatasetInfo(
             key=dataset.key, name=sample.name, dataset_name=sample.name,

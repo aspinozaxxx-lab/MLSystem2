@@ -1099,6 +1099,64 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/versions/{version_id}": {
+      "get": {
+        "summary": "Прочитать вариант разметки снимка в текущем классе",
+        "operationId": "annotation_version_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__versions__version_id__get",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "annotation_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Annotation Name"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationVersionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import": {
       "post": {
         "summary": "Загрузить GeoJSON новых снимков в черновики",
@@ -6128,6 +6186,208 @@
   },
   "components": {
     "schemas": {
+      "AnnotationVersionCatalog": {
+        "properties": {
+          "image_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Image Id"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "selected_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Id"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationVersionInfo"
+            },
+            "type": "array",
+            "title": "Versions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "image_id",
+          "revision",
+          "versions"
+        ],
+        "title": "AnnotationVersionCatalog"
+      },
+      "AnnotationVersionDetail": {
+        "properties": {
+          "catalog": {
+            "$ref": "#/components/schemas/AnnotationVersionCatalog"
+          },
+          "version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Version Id"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "catalog",
+          "version_id",
+          "geojson"
+        ],
+        "title": "AnnotationVersionDetail"
+      },
+      "AnnotationVersionDraft": {
+        "properties": {
+          "catalog_revision": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Catalog Revision"
+          },
+          "selected_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Selected Id"
+          },
+          "edits": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationVersionEdit"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Edits"
+          },
+          "replacements": {
+            "additionalProperties": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "propertyNames": {
+              "format": "uuid"
+            },
+            "type": "object",
+            "title": "Replacements"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "catalog_revision",
+          "selected_id"
+        ],
+        "title": "AnnotationVersionDraft"
+      },
+      "AnnotationVersionEdit": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "geojson"
+        ],
+        "title": "AnnotationVersionEdit"
+      },
+      "AnnotationVersionInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "usages": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationVersionUsage"
+            },
+            "type": "array",
+            "title": "Usages"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "revision"
+        ],
+        "title": "AnnotationVersionInfo"
+      },
+      "AnnotationVersionUsage": {
+        "properties": {
+          "dataset_key": {
+            "type": "string",
+            "title": "Dataset Key"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name"
+          },
+          "indirect": {
+            "type": "boolean",
+            "title": "Indirect",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "dataset_key",
+          "dataset_name"
+        ],
+        "title": "AnnotationVersionUsage"
+      },
       "AppLink": {
         "properties": {
           "key": {
@@ -7305,10 +7565,32 @@
             "format": "date-time",
             "title": "Updated At"
           },
+          "selected_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Version Id"
+          },
           "geojson": {
             "additionalProperties": true,
             "type": "object",
             "title": "Geojson"
+          },
+          "annotation_versions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnnotationVersionDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -7376,6 +7658,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "selected_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Version Id"
           }
         },
         "additionalProperties": false,
@@ -8022,6 +8316,16 @@
             "type": "boolean",
             "title": "Deleted",
             "default": false
+          },
+          "annotation_versions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnnotationVersionDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -8073,6 +8377,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DatasetEditorDraftInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annotation_versions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnnotationVersionCatalog"
               },
               {
                 "type": "null"
@@ -8148,6 +8462,47 @@
                 "type": "null"
               }
             ]
+          },
+          "image_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Id"
+          },
+          "annotation_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotation Version Id"
+          },
+          "annotation_version_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotation Version Name"
+          },
+          "annotation_version_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Annotation Version Count",
+            "default": 0
           }
         },
         "additionalProperties": false,

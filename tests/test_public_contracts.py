@@ -56,6 +56,19 @@ def test_public_api_all_is_exact() -> None:
         assert list(module.__all__) == expected
 
 
+def test_annotation_version_contracts(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import AnnotationVersionDraft, DatasetEditorSaveDraftRequest, DatasetEditorSceneInfo
+
+    assert set(AnnotationVersionDraft.model_fields) == {"catalog_revision", "selected_id", "edits", "replacements"}
+    assert "annotation_versions" in DatasetEditorSaveDraftRequest.model_fields
+    assert {"image_id", "annotation_version_id", "annotation_version_name", "annotation_version_count"} <= set(DatasetEditorSceneInfo.model_fields)
+    path = "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/versions/{version_id}"
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    assert get_openapi_schema()["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/AnnotationVersionDetail")
+
+
 def test_usage_config_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import UsageConfig

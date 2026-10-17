@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">Один снимок — несколько версий разметки</title>
+  <desc id="desc">Поясняющая схема. Основная версия снимка используется двумя датасетами, уточнённая — отдельным экспериментом. Изменение общей версии обновляет связанные наборы после публикации. Сущности хранятся в Гровике, в Git отправляются собранные датасеты.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10" fill="none" stroke="#69839a" stroke-width="1.7"/></marker></defs>
+  <rect width="1200" height="650" rx="24" fill="#f1f5f9"/>
+  <g font-family="Arial, sans-serif" fill="#16324a">
+    <text x="52" y="64" font-size="32" font-weight="700">Один снимок — несколько версий разметки</text>
+    <text x="52" y="100" font-size="19" fill="#51677c">Варианты одного класса и их использование в датасетах</text>
+    <rect x="52" y="160" width="255" height="290" rx="18" fill="#fff" stroke="#ccd8e3"/>
+    <rect x="74" y="182" width="211" height="180" rx="10" fill="#dee9d9"/>
+    <path d="M74 215 L285 332 M140 182 L230 362" fill="none" stroke="#b0c9a3" stroke-width="20"/>
+    <path d="M82 245 C150 190 158 325 270 283" fill="none" stroke="#6aaed0" stroke-width="25"/>
+    <text x="79" y="400" font-size="21" font-weight="700">Снимок территории</text>
+    <text x="79" y="430" font-size="17" fill="#51677c">Один TIFF, постоянный ID</text>
+    <g fill="none" stroke="#69839a" stroke-width="3" marker-end="url(#arrow)">
+      <path d="M307 295 L351 295 L351 228 L398 228"/>
+      <path d="M351 295 L351 402 L398 402"/>
+      <path d="M717 228 L769 228 L769 186 L823 186"/>
+      <path d="M769 228 L769 293 L823 293"/>
+      <path d="M717 402 L823 402"/>
+    </g>
+    <rect x="406" y="164" width="310" height="126" rx="16" fill="#e4f0ff" stroke="#729ed0"/>
+    <text x="430" y="202" font-size="23" font-weight="700">Основная разметка</text>
+    <text x="430" y="235" font-size="18">Общая версия</text>
+    <text x="430" y="263" font-size="17" fill="#51677c">Одна правка → два датасета</text>
+    <rect x="406" y="339" width="310" height="126" rx="16" fill="#e7f5ef" stroke="#75af96"/>
+    <text x="430" y="377" font-size="23" font-weight="700">Уточнённая разметка</text>
+    <text x="430" y="410" font-size="18">Независимая версия</text>
+    <text x="430" y="438" font-size="17" fill="#51677c">Свои полигоны и зоны</text>
+    <rect x="833" y="146" width="315" height="80" rx="14" fill="#fff" stroke="#729ed0"/>
+    <text x="857" y="178" font-size="20" font-weight="700">Основной датасет</text>
+    <text x="857" y="205" font-size="17" fill="#51677c">Выбрана основная разметка</text>
+    <rect x="833" y="253" width="315" height="80" rx="14" fill="#fff" stroke="#729ed0"/>
+    <text x="857" y="285" font-size="20" font-weight="700">Расширенный датасет</text>
+    <text x="857" y="312" font-size="17" fill="#51677c">Та же общая версия снимка</text>
+    <rect x="833" y="361" width="315" height="80" rx="14" fill="#fff" stroke="#75af96"/>
+    <text x="857" y="393" font-size="20" font-weight="700">Экспериментальный набор</text>
+    <text x="857" y="420" font-size="17" fill="#51677c">Выбрана уточнённая разметка</text>
+    <rect x="52" y="510" width="1096" height="88" rx="16" fill="#16324a"/>
+    <text x="78" y="546" font-size="21" fill="#fff" font-weight="700">Сначала черновик — затем общая публикация</text>
+    <text x="78" y="577" font-size="18" fill="#d3e5f2">Версии и связи — в базе Гровики. В Git — актуальные собранные датасеты.</text>
+    <text x="52" y="628" font-size="15" fill="#51677c">Поясняющая схема. Изображение территории условное, это не спутниковый снимок.</text>
+  </g>
+</svg>

@@ -2,6 +2,7 @@ import { containsCoordinate, type Extent } from "ol/extent";
 import type Geometry from "ol/geom/Geometry";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import Polygon from "ol/geom/Polygon";
+import type { AnnotationVersionDraft } from "../api/types";
 
 export type JsonObject = Record<string, unknown>;
 export type SortDirection = "ascending" | "descending";
@@ -109,6 +110,7 @@ export type DraftSnapshot = {
   geojson: JsonObject;
   newFeatureIndexes: number[];
   deleted?: boolean;
+  annotationVersions?: AnnotationVersionDraft;
 };
 
 export type DraftState = {
@@ -158,6 +160,7 @@ export function cloneSnapshot(snapshot: DraftSnapshot): DraftSnapshot {
     geojson: JSON.parse(JSON.stringify(snapshot.geojson)) as JsonObject,
     newFeatureIndexes: [...snapshot.newFeatureIndexes],
     ...(snapshot.deleted === undefined ? {} : { deleted: snapshot.deleted }),
+    ...(snapshot.annotationVersions ? { annotationVersions: JSON.parse(JSON.stringify(snapshot.annotationVersions)) as AnnotationVersionDraft } : {}),
   };
 }
 
@@ -165,6 +168,7 @@ export function snapshotsEqual(left: DraftSnapshot, right: DraftSnapshot): boole
   return (
     canonicalJson(left.geojson) === canonicalJson(right.geojson) &&
     Boolean(left.deleted) === Boolean(right.deleted) &&
+    canonicalJson(left.annotationVersions) === canonicalJson(right.annotationVersions) &&
     left.newFeatureIndexes.length === right.newFeatureIndexes.length &&
     left.newFeatureIndexes.every((value, index) => value === right.newFeatureIndexes[index])
   );
@@ -513,6 +517,7 @@ export function draftChanged(draft: DraftState): boolean {
   return (
     canonicalJson(draft.baseline.geojson) !== canonicalJson(draft.current.geojson) ||
     Boolean(draft.baseline.deleted) !== Boolean(draft.current.deleted)
+    || canonicalJson(draft.baseline.annotationVersions) !== canonicalJson(draft.current.annotationVersions)
   );
 }
 

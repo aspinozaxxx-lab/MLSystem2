@@ -2,7 +2,7 @@
 
 ## Назначение
 
-`training_ui_api` — FastAPI-сервис сайта MLSystem2. Он хранит UI-данные и управляемый каталог датасетов, управляет очередями training/inference и предоставляет Git-backed редактор per-image разметки. Опубликованные данные читаются из серверного `mlmarkup-editor` сразу после commit/push, без обратной доставки с GitHub. Публикация и чтение согласованы межпроцессным lock; задания получают отдельную копию файлов, личные черновики остаются в БД.
+`training_ui_api` — FastAPI-сервис сайта MLSystem2. Он хранит UI-данные и управляемый каталог датасетов, управляет очередями training/inference и предоставляет редактор per-image разметки с версиями и связями в UI-БД. Git хранит собранные датасеты. Опубликованные файлы читаются из серверного `mlmarkup-editor` сразу после commit/push, без обратной доставки с GitHub. Публикация и чтение согласованы межпроцессным lock; задания получают отдельную копию файлов, личные черновики остаются в БД.
 
 Синхронизация каталога и его дешёвая файловая ревизия пропускают скрытые папки и `__pycache__`
 на уровнях классов и датасетов. Служебный кэш Python не создаёт сущности каталога;
@@ -70,6 +70,22 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `worker_main() -> None` - отдельно запускает исполнителей общей очереди и batch-задач тестовых разметок.
 
 ## Публичные контракты
+
+`AnnotationVersionUsage`: `dataset_key`, `dataset_name`, `indirect` (использование через управляемый набор).
+`AnnotationVersionInfo`: `id`, `name`, `revision`, `usages`. `AnnotationVersionCatalog`: `image_id`, `revision`,
+`selected_id`, `versions`. `AnnotationVersionDetail`: `catalog`, `version_id`, `geojson`.
+`AnnotationVersionEdit`: `id`, `name`, необязательный `source_id`, `geojson`.
+`AnnotationVersionDraft`: `catalog_revision`, `selected_id`, `edits`, `replacements` (удаляемый UUID → заменяющий UUID).
+`DatasetEditorSaveDraftRequest` и `DatasetEditorDraftInfo.annotation_versions` передают этот личный черновик;
+`DatasetEditorDraftSummary.selected_version_id` показывает его выбор. `DatasetEditorSceneDetail.annotation_versions`
+содержит опубликованный каталог. `DatasetEditorSceneInfo` добавляет `image_id`, `annotation_version_id`,
+`annotation_version_name`, `annotation_version_count`; `revision` становится непрозрачной ревизией файла и выбора.
+`GET /api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/versions/{version_id}` возвращает
+`AnnotationVersionDetail` после проверки класса и снимка. Изменения используют существующие save/discard/publish,
+без отдельных немедленных мутаций. Каталог вариантов, связей и журнал завершения публикации хранятся в UI-БД;
+Git содержит собранные датасеты. Импорт прежних файлов не объединяет одинаковые разметки разных датасетов.
+При публикации общей версии обновляются все активные использования; удаление требует замены, конфликт — 409.
+Подробные правила сущностей, независимого копирования и восстановления — в `docs/architecture.md`.
 
 `UsageConfig`: `metrica_counter_id` — номер счётчика Яндекс Метрики или `null` при отключении;
 `metrica_user_id` — стабильный обезличенный ID текущего канонического пользователя.

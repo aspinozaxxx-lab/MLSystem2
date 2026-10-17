@@ -72,6 +72,52 @@ class DatasetEditorUserDraftListResponse(BaseModel):
     drafts: list[DatasetEditorUserDraftInfo]
 
 
+class AnnotationVersionUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dataset_key: str
+    dataset_name: str
+    indirect: bool = False
+
+
+class AnnotationVersionInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    name: str
+    revision: int
+    usages: list[AnnotationVersionUsage] = Field(default_factory=list)
+
+
+class AnnotationVersionEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    name: str = Field(min_length=1, max_length=240)
+    source_id: UUID | None = None
+    geojson: dict[str, Any]
+
+
+class AnnotationVersionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    catalog_revision: str = Field(min_length=1, max_length=128)
+    selected_id: UUID
+    edits: list[AnnotationVersionEdit] = Field(default_factory=list, max_length=100)
+    replacements: dict[UUID, UUID] = Field(default_factory=dict)
+
+
+class AnnotationVersionCatalog(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    image_id: UUID
+    revision: str
+    selected_id: UUID | None = None
+    versions: list[AnnotationVersionInfo]
+
+
+class AnnotationVersionDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    catalog: AnnotationVersionCatalog
+    version_id: UUID
+    geojson: dict[str, Any]
+
+
 class DatasetEditorDraftSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,12 +131,14 @@ class DatasetEditorDraftSummary(BaseModel):
     annotation_zone_count: int = Field(default=0, ge=0)
     class_counts: dict[str, int] = Field(default_factory=dict)
     updated_at: datetime
+    selected_version_id: UUID | None = None
 
 
 class DatasetEditorDraftInfo(DatasetEditorDraftSummary):
     model_config = ConfigDict(extra="forbid")
 
     geojson: dict[str, Any]
+    annotation_versions: AnnotationVersionDraft | None = None
 
 
 class DatasetEditorSceneInfo(BaseModel):
@@ -107,6 +155,10 @@ class DatasetEditorSceneInfo(BaseModel):
     revision: str
     class_counts: dict[str, int] = Field(default_factory=dict)
     draft: DatasetEditorDraftSummary | None = None
+    image_id: UUID | None = None
+    annotation_version_id: UUID | None = None
+    annotation_version_name: str | None = None
+    annotation_version_count: int = Field(default=0, ge=0)
 
 
 class DatasetEditorSceneListResponse(BaseModel):
@@ -123,6 +175,7 @@ class DatasetEditorSceneDetail(BaseModel):
     geojson: dict[str, Any]
     valid_data_footprint: dict[str, Any]
     draft: DatasetEditorDraftInfo | None = None
+    annotation_versions: AnnotationVersionCatalog | None = None
 
 
 class DatasetEditorPseudoMarkupInfo(BaseModel):
@@ -147,6 +200,7 @@ class DatasetEditorSaveDraftRequest(BaseModel):
     base_revision: str = Field(min_length=1, max_length=128)
     geojson: dict[str, Any]
     deleted: bool = False
+    annotation_versions: AnnotationVersionDraft | None = None
 
 
 class DatasetEditorImportSceneRequest(BaseModel):
@@ -325,6 +379,12 @@ class DatasetEditorRebuildResult(DatasetEditorMutationResult):
 
 
 __all__ = [
+    "AnnotationVersionUsage",
+    "AnnotationVersionInfo",
+    "AnnotationVersionEdit",
+    "AnnotationVersionDraft",
+    "AnnotationVersionCatalog",
+    "AnnotationVersionDetail",
     "DatasetEditorAddScenesRequest",
     "DatasetEditorCopyRequest",
     "DatasetEditorCopyResult",

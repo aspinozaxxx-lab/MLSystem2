@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from urllib.parse import quote
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -10,6 +11,8 @@ from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from mlsystem2.training_ui_api._dataset_editor import (
+    editor_annotation_version,
+    recover_annotation_publications,
     DatasetEditorConflict,
     DatasetEditorGitError,
     DatasetEditorImportClippingRequired,
@@ -37,6 +40,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
     save_editor_draft,
 )
 from mlsystem2.training_ui_api.contracts import (
+    AnnotationVersionDetail,
     DatasetEditorAddScenesRequest,
     DatasetEditorCopyRequest,
     DatasetEditorCopyResult,
@@ -62,6 +66,7 @@ from mlsystem2.training_ui_api.contracts import (
 
 from mlsystem2.training_ui_api._raster_http import raster_response
 from mlsystem2.training_ui_api._markup_lock import markup_write_lock
+from mlsystem2.training_ui_api._annotation_versions import AnnotationVersionConflict
 from .common import RouteContext
 
 
@@ -128,6 +133,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
             dataset_key,
             username=username,
+            catalog=True,
         )
 
     @app.delete(
@@ -185,7 +191,17 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             dataset_key,
             annotation_name,
             username=username,
+            catalog=True,
         )
+
+    @app.get(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/versions/{version_id}",
+        response_model=AnnotationVersionDetail,
+        summary="Прочитать вариант разметки снимка в текущем классе",
+    )
+    def annotation_version(dataset_key: str, annotation_name: str, version_id: UUID,
+                           db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)) -> AnnotationVersionDetail:
+        return _git_call(editor_annotation_version, db, ctx.config, dataset_key, annotation_name, version_id, catalog=True)
 
     @app.post(
         "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import",
@@ -237,7 +253,9 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             base_revision=request.base_revision,
             geojson=request.geojson,
             deleted=request.deleted,
+            annotation_versions=request.annotation_versions,
             username=username,
+            catalog=True,
         )
 
     @app.delete(
@@ -443,6 +461,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             annotation_name,
             revision=request.revision,
             username=username,
+            catalog=True,
         )
 
     @app.get(
@@ -504,16 +523,17 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
         return raster_response(path, range_header)
 
 
-def _git_call(function, *args, publish=False, **kwargs):
+def _git_call(function, *args, publish=False, catalog=False, **kwargs):
     try:
-        if publish:
+        if publish or catalog:
             session, config = args[:2]
             with markup_write_lock(config):
+                recover_annotation_publications(session, config)
                 result = function(*args, **kwargs)
                 session.commit()
                 return result
         return function(*args, **kwargs)
-    except DatasetEditorConflict as exc:
+    except (DatasetEditorConflict, AnnotationVersionConflict) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except DatasetEditorGitError as exc:
         raise HTTPException(
