@@ -310,3 +310,22 @@ def test_recovery_does_not_suppress_later_content_revision(editor_environment, m
         editor.recover_annotation_publications(session, config)
         assert not cleanup.automation_exclusions(session)[0]
         assert second not in {key for key, _ in cleanup.automation_exclusions(session)[1]}
+
+
+def test_concurrent_change_in_same_dataset_is_not_suppressed(editor_environment, monkeypatch):
+    env = editor_environment
+    config, factory, second = _setup(env)
+    original = editor._commit
+    with factory() as session:
+        row = session.scalar(select(DatasetRow).where(DatasetRow.key == second))
+        relative = row.source_path + "/Olskij_SCN01.part_footprint.geojson"
+
+        def concurrent_commit(*args, **kwargs):
+            editor._write_geojson_atomic(config.mlmarkup_editor_root / relative, _payload())
+            _git(env.editor_root, "add", "--", relative)
+            _git(env.editor_root, "commit", "--only", "-m", "Параллельная правка области снимка", "--", relative)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(editor, "_commit", concurrent_commit)
+        cleanup.apply_duplicates(session, config, cleanup.inspect_duplicates(session, config))
+        assert second not in {key for key, _ in cleanup.automation_exclusions(session)[1]}

@@ -231,6 +231,11 @@ def complete_maintenance(session, config, publication, commit):
 
     payload = deepcopy(publication.payload)
     changed = editor._git(config, "diff", "--name-only", "-z", commit, "HEAD").stdout.split("\0")
+    # Push с повтором может включить чужой коммит в предков нашего. Его изменения
+    # в том же датасете не должны исчезнуть под исключением технической очистки.
+    if payload.get("base_commit"):
+        published = editor._git(config, "diff", "--name-only", "-z", payload["base_commit"], commit).stdout.split("\0")
+        changed.extend(path for path in published if path not in payload["paths"])
     rows = {row.key: row for row in session.scalars(select(DatasetRow).where(DatasetRow.deleted_at.is_(None)))}
     exclusions = {}
     warnings = []
@@ -355,7 +360,8 @@ def apply_duplicates(session, config, expected, *, username="Обслужива�
             source_rows = [rows[key] for key in sources if key in rows]
             affected[rows[target].key] = {"paths": [row.source_path for row in source_rows],
                 "revisions": {row.key: row.config_revision for row in [rows[target], *source_rows]}}
-    plan.update(operation=OPERATION, affected_dataset_keys=sorted(affected), affected_datasets=affected,
+    plan.update(operation=OPERATION, base_commit=actual["markup_commit"],
+        affected_dataset_keys=sorted(affected), affected_datasets=affected,
         expected_revisions={str(path): revision for path, revision in expected_revisions.items()},
         paths=[str(path) for path in paths], drafts=[], replacements=replacements,
         audit_fingerprint=actual["fingerprint"], geometry_checks=geometry_checks)
