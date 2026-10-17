@@ -30,6 +30,7 @@ from mlsystem2.mlflow_adapter.contracts import (
 
 from ._catalog import MODEL_DISPLAY_NAMES, UI_ARCHITECTURES, ui_model_infos
 from ._config import TrainingUIAPIConfig
+from ._markup_lock import markup_read_lock
 from ._dataset_catalog import list_managed_datasets
 from ._datasets import (
     CUSTOM_KEY,
@@ -214,10 +215,19 @@ def update_automation_rule(
 
 
 def sync_automation_once(session: Session, config: TrainingUIAPIConfig) -> None:
+    # Не увидеть новую файловую ревизию между push и завершением журнала очистки.
+    with markup_read_lock(config):
+        _sync_automation_locked(session, config)
+
+
+def _sync_automation_locked(session: Session, config: TrainingUIAPIConfig) -> None:
+    from ._annotation_deduplication import automation_exclusions
+
     control = ensure_automation_control(session)
     if not control.enabled:
         return
     datasets = {item.key: item for item in _automation_datasets(session, config)}
+    pending, exclusions = automation_exclusions(session)
     rules = session.scalars(
         select(AutomationRuleRow).where(
             (AutomationRuleRow.training_enabled.is_(True))
@@ -227,6 +237,8 @@ def sync_automation_once(session: Session, config: TrainingUIAPIConfig) -> None:
     for rule in rules:
         dataset = datasets.get(rule.dataset_key)
         if dataset is None or not dataset.version:
+            continue
+        if dataset.key in pending or (dataset.key, dataset.version) in exclusions:
             continue
         _cancel_stale_automation_jobs(session, rule, dataset.version, config)
         if rule.training_enabled and rule.architecture in UI_ARCHITECTURES:

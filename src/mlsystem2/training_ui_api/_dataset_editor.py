@@ -631,10 +631,16 @@ def _prepare_annotation_publication(session: Session, plan: dict[str, Any], user
     return row
 
 
-def _complete_annotation_publication(session: Session, publication: AnnotationPublicationRow | None, commit: str) -> None:
+def _complete_annotation_publication(session: Session, publication: AnnotationPublicationRow | None, commit: str,
+                                     *, config: TrainingUIAPIConfig | None = None) -> None:
     if publication is None:
         return
     apply_plan(session, publication.payload)
+    if publication.payload.get("operation") == "deduplicate_annotation_versions_v1":
+        from ._annotation_deduplication import complete_maintenance
+        if config is None:
+            raise TrainingUIAPIError("Для завершения очистки нужна конфигурация опубликованного источника")
+        complete_maintenance(session, config, publication, commit)
     publication.commit_sha = commit
     publication.completed = True
     session.flush()
@@ -677,7 +683,7 @@ def recover_annotation_publications(session: Session, config: TrainingUIAPIConfi
                 _restore_editor_paths(config, [PurePosixPath(path) for path in publication.payload.get("paths", [])])
                 _cancel_annotation_publication(session, publication, confirmed_absent=True)
                 continue
-        _complete_annotation_publication(session, publication, commit)
+        _complete_annotation_publication(session, publication, commit, config=config)
         for draft in publication.payload.get("drafts", []):
             session.execute(delete(DatasetEditorDraftRow).where(
                 DatasetEditorDraftRow.dataset_key == draft["dataset_key"],
