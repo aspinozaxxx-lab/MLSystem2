@@ -3,6 +3,7 @@ import Collection from "ol/Collection";
 import Feature from "ol/Feature";
 import type OLMap from "ol/Map";
 import View from "ol/View";
+import GeoJSON from "ol/format/GeoJSON";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import Polygon from "ol/geom/Polygon";
 import Snap from "ol/interaction/Snap";
@@ -192,6 +193,110 @@ describe("вырезы в полигонах общего редактора", (
     expect(undoDraft(edited)?.current).toEqual(before);
     expect(feature.id).toBe("река-1");
     expect(feature.properties).toEqual((before.geojson.features as Record<string, unknown>[])[0].properties);
+  });
+
+  it.each([[0, 1], [0, 1, 2], [0, 1, 2, 3]].map((indexes) => ({ indexes })))(
+    "удаляет отверстие целиком, если после Del осталось бы меньше трёх вершин: %j",
+    ({ indexes }) => {
+      const polygon = new Polygon([rectangle(0, 0, 10, 10), rectangle(2, 2, 4, 4)]);
+      const selected = editableVertices(polygon).filter((vertex) =>
+        vertex.ringIndex === 1 && indexes.includes(vertex.vertexIndex),
+      );
+
+      const result = deleteEditableVertices(polygon, selected);
+
+      expect(result.removedCount).toBe(4);
+      expect(result.blockedRingCount).toBe(0);
+      expect((result.geometry as Polygon).getCoordinates()).toEqual([rectangle(0, 0, 10, 10)]);
+      expect((result.geometry as Polygon).getArea()).toBe(100);
+      expect((result.geometry as Polygon).intersectsCoordinate([3, 3])).toBe(true);
+      expect(polygon.getLinearRingCount()).toBe(2);
+    },
+  );
+
+  it("удаляет треугольное отверстие при удалении одной вершины", () => {
+    const polygon = new Polygon([
+      rectangle(0, 0, 10, 10),
+      [[2, 2], [4, 2], [3, 4], [2, 2]],
+    ]);
+    const selected = editableVertices(polygon).filter((vertex) =>
+      vertex.ringIndex === 1 && vertex.vertexIndex === 0,
+    );
+
+    const result = deleteEditableVertices(polygon, selected);
+
+    expect(result.removedCount).toBe(3);
+    expect(result.blockedRingCount).toBe(0);
+    expect((result.geometry as Polygon).getCoordinates()).toEqual([rectangle(0, 0, 10, 10)]);
+  });
+
+  it("удаляет несколько отверстий без сдвига индексов остальных колец и частей", () => {
+    const polygon = new MultiPolygon([
+      [
+        rectangle(0, 0, 10, 10),
+        rectangle(1, 1, 2, 2),
+        rectangle(3, 3, 4, 4),
+        rectangle(5, 5, 6, 6),
+      ],
+      [rectangle(20, 0, 30, 10), rectangle(21, 1, 22, 2)],
+    ]);
+    const selected = editableVertices(polygon).filter((vertex) =>
+      (vertex.polygonIndex === 0 && (vertex.ringIndex === 1 || vertex.ringIndex === 2)) ||
+      (vertex.polygonIndex === 1 && vertex.ringIndex === 1 && vertex.vertexIndex === 0),
+    );
+
+    const result = deleteEditableVertices(polygon, selected);
+    const coordinates = (result.geometry as MultiPolygon).getCoordinates();
+
+    expect(result.removedCount).toBe(9);
+    expect(result.blockedRingCount).toBe(0);
+    expect(coordinates[0]).toEqual([rectangle(0, 0, 10, 10), rectangle(5, 5, 6, 6)]);
+    expect(coordinates[1]).toEqual([
+      rectangle(20, 0, 30, 10), [[22, 1], [22, 2], [21, 2], [22, 1]],
+    ]);
+    expect(polygon.getCoordinates()[0]).toHaveLength(4);
+  });
+
+  it.each([2, 4])("не удаляет внешний контур, но удаляет выбранное отверстие: %i", (outerCount) => {
+    const polygon = new Polygon([rectangle(0, 0, 10, 10), rectangle(2, 2, 4, 4)]);
+    const selected = editableVertices(polygon).filter((vertex) =>
+      vertex.ringIndex === 1 || vertex.vertexIndex < outerCount,
+    );
+    const result = deleteEditableVertices(polygon, selected);
+
+    expect(result.removedCount).toBe(4);
+    expect(result.blockedRingCount).toBe(1);
+    expect((result.geometry as Polygon).getCoordinates()).toEqual([polygon.getCoordinates()[0]]);
+  });
+
+  it("сохраняет удаление отверстия в GeoJSON и восстанавливает его одной отменой", () => {
+    const polygon = new Polygon([rectangle(0, 0, 10, 10), rectangle(2, 2, 4, 4)]);
+    const feature = new Feature({ geometry: polygon, _mlsystem2_role: "positive", имя: "Река" });
+    feature.setId("река-1");
+    const format = new GeoJSON();
+    const options = { dataProjection: "EPSG:3857", featureProjection: "EPSG:3857" };
+    const before: DraftSnapshot = {
+      geojson: { ...format.writeFeaturesObject([feature], options) }, newFeatureIndexes: [],
+    };
+    const result = deleteEditableVertices(polygon,
+      editableVertices(polygon).filter((vertex) => vertex.ringIndex === 1));
+    feature.setGeometry(result.geometry as Polygon);
+    const after: DraftSnapshot = {
+      geojson: { ...format.writeFeaturesObject([feature], options) }, newFeatureIndexes: [],
+    };
+    const saved = JSON.parse(JSON.stringify(after)) as DraftSnapshot;
+    const [loaded] = format.readFeatures(saved.geojson, options);
+
+    expect((loaded.getGeometry() as Polygon).getCoordinates()).toEqual([rectangle(0, 0, 10, 10)]);
+    expect(loaded.getId()).toBe("река-1");
+    expect(loaded.get("имя")).toBe("Река");
+    expect(loaded.get("_mlsystem2_role")).toBe("positive");
+    expect(featureCounts(saved.geojson).total).toBe(1);
+    const edited = { baseline: before, current: saved, history: appendHistory([], before) };
+    expect(draftChanged(edited)).toBe(true);
+    expect(undoDraft(edited)?.current).toEqual(before);
+    const [restored] = format.readFeatures(undoDraft(edited)!.current.geojson, options);
+    expect((restored.getGeometry() as Polygon).getCoordinates()).toEqual(polygon.getCoordinates());
   });
 });
 

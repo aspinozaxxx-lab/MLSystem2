@@ -291,22 +291,26 @@ export function deleteEditableVertices(
     ? [(geometry as Polygon).getCoordinates()]
     : (geometry as MultiPolygon).getCoordinates();
   const coordinates = sourcePolygons.map((polygon, polygonIndex) =>
-    polygon.map((ring, ringIndex) => {
+    polygon.flatMap((ring, ringIndex) => {
       const openRing = ringWithoutClosingVertex(ring);
       const selected = selectedIndexes.get(`${polygonIndex}:${ringIndex}`);
       const removable = selected
         ? new Set([...selected].filter((index) => index >= 0 && index < openRing.length))
         : new Set<number>();
-      if (!removable.size) return cloneRing(ring);
+      if (!removable.size) return [cloneRing(ring)];
       if (openRing.length - removable.size < 3) {
+        if (ringIndex > 0) {
+          removedCount += openRing.length;
+          return [];
+        }
         blockedRingCount += 1;
-        return cloneRing(ring);
+        return [cloneRing(ring)];
       }
       const remaining = openRing
         .filter((_, vertexIndex) => !removable.has(vertexIndex))
         .map((coordinate) => [...coordinate]);
       removedCount += removable.size;
-      return [...remaining, [...remaining[0]]];
+      return [[...remaining, [...remaining[0]]]];
     }),
   );
 
