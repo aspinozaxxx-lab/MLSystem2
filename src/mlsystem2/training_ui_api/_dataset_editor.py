@@ -1362,12 +1362,7 @@ def publish_editor_scenes(
             for relative, payload in version_files.items():
                 _write_geojson_atomic(config.mlmarkup_editor_root.joinpath(*relative.parts), payload)
             if relative_paths or footprint_update_paths or version_files:
-                _git(
-                    config,
-                    "add",
-                    "--",
-                    *(path.as_posix() for path in dict.fromkeys([*relative_paths, *footprint_update_paths, *version_files])),
-                )
+                _stage_annotation_paths(config, [*relative_paths, *footprint_update_paths, *version_files])
             if deletion_paths:
                 _git(
                     config,
@@ -2005,7 +2000,7 @@ def rebuild_editor_dataset(
                 _write_geojson_atomic(config.mlmarkup_editor_root.joinpath(*relative.parts), payload)
             _git(config, "add", "-A", "--", target_relative.as_posix())
             if version_files:
-                _git(config, "add", "--", *(path.as_posix() for path in version_files))
+                _stage_annotation_paths(config, list(version_files))
             commit = _commit(
                 config,
                 (f"Пересобрать датасет {dataset.dataset_name or dataset.name} в режиме {mode}"),
@@ -3208,7 +3203,7 @@ def _publish_managed_editor_scenes(
             if relative not in written_paths:
                 written_paths.append(relative)
         if written_paths:
-            _git(config, "add", "--", *(path.as_posix() for path in written_paths))
+            _stage_annotation_paths(config, written_paths)
         if deletion_paths:
             _git(config, "rm", "--", *(path.as_posix() for path in deletion_paths))
             expected_revisions.update(deletion_paths)
@@ -4265,6 +4260,18 @@ def _ensure_editor_clone(config: TrainingUIAPIConfig) -> None:
         raise DatasetEditorGitError(f"Editor-клон MLMarkup не найден: {root}")
     if not config.mlmarkup_editor_branch.strip():
         raise DatasetEditorGitError("Не задана ветка editor-клона")
+
+
+def _stage_annotation_paths(config: TrainingUIAPIConfig, paths: list[PurePosixPath]) -> None:
+    """Публиковать служебный выбор версий и при строгом списке разрешённых файлов."""
+    unique = list(dict.fromkeys(paths))
+    manifests = [path for path in unique if path.name == ".mlsystem2-annotation-selections.json"]
+    ordinary = [path for path in unique if path not in manifests]
+    if ordinary:
+        _git(config, "add", "--", *(path.as_posix() for path in ordinary))
+    if manifests:
+        # Исключение только для созданных системой манифестов, не для каталогов.
+        _git(config, "add", "--force", "--", *(path.as_posix() for path in manifests))
 
 
 def _git(

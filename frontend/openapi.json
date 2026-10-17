@@ -6347,6 +6347,11 @@
             "type": "integer",
             "title": "Revision"
           },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
           "usages": {
             "items": {
               "$ref": "#/components/schemas/AnnotationVersionUsage"
@@ -6360,7 +6365,8 @@
         "required": [
           "id",
           "name",
-          "revision"
+          "revision",
+          "updated_at"
         ],
         "title": "AnnotationVersionInfo"
       },

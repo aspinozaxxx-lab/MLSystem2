@@ -72,7 +72,7 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 ## Публичные контракты
 
 `AnnotationVersionUsage`: `dataset_key`, `dataset_name`, `indirect` (использование через управляемый набор).
-`AnnotationVersionInfo`: `id`, `name`, `revision`, `usages`. `AnnotationVersionCatalog`: `image_id`, `revision`,
+`AnnotationVersionInfo`: `id`, `name`, `revision`, `updated_at`, `usages`. `AnnotationVersionCatalog`: `image_id`, `revision`,
 `selected_id`, `versions`. `AnnotationVersionDetail`: `catalog`, `version_id`, `geojson`.
 `AnnotationVersionEdit`: `id`, `name`, необязательный `source_id`, `geojson`.
 `AnnotationVersionDraft`: `catalog_revision`, `selected_id`, `edits`, `replacements` (удаляемый UUID → заменяющий UUID).
@@ -84,6 +84,10 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 `AnnotationVersionDetail` после проверки класса и снимка. Изменения используют существующие save/discard/publish,
 без отдельных немедленных мутаций. Каталог вариантов, связей и журнал завершения публикации хранятся в UI-БД;
 Git содержит собранные датасеты. Импорт прежних файлов не объединяет одинаковые разметки разных датасетов.
+`AnnotationVersionInfo.updated_at` — дата последнего опубликованного изменения версии в UTC;
+для прежних файлов это дата импорта в каталог. Переключение версии и черновик её не меняют.
+Манифест `.mlsystem2-annotation-selections.json` явно добавляется в Git вопреки ignore-правилам;
+исключение не распространяется на посторонние файлы или каталоги.
 При публикации общей версии обновляются все активные использования; удаление требует замены, конфликт — 409.
 Подробные правила сущностей, независимого копирования и восстановления — в `docs/architecture.md`.
 

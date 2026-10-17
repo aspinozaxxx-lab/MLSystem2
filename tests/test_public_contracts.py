@@ -4,6 +4,15 @@ import importlib
 from pathlib import Path
 
 
+def test_annotation_version_exposes_last_published_change_date():
+    from datetime import datetime
+    from mlsystem2.training_ui_api.contracts import AnnotationVersionInfo
+
+    field = AnnotationVersionInfo.model_fields["updated_at"]
+    assert field.annotation is datetime
+    assert field.is_required()
+
+
 EXPECTED_API = {
     "settings.api": ["load_settings", "get_settings", "get_settings_path"],
     "dataset_preparing.api": [

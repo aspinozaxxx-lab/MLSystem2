@@ -84,6 +84,7 @@ class AnnotationVersionInfo(BaseModel):
     id: UUID
     name: str
     revision: int
+    updated_at: datetime
     usages: list[AnnotationVersionUsage] = Field(default_factory=list)
 
 

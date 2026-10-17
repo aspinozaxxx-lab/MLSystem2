@@ -2260,6 +2260,11 @@ export interface components {
             name: string;
             /** Revision */
             revision: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
             /** Usages */
             usages?: components["schemas"]["AnnotationVersionUsage"][];
         };

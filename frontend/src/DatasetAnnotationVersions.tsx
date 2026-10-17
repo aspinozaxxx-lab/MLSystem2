@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { cloneSnapshot, snapshotsEqual, type DraftSnapshot, type JsonObject } from "./utils/datasetEditor";
+import { formatDateTime } from "./utils/format";
 import "./styles/annotation-versions.css";
 
 export function retainVersionEdit(snapshot: DraftSnapshot, catalog: AnnotationVersionCatalog, baseline?: JsonObject): AnnotationVersionDraft {
@@ -41,7 +42,7 @@ export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson,
   const [error, setError] = useState("");
   const state = snapshot.annotationVersions;
   if (!state) return null;
-  const entries = new Map(catalog.versions.map((version) => [version.id, version]));
+  const entries = new Map<string, Omit<AnnotationVersionCatalog["versions"][number], "updated_at"> & { updated_at?: string }>(catalog.versions.map((version) => [version.id, version]));
   for (const edit of state.edits || []) {
     if (!entries.has(edit.id)) entries.set(edit.id, { id: edit.id, name: edit.name, revision: 1, usages: [] });
   }
@@ -105,7 +106,7 @@ export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson,
     <label>Версия разметки · {versions.length}
       <select aria-label="Версия разметки снимка" value={state.selected_id} disabled={unavailable}
         onChange={(event) => void select(event.target.value)}>
-        {versions.map((version) => <option key={version.id} value={version.id}>{version.name}</option>)}
+        {versions.map((version) => <option key={version.id} value={version.id}>{version.name} · {version.updated_at ? formatDateTime(version.updated_at) : "ещё не опубликована"}</option>)}
       </select>
     </label>
     <button type="button" className="secondary" disabled={unavailable} onClick={() => {
@@ -116,6 +117,9 @@ export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson,
       onClick={() => { setReplacement(versions.find((version) => version.id !== state.selected_id)?.id || ""); setDialog("delete"); }}>
       Удалить версию
     </button>
+    <small className="annotation-version-usage" title="Дата сохранения опубликованной версии в Гровике. Для прежних разметок — дата первого импорта в каталог версий; это не дата исходного создания файла.">
+      {selected?.updated_at ? <>Последнее изменение версии: <time dateTime={selected.updated_at}>{formatDateTime(selected.updated_at)}</time>. Черновые правки учитываются после публикации.</> : "Новая версия ещё не опубликована."}
+    </small>
     <small className="annotation-version-usage">
       {usages.length ? <>Используется: {usages.map((usage, index) => <span key={usage.dataset_key}>
         {index ? ", " : ""}<a href={`#/dataset-editor/${encodeURIComponent(usage.dataset_key)}`}>{usage.dataset_name}</a>{usage.indirect ? " (через источник)" : ""}
@@ -139,7 +143,7 @@ export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson,
             <ul>{usages.map((usage) => <li key={usage.dataset_key}>{usage.dataset_name}{usage.indirect ? " — через исходный датасет" : ""}</li>)}</ul>
             {!usages.length ? <p>Опубликованных использований нет.</p> : null}
             <label>Заменить на<select value={replacement} onChange={(event) => setReplacement(event.target.value)}>
-              {versions.filter((version) => version.id !== state.selected_id).map((version) => <option key={version.id} value={version.id}>{version.name}</option>)}
+              {versions.filter((version) => version.id !== state.selected_id).map((version) => <option key={version.id} value={version.id}>{version.name} · {version.updated_at ? formatDateTime(version.updated_at) : "ещё не опубликована"}</option>)}
             </select></label>
             <p>Сохранённые снимки данных прежних обучений и их результаты остаются прежними.</p>
           </>}

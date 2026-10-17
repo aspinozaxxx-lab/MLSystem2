@@ -17,7 +17,18 @@ from test_training_ui_dataset_editor import editor_environment as _editor_enviro
 
 @pytest.fixture
 def editor_environment(tmp_path, monkeypatch):
-    yield from _editor_environment.__wrapped__(tmp_path, monkeypatch)
+    environment = _editor_environment.__wrapped__(tmp_path, monkeypatch)
+    env = next(environment)
+    # Как в рабочем MLMarkup: неизвестные служебные файлы запрещены.
+    (env.editor_root / ".gitignore").write_text(
+        "*\n!*/\n!*.geojson\n!*.txt\n!.mlsystem2-dataset.json\n!.gitignore\n", encoding="utf-8")
+    _git(env.editor_root, "add", ".gitignore")
+    _git(env.editor_root, "commit", "-m", "Ограничить публикуемые типы файлов")
+    _git(env.editor_root, "push", "origin", "HEAD:main")
+    try:
+        yield env
+    finally:
+        environment.close()
 
 
 def _base(key):
@@ -177,6 +188,56 @@ def test_delete_shared_version_replaces_every_usage_and_preserves_other_versions
         assert current["annotation_versions"]["selected_id"] == replacement
         assert [version["id"] for version in current["annotation_versions"]["versions"]] == [replacement]
     assert env.client.get(f"{_base(env.dataset_key)}/scenes/{detail['scene']['annotation_name']}/versions/{old_id}").status_code == 400
+
+
+def test_delete_independent_version_before_first_publication_stages_only_required_files(editor_environment):
+    env = editor_environment
+    second_key = _copy(env)
+    first, second = _scene(env), _scene(env, second_key)
+    keep = first["annotation_versions"]["selected_id"]
+    removed = second["annotation_versions"]["selected_id"]
+    private_path = env.editor_root / "Реки" / "Второй набор" / ".private-settings"
+    private_path.write_text("Не публиковать посторонние файлы", encoding="utf-8")
+    state = _state(first, keep)
+    state["replacements"] = {removed: keep}
+    assert _save(env, first, state).status_code == 200
+    _publish(env)
+    for key in (env.dataset_key, second_key):
+        current = _scene(env, key)
+        assert current["annotation_versions"]["selected_id"] == keep
+        assert len(current["annotation_versions"]["versions"]) == 1
+    tracked = _git(env.editor_root, "ls-files", "--", "*.mlsystem2-annotation-selections.json").stdout
+    assert tracked.count(".mlsystem2-annotation-selections.json") == 1
+    manifest = json.loads((private_path.parent / ".mlsystem2-annotation-selections.json").read_text(encoding="utf-8"))
+    assert manifest["annotations"][first["scene"]["annotation_name"]]["version_id"] == keep
+    assert not _git(env.editor_root, "ls-files", "--", "*.private-settings").stdout
+    assert private_path.is_file()
+
+
+def test_version_updated_at_changes_on_publication_but_not_on_selection_or_draft(editor_environment):
+    env = editor_environment
+    second_key = _copy(env)
+    first, second = _scene(env), _scene(env, second_key)
+    version_id = first["annotation_versions"]["selected_id"]
+    old_time = datetime(2000, 1, 2, 3, 4, tzinfo=timezone.utc)
+    with create_session_factory(get_config())() as session:
+        session.get(AnnotationVersionRow, uuid.UUID(version_id)).updated_at = old_time
+        session.commit()
+
+    def changed_at():
+        version = next(item for item in _scene(env)["annotation_versions"]["versions"] if item["id"] == version_id)
+        return datetime.fromisoformat(version["updated_at"].replace("Z", "+00:00"))
+
+    assert changed_at() == old_time
+    assert _save(env, second, _state(second, version_id), first["geojson"], second_key).status_code == 200
+    _publish(env, second_key)
+    assert changed_at() == old_time
+    current = _scene(env)
+    empty = {**current["geojson"], "features": []}
+    assert _save(env, current, _state(current), empty).status_code == 200
+    assert changed_at() == old_time
+    _publish(env)
+    assert changed_at() > old_time
 
 
 def test_shared_concurrent_draft_becomes_stale_and_cannot_overwrite_new_version(editor_environment):
