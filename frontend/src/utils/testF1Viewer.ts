@@ -23,9 +23,10 @@ export function comparisonLayerStyle(layer: string, reference: boolean, predicte
   const color = TEST_F1_LAYERS[name].color;
   if (name === "reference" || name === "predicted") {
     if (!(name === "reference" ? reference : predicted)) return null;
-    return { color, fill: reference && predicted ? "transparent" : `${color}b3`, width: 2 };
+    return { color, fill: reference && predicted ? "transparent" : `${color}b3`, width: 2,
+      zIndex: name === "predicted" ? 2 : 1 };
   }
-  return reference && predicted ? { color, fill: `${color}cc`, width: 1 } : null;
+  return reference && predicted ? { color, fill: `${color}cc`, width: 1, zIndex: 0 } : null;
 }
 
 export function sceneF1Score(scene: TestF1SceneInfo, metric: "pixel" | "objects", classId: number | null): TestF1ScoreInfo {

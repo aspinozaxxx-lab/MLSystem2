@@ -136,8 +136,15 @@ def test_f1_layers(
     """Точные TP/FP/FN в исходной сетке, без объединения разных тестовых TIFF."""
     with np.load(mask_path, allow_pickle=False) as masks:
         reference, predicted = masks["reference"], masks["predicted"]
+        prefix = f"objects_{class_id if class_id is not None else 0}"
+        instances = {
+            layer: masks[f"{prefix}_{layer}"] for layer in ("reference", "predicted")
+            if f"{prefix}_{layer}" in masks
+        } if metric != "objects" else {}
     if metric == "objects":
         true_instances, predicted_instances, pairs, _ = _object_snapshot(mask_path, mtime_ns, size, class_id, source, schema)
+        instances.update(reference=true_instances, predicted=predicted_instances,
+                         fp=predicted_instances, fn=true_instances)
     truth = reference == class_id if class_id is not None else reference > 0
     prediction = predicted == class_id if class_id is not None else predicted > 0
     masks = {
@@ -155,9 +162,18 @@ def test_f1_layers(
     # Без общей среды каждый полигон повторно создаёт GDAL/AWS-сессию.
     with rasterio.Env():
         for layer, mask in masks.items():
-            for geometry, _ in shapes(mask.astype(np.uint8), mask=mask, transform=transform):
+            # Подсветка пиксельных ошибок остаётся семантической; контуры объектов
+            # берём из ID того же расчёта, не склеивая соприкасающиеся участки.
+            labels = instances.get(layer)
+            values = mask.astype(np.uint8) if labels is None else labels.astype(np.int32, copy=False)
+            for geometry, value in shapes(values, mask=mask, transform=transform):
+                if value <= 0:
+                    continue
+                properties = {"test_f1_layer": layer}
+                if labels is not None:
+                    properties["instance_id"] = int(value)
                 features.append({
-                    "type": "Feature", "properties": {"test_f1_layer": layer},
+                    "type": "Feature", "properties": properties,
                     "geometry": transform_geom(crs, "EPSG:3857", geometry),
                 })
     return {"type": "FeatureCollection", "features": features}

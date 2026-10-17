@@ -35,7 +35,7 @@ type Comparison = {
   sidebar: ReactNode; summary: ReactNode; title?: string; subtitle?: string; controls?: ReactNode;
   legend?: ReactNode; hint?: string; layerControls?: ReactNode;
   metric?: "pixel" | "objects";
-  featureStyle?: (properties: PseudoProperties) => { color: string; fill: string; width: number } | null;
+  featureStyle?: (properties: PseudoProperties) => { color: string; fill: string; width: number; zIndex?: number } | null;
   onViewport?: (viewport: PseudoMarkupComparisonViewport) => void;
 };
 
@@ -200,10 +200,11 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
           const appearance = customStyle.current ? customStyle.current(feature.getProperties())
             : comparisonLayerStyle(String(feature.get("test_f1_layer")), comparisonLayers.current.reference, comparisonLayers.current.predicted);
           if (!appearance) return undefined;
-          const key = `${appearance.color}:${appearance.fill}:${appearance.width}`;
+          const key = `${appearance.color}:${appearance.fill}:${appearance.width}:${appearance.zIndex ?? 0}`;
           let style = styles.get(key);
           if (!style) {
-            style = new Style({ stroke: new Stroke({ color: appearance.color, width: appearance.width }),
+            style = new Style({ zIndex: appearance.zIndex ?? 0,
+              stroke: new Stroke({ color: appearance.color, width: appearance.width }),
               fill: new Fill({ color: appearance.fill }) });
             styles.set(key, style);
           }

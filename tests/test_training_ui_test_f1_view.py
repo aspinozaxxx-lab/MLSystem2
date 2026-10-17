@@ -90,6 +90,61 @@ def test_legacy_object_layers_reuse_saved_inference(tmp_path: Path):
     assert {item["properties"]["test_f1_layer"] for item in layers["features"]} == {"tp", "reference", "predicted"}
 
 
+@pytest.mark.parametrize("metric", ["pixel", "objects"])
+@pytest.mark.parametrize("target", [None, 7])
+def test_touching_parcels_keep_saved_instance_contours_without_rescoring(tmp_path, monkeypatch, metric, target):
+    from mlsystem2.training_ui_api import _test_f1_artifacts as artifacts
+
+    image_path = tmp_path / "участки.tif"
+    transform = from_origin(100, 200, 1, 1)
+    with rasterio.open(image_path, "w", driver="GTiff", width=10, height=8, count=3,
+                       dtype="uint8", crs="EPSG:3857", transform=transform) as image:
+        image.write(np.ones((3, 8, 10), np.uint8))
+    truth = np.zeros((8, 10), np.int32)
+    truth[1:7, 1:5], truth[1:7, 5:9] = 4, 95
+    truth[3:5, 2:4] = 0  # Отверстие остаётся частью первого участка.
+    prediction = np.zeros_like(truth)
+    prediction[truth == 4], prediction[truth == 95] = 80, 2_000_000_017
+    semantic = (truth > 0).astype(np.uint8)
+    scene = save_test_f1_scene(tmp_path / "view", {},
+        {"index": 1, "image_path": str(image_path), "target_class_id": target},
+        semantic, semantic * (target or 1), {},
+        object_snapshots={target: (truth, prediction, [(4, 80), (95, 2_000_000_017)])})
+    path = tmp_path / "view" / "tile-1.npz"
+    original = path.read_bytes()
+    stat = path.stat()
+    monkeypatch.setattr(artifacts, "compute_object_f1", lambda *_: pytest.fail("Просмотр не должен пересчитывать метрику"))
+    layers = _layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(scene["transform"]), scene["crs"], target, metric)
+    for layer, expected in {"reference": truth, "predicted": prediction}.items():
+        features = [item for item in layers["features"] if item["properties"]["test_f1_layer"] == layer]
+        assert len(features) == 2, "Соседние участки должны остаться отдельными полигонами"
+        assert {item["properties"]["instance_id"] for item in features} == set(np.unique(expected)) - {0}
+        restored = rasterize([(item["geometry"], item["properties"]["instance_id"]) for item in features],
+                             out_shape=truth.shape, transform=transform, dtype="int32")
+        np.testing.assert_array_equal(restored, expected)
+    tp = [item for item in layers["features"] if item["properties"]["test_f1_layer"] == "tp"]
+    np.testing.assert_array_equal(rasterize([(item["geometry"], 1) for item in tp],
+                                          out_shape=truth.shape, transform=transform), semantic)
+    assert not any(item["properties"]["test_f1_layer"] in {"fp", "fn"} for item in layers["features"])
+    assert path.read_bytes() == original
+
+
+def test_unmatched_touching_objects_keep_separate_false_positive_and_false_negative_contours(tmp_path):
+    truth = np.zeros((8, 20), np.int32)
+    truth[1:7, 1:4], truth[1:7, 4:7] = 4, 95
+    prediction = np.zeros_like(truth)
+    prediction[1:7, 11:14], prediction[1:7, 14:17] = 80, 1000
+    path = tmp_path / "ошибки.npz"
+    np.savez_compressed(path, reference=(truth > 0).astype(np.uint8), predicted=(prediction > 0).astype(np.uint8),
+                        objects_0_reference=truth, objects_0_predicted=prediction, objects_0_matches=np.empty((0, 2), np.int32))
+    stat = path.stat()
+    layers = _layers(str(path), stat.st_mtime_ns, stat.st_size, tuple(from_origin(0, 8, 1, 1))[:6], "EPSG:3857", None, "objects")
+    for layer, identifiers in {"fn": {4, 95}, "fp": {80, 1000}}.items():
+        features = [item for item in layers["features"] if item["properties"]["test_f1_layer"] == layer]
+        assert len(features) == 2
+        assert {item["properties"]["instance_id"] for item in features} == identifiers
+
+
 def test_view_requires_snapshots_for_every_class_after_legacy_partial_update(tmp_path: Path):
     job_id, result_id = uuid.uuid4(), uuid.uuid4()
     root = tmp_path / "test-f1" / str(job_id)

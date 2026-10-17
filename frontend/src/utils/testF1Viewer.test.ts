@@ -18,6 +18,20 @@ describe("Слои сравнения тестовой разметки", () => 
   it("сохраняет разные цвета совпадения, лишнего и пропуска", () => {
     expect(new Set(["tp", "fp", "fn"].map((name) => comparisonLayerStyle(name, true, true)?.color)).size).toBe(3);
   });
+  it("рисует контуры отдельных объектов выше заливки ошибок в обоих режимах показа слоёв", () => {
+    for (const name of ["reference", "predicted"]) {
+      const appearance = comparisonLayerStyle(name, true, true)!;
+      expect(appearance.fill).toBe("transparent");
+      expect(appearance.width).toBeGreaterThanOrEqual(2);
+      for (const mask of ["tp", "fp", "fn"]) {
+        expect(appearance.zIndex).toBeGreaterThan(comparisonLayerStyle(mask, true, true)!.zIndex);
+      }
+      const alone = comparisonLayerStyle(name, name === "reference", name === "predicted")!;
+      expect(alone.fill).not.toBe("transparent");
+      expect(alone.width).toBe(appearance.width);
+      expect(alone.zIndex).toBe(appearance.zIndex);
+    }
+  });
   it("объектовый режим подписывает найденные и пропущенные объекты", () => {
     expect(comparisonLayerLabel("tp", "objects")).toBe("TP · Найденные объекты");
     expect(comparisonLayerLabel("fn", "objects")).toBe("FN · Пропущенные объекты");
