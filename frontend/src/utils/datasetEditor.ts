@@ -290,13 +290,28 @@ export function deleteEditableVertices(
   const sourcePolygons = geometryType === "Polygon"
     ? [(geometry as Polygon).getCoordinates()]
     : (geometry as MultiPolygon).getCoordinates();
-  const coordinates = sourcePolygons.map((polygon, polygonIndex) =>
-    polygon.flatMap((ring, ringIndex) => {
+  const removableIndexes = (polygonIndex: number, ringIndex: number, vertexCount: number) => {
+    const selected = selectedIndexes.get(`${polygonIndex}:${ringIndex}`);
+    return new Set([...(selected || [])].filter((index) => index >= 0 && index < vertexCount));
+  };
+  const removedParts = new Set<number>();
+  if (geometryType === "MultiPolygon") {
+    sourcePolygons.forEach((polygon, polygonIndex) => {
+      const vertexCount = ringWithoutClosingVertex(polygon[0] || []).length;
+      const removable = removableIndexes(polygonIndex, 0, vertexCount);
+      if (removable.size && vertexCount - removable.size < 3) removedParts.add(polygonIndex);
+    });
+    // Выбор вершин не должен случайно удалить весь объект или оставить произвольную его часть.
+    if (removedParts.size === sourcePolygons.length) removedParts.clear();
+  }
+  const coordinates = sourcePolygons.flatMap((polygon, polygonIndex) => {
+    if (removedParts.has(polygonIndex)) {
+      removedCount += polygon.reduce((count, ring) => count + ringWithoutClosingVertex(ring).length, 0);
+      return [];
+    }
+    return [polygon.flatMap((ring, ringIndex) => {
       const openRing = ringWithoutClosingVertex(ring);
-      const selected = selectedIndexes.get(`${polygonIndex}:${ringIndex}`);
-      const removable = selected
-        ? new Set([...selected].filter((index) => index >= 0 && index < openRing.length))
-        : new Set<number>();
+      const removable = removableIndexes(polygonIndex, ringIndex, openRing.length);
       if (!removable.size) return [cloneRing(ring)];
       if (openRing.length - removable.size < 3) {
         if (ringIndex > 0) {
@@ -311,8 +326,8 @@ export function deleteEditableVertices(
         .map((coordinate) => [...coordinate]);
       removedCount += removable.size;
       return [[...remaining, [...remaining[0]]]];
-    }),
-  );
+    })];
+  });
 
   const result = geometry.clone();
   if (geometryType === "Polygon") {

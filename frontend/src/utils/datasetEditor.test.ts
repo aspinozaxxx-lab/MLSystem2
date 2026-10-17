@@ -230,6 +230,93 @@ describe("вырезы в полигонах общего редактора", (
     expect((result.geometry as Polygon).getCoordinates()).toEqual([rectangle(0, 0, 10, 10)]);
   });
 
+  it.each([rectangle(2, 2, 4, 4), rectangle(12, 2, 14, 4), rectangle(9, 2, 11, 4)]
+    .map((hole) => ({ hole })))("удаляет внутреннее кольцо независимо от его положения: %j", ({ hole }) => {
+    const polygon = new Polygon([rectangle(0, 0, 10, 10), hole]);
+    const selected = editableVertices(polygon).filter((vertex) => vertex.ringIndex === 1);
+
+    const result = deleteEditableVertices(polygon, selected);
+
+    expect(result.removedCount).toBe(4);
+    expect(result.blockedRingCount).toBe(0);
+    expect((result.geometry as Polygon).getCoordinates()).toEqual([rectangle(0, 0, 10, 10)]);
+  });
+
+  it.each([2, 4])("удаляет вынесенное отверстие после преобразования в отдельную часть: %i", (count) => {
+    // Сервер восстанавливает такой невалидный Polygon как MultiPolygon из двух частей.
+    const polygon = new MultiPolygon([
+      [rectangle(12, 2, 14, 4)],
+      [rectangle(0, 0, 10, 10), rectangle(2, 2, 4, 4)],
+    ]);
+    const selected = editableVerticesInExtent(polygon, [11, 1, 15, 5]).slice(0, count);
+
+    const result = deleteEditableVertices(polygon, selected);
+
+    expect(result.removedCount).toBe(4);
+    expect(result.blockedRingCount).toBe(0);
+    expect(result.geometry).toBeInstanceOf(MultiPolygon);
+    expect((result.geometry as MultiPolygon).getCoordinates()).toEqual([polygon.getCoordinates()[1]]);
+    expect(polygon.getCoordinates()).toHaveLength(2);
+  });
+
+  it("удаляет несколько частей с их отверстиями, сохраняя остальные части", () => {
+    const polygon = new MultiPolygon([
+      [rectangle(0, 0, 10, 10), rectangle(2, 2, 4, 4)],
+      [rectangle(20, 0, 30, 10), rectangle(22, 2, 24, 4)],
+      [rectangle(40, 0, 50, 10)],
+      [rectangle(60, 0, 70, 10)],
+    ]);
+    const selected = editableVertices(polygon).filter((vertex) =>
+      (vertex.polygonIndex === 0 || vertex.polygonIndex === 2) && vertex.ringIndex === 0,
+    );
+
+    const result = deleteEditableVertices(polygon, selected);
+
+    expect(result.removedCount).toBe(12);
+    expect(result.blockedRingCount).toBe(0);
+    expect((result.geometry as MultiPolygon).getCoordinates()).toEqual([
+      polygon.getCoordinates()[1], polygon.getCoordinates()[3],
+    ]);
+  });
+
+  it.each([1, 2])("не удаляет весь объект выбором вершин внешних контуров: %i", (partCount) => {
+    const polygon = new MultiPolygon([
+      [rectangle(0, 0, 10, 10)], [rectangle(20, 0, 30, 10)],
+    ].slice(0, partCount));
+
+    const result = deleteEditableVertices(polygon, editableVertices(polygon));
+
+    expect(result.removedCount).toBe(0);
+    expect(result.blockedRingCount).toBe(partCount);
+    expect((result.geometry as MultiPolygon).getCoordinates()).toEqual(polygon.getCoordinates());
+  });
+
+  it("сохраняет удаление вынесенной части и отменяет его вместе с восстановлением свойств", () => {
+    const polygon = new MultiPolygon([
+      [rectangle(12, 2, 14, 4)], [rectangle(0, 0, 10, 10)],
+    ]);
+    const feature = new Feature({ geometry: polygon, _mlsystem2_role: "positive", имя: "Река" });
+    feature.setId("река-1");
+    const format = new GeoJSON();
+    const options = { dataProjection: "EPSG:3857", featureProjection: "EPSG:3857" };
+    const before: DraftSnapshot = {
+      geojson: { ...format.writeFeaturesObject([feature], options) }, newFeatureIndexes: [],
+    };
+    const result = deleteEditableVertices(polygon, editableVerticesInExtent(polygon, [11, 1, 15, 5]));
+    feature.setGeometry(result.geometry as MultiPolygon);
+    const after: DraftSnapshot = {
+      geojson: { ...format.writeFeaturesObject([feature], options) }, newFeatureIndexes: [],
+    };
+    const saved = JSON.parse(JSON.stringify(after)) as DraftSnapshot;
+    const [loaded] = format.readFeatures(saved.geojson, options);
+    expect((loaded.getGeometry() as MultiPolygon).getCoordinates()).toEqual([polygon.getCoordinates()[1]]);
+    expect(loaded.getId()).toBe("река-1");
+    expect(loaded.get("имя")).toBe("Река");
+    expect(loaded.get("_mlsystem2_role")).toBe("positive");
+    const undone = undoDraft({ baseline: before, current: saved, history: appendHistory([], before) });
+    expect(undone?.current).toEqual(before);
+  });
+
   it("удаляет несколько отверстий без сдвига индексов остальных колец и частей", () => {
     const polygon = new MultiPolygon([
       [

@@ -275,6 +275,53 @@ def test_dataset_editor_preserves_polygon_holes_in_draft_and_publication(
         assert shape(feature["geometry"]).equals(shape(by_id[feature["id"]]["geometry"]))
 
 
+def test_dataset_editor_removes_detached_hole_after_topology_repair(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    """Вынесенный вырез после автосохранения удаляется как часть, без потери родителя."""
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    scene = env.client.get(base + "/scenes").json()["scenes"][0]
+    name = quote(scene["annotation_name"], safe="")
+    original = env.client.get(base + f"/scenes/{name}").json()["geojson"]
+    updated = deepcopy(original)
+    parent = shape(updated["features"][0]["geometry"])
+    detached = box(3.5, 1, 4.5, 2)
+    feature_id = updated["features"][0]["id"]
+    updated["features"][0]["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [list(parent.exterior.coords), list(detached.exterior.coords)],
+    }
+    saved = env.client.put(base + f"/drafts/{name}", json={
+        "base_revision": scene["revision"], "geojson": updated,
+    })
+    assert saved.status_code == 200, saved.text
+    repaired = saved.json()["geojson"]
+    target = next(feature for feature in repaired["features"] if feature["id"] == feature_id)
+    geometry = shape(target["geometry"])
+    assert geometry.geom_type == "MultiPolygon"
+    assert len(geometry.geoms) == 2
+    assert any(part.equals(detached) for part in geometry.geoms)
+    # Результат удаления выбранной части во frontend остаётся MultiPolygon с одним родителем.
+    target["geometry"]["coordinates"] = [
+        coordinates for coordinates in target["geometry"]["coordinates"]
+        if not shape({"type": "Polygon", "coordinates": coordinates}).equals(detached)
+    ]
+    saved_again = env.client.put(base + f"/drafts/{name}", json={
+        "base_revision": scene["revision"], "geojson": repaired,
+    })
+    assert saved_again.status_code == 200, saved_again.text
+    published = env.client.post(base + "/drafts/publish")
+    assert published.status_code == 200, published.text
+    final = env.client.get(base + f"/scenes/{name}").json()["geojson"]
+    by_id = {feature["id"]: feature for feature in final["features"]}
+    assert len(by_id) == len(original["features"])
+    for before in original["features"]:
+        actual = by_id[before["id"]]
+        assert actual["properties"] == before["properties"]
+        assert shape(actual["geometry"]).equals(shape(before["geometry"]))
+
+
 def test_dataset_editor_downloads_published_markup_without_rasters_or_drafts(
     editor_environment: _EditorEnvironment,
 ) -> None:
