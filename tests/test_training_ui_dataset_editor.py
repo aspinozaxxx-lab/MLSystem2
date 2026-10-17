@@ -236,6 +236,45 @@ def test_dataset_editor_requires_auth_and_lists_counts_and_raster_ranges(
     assert invalid.status_code == 416
 
 
+def test_dataset_editor_preserves_polygon_holes_in_draft_and_publication(
+    editor_environment: _EditorEnvironment,
+) -> None:
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    scene = env.client.get(base + "/scenes").json()["scenes"][0]
+    name = quote(scene["annotation_name"], safe="")
+    original = env.client.get(base + f"/scenes/{name}").json()["geojson"]
+    updated = deepcopy(original)
+    for feature in updated["features"]:
+        geometry = shape(feature["geometry"])
+        left, bottom, right, top = geometry.bounds
+        island = box(left + 0.5, bottom + 0.5, right - 0.5, top - 0.5)
+        feature["geometry"] = mapping(geometry.difference(island))
+
+    saved = env.client.put(base + f"/drafts/{name}", json={
+        "base_revision": scene["revision"], "geojson": updated,
+    })
+    assert saved.status_code == 200, saved.text
+    reopened = env.client.get(base + f"/scenes/{name}").json()
+    assert reopened["draft"]["geojson"] == saved.json()["geojson"]
+    assert reopened["geojson"] == original
+    published = env.client.post(base + "/drafts/publish")
+    assert published.status_code == 200, published.text
+    final = env.client.get(base + f"/scenes/{name}").json()["geojson"]
+    by_id = {feature["id"]: feature for feature in final["features"]}
+    assert len(by_id) == len(original["features"])
+    for before, expected in zip(original["features"], updated["features"], strict=True):
+        actual = by_id[before["id"]]
+        assert actual["properties"] == before["properties"]
+        assert shape(actual["geometry"]).equals(shape(expected["geometry"]))
+        assert len(shape(actual["geometry"]).interiors) == 1
+    stored = json.loads((env.editor_dataset / scene["annotation_name"]).read_text(encoding="utf-8"))
+    assert {feature["id"] for feature in stored["features"]} == set(by_id)
+    for feature in stored["features"]:
+        assert feature["properties"] == by_id[feature["id"]]["properties"]
+        assert shape(feature["geometry"]).equals(shape(by_id[feature["id"]]["geometry"]))
+
+
 def test_dataset_editor_downloads_published_markup_without_rasters_or_drafts(
     editor_environment: _EditorEnvironment,
 ) -> None:

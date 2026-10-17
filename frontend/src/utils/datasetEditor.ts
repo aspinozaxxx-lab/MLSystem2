@@ -1,7 +1,7 @@
 import { containsCoordinate, type Extent } from "ol/extent";
 import type Geometry from "ol/geom/Geometry";
-import type MultiPolygon from "ol/geom/MultiPolygon";
-import type Polygon from "ol/geom/Polygon";
+import MultiPolygon from "ol/geom/MultiPolygon";
+import Polygon from "ol/geom/Polygon";
 
 export type JsonObject = Record<string, unknown>;
 export type SortDirection = "ascending" | "descending";
@@ -61,6 +61,48 @@ export function selectedDeleteAction(
   if (selectedVertexCount > 0) return "vertices";
   if (selectedFeatureCount > 0) return "features";
   return null;
+}
+
+export function editorSnapTargets<T>(
+  visibleFeatures: T[],
+  selectedFeatures: readonly T[],
+  editingSelection: boolean,
+): T[] {
+  if (!editingSelection) return visibleFeatures;
+  const selected = new Set(selectedFeatures);
+  return visibleFeatures.filter((feature) => !selected.has(feature));
+}
+
+export function updateEditorVertexSelection<T>(
+  selectionRef: { current: T[] },
+  selections: T[],
+  layer: { changed: () => void } | null,
+): void {
+  selectionRef.current = selections;
+  // Подсветка меняет слой, а не feature: его change сбрасывает захват вершины в Modify.
+  layer?.changed();
+}
+
+export function createEditorGestureGuard() {
+  const pointers = new Set<number>();
+  const clickGenerations = new WeakMap<object, number>();
+  let generation = 0;
+  return {
+    pointerDown(event: { pointerId: number }): void {
+      if (!pointers.size) generation += 1;
+      pointers.add(event.pointerId);
+    },
+    pointerUp(event: { pointerId: number }): void {
+      pointers.delete(event.pointerId);
+    },
+    registerClick(event: { originalEvent: object }): void {
+      clickGenerations.set(event.originalEvent, generation);
+    },
+    allowsSelection(event: { type: string; originalEvent: object }): boolean {
+      return event.type === "singleclick" && !pointers.size &&
+        clickGenerations.get(event.originalEvent) === generation;
+    },
+  };
 }
 
 export type DraftSnapshot = {
@@ -301,6 +343,115 @@ function coordinatesEqual(left: number[], right: number[]): boolean {
 
 function cloneRing(ring: number[][]): number[][] {
   return ring.map((coordinate) => [...coordinate]);
+}
+
+export function polygonWithHole(
+  geometry: Geometry | null | undefined,
+  cutout: Geometry | null | undefined,
+): Polygon | MultiPolygon {
+  if (!(geometry instanceof Polygon || geometry instanceof MultiPolygon)) {
+    throw new Error("Выберите один полигон, в котором нужно сделать вырез.");
+  }
+  if (!(cutout instanceof Polygon) || cutout.getLinearRingCount() !== 1) {
+    throw new Error("Вырез должен быть одним замкнутым контуром.");
+  }
+  const ring = ringWithoutClosingVertex(cutout.getCoordinates()[0])
+    .filter((coordinate, index, coordinates) => index === 0 ||
+      !samePoint(coordinate, coordinates[index - 1]))
+    .map((coordinate) => [...coordinate]);
+  if (ring.length < 3 || ring.some((point) => point.length < 2 || !point.slice(0, 2).every(Number.isFinite))) {
+    throw new Error("Для выреза нужны хотя бы три разные вершины с корректными координатами.");
+  }
+  ring.push([...ring[0]]);
+  const epsilon = ring.reduce((scale, point) => Math.max(scale, Math.abs(point[0]), Math.abs(point[1])), 1)
+    * Number.EPSILON * 32;
+  if (!simpleRing(ring, epsilon) || Math.abs(ringArea(ring)) <= epsilon * epsilon) {
+    throw new Error("Контур выреза не должен пересекать сам себя или иметь нулевую площадь.");
+  }
+  const polygons = geometry instanceof Polygon
+    ? [geometry.getCoordinates()]
+    : geometry.getCoordinates();
+  const polygonIndex = polygons.findIndex((polygon) => {
+    const outer = new Polygon([polygon[0]]);
+    if (!outer.intersectsCoordinate(ring[0])) return false;
+    if (polygon.some((boundary) => ringsTouch(ring, boundary, epsilon))) return false;
+    return polygon.slice(1).every((hole) =>
+      !new Polygon([hole]).intersectsCoordinate(ring[0]) &&
+      !cutout.intersectsCoordinate(hole[0]),
+    );
+  });
+  if (polygonIndex < 0) {
+    throw new Error("Вырез должен целиком находиться внутри одной части выбранного полигона, не касаться его границ и существующих отверстий и не охватывать их.");
+  }
+  const outer = polygons[polygonIndex][0];
+  if (Math.sign(ringArea(outer)) === Math.sign(ringArea(ring))) ring.reverse();
+  // Дополнительные координаты не меняют плоскую геометрию; сохраняем размерность исходного объекта.
+  const stride = geometry.getStride();
+  const hole = ring.map((point) => Array.from({ length: stride }, (_, index) =>
+    index < 2 ? point[index] : point[index] ?? outer[0][index],
+  ));
+  polygons[polygonIndex].push(hole);
+  const result = geometry.clone();
+  if (result instanceof Polygon) result.setCoordinates(polygons[0], geometry.getLayout());
+  else result.setCoordinates(polygons, geometry.getLayout());
+  return result;
+}
+
+function samePoint(left: number[], right: number[]): boolean {
+  return left[0] === right[0] && left[1] === right[1];
+}
+
+function ringArea(ring: number[][]): number {
+  const [originX, originY] = ring[0];
+  let area = 0;
+  for (let index = 1; index < ring.length; index += 1) {
+    const [x1, y1] = ring[index - 1];
+    const [x2, y2] = ring[index];
+    area += (x1 - originX) * (y2 - originY) - (x2 - originX) * (y1 - originY);
+  }
+  return area / 2;
+}
+
+function turn(a: number[], b: number[], c: number[], epsilon: number): number {
+  const cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const tolerance = epsilon * (Math.abs(b[0] - a[0]) + Math.abs(b[1] - a[1]));
+  return Math.abs(cross) <= tolerance ? 0 : Math.sign(cross);
+}
+
+function segmentsTouch(a: number[], b: number[], c: number[], d: number[], epsilon: number): boolean {
+  if (Math.max(a[0], b[0]) + epsilon < Math.min(c[0], d[0]) ||
+    Math.max(c[0], d[0]) + epsilon < Math.min(a[0], b[0]) ||
+    Math.max(a[1], b[1]) + epsilon < Math.min(c[1], d[1]) ||
+    Math.max(c[1], d[1]) + epsilon < Math.min(a[1], b[1])) return false;
+  return turn(a, b, c, epsilon) * turn(a, b, d, epsilon) <= 0 &&
+    turn(c, d, a, epsilon) * turn(c, d, b, epsilon) <= 0;
+}
+
+function ringsTouch(left: number[][], right: number[][], epsilon: number): boolean {
+  for (let first = 1; first < left.length; first += 1) {
+    for (let second = 1; second < right.length; second += 1) {
+      if (segmentsTouch(left[first - 1], left[first], right[second - 1], right[second], epsilon)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function simpleRing(ring: number[][], epsilon: number): boolean {
+  const length = ring.length - 1;
+  for (let first = 0; first < length; first += 1) {
+    const a = ring[first];
+    const b = ring[first + 1];
+    const c = ring[(first + 2) % length];
+    if (turn(a, b, c, epsilon) === 0 &&
+      (a[0] - b[0]) * (c[0] - b[0]) + (a[1] - b[1]) * (c[1] - b[1]) > 0) return false;
+    for (let second = first + 2; second < length; second += 1) {
+      if (first === 0 && second === length - 1) continue;
+      if (segmentsTouch(a, b, ring[second], ring[second + 1], epsilon)) return false;
+    }
+  }
+  return true;
 }
 
 export function featureCounts(geojson: JsonObject): {

@@ -20,12 +20,14 @@ import {
   PencilLine,
   Plus,
   RefreshCw,
+  Scissors,
   Trash2,
   Undo2,
 } from "lucide-react";
 import Feature from "ol/Feature";
 import Collection from "ol/Collection";
 import { defaults as defaultControls } from "ol/control/defaults";
+import { noModifierKeys, primaryAction } from "ol/events/condition";
 import GeoJSON from "ol/format/GeoJSON";
 import type Geometry from "ol/geom/Geometry";
 import MultiPoint from "ol/geom/MultiPoint";
@@ -39,6 +41,7 @@ import Snap from "ol/interaction/Snap";
 import WebGLTileLayer, { type Style as WebGLTileStyle } from "ol/layer/WebGLTile";
 import VectorLayer from "ol/layer/Vector";
 import OLMap from "ol/Map";
+import type MapBrowserEvent from "ol/MapBrowserEvent";
 import GeoTIFF from "ol/source/GeoTIFF";
 import VectorSource from "ol/source/Vector";
 import { Circle as CircleStyle, Fill, Stroke, Style } from "ol/style";
@@ -55,12 +58,14 @@ import {
   appendHistory,
   BAND_CHANNELS,
   cloneSnapshot,
+  createEditorGestureGuard,
   deleteEditableVertices,
   datasetObjectTotals,
   draftChanged,
   editableVertexCoordinates,
   editableVertices,
   editableVerticesInExtent,
+  editorSnapTargets,
   extendRasterResolutions,
   featureClassCounts,
   featureCounts,
@@ -69,6 +74,7 @@ import {
   isDeleteShortcut,
   isUndoShortcut,
   preventMapMiddleButtonDefault,
+  polygonWithHole,
   RASTER_CONTRAST,
   sceneClassCounts,
   sceneCounts,
@@ -76,6 +82,7 @@ import {
   snapshotsEqual,
   sortEditorScenes,
   undoDraft,
+  updateEditorVertexSelection,
   type BandMode,
   type DraftSnapshot,
   type DraftState,
@@ -86,7 +93,7 @@ import {
 
 type Runner = <T>(operation: () => Promise<T>) => Promise<T | undefined>;
 type ObjectSelection = string;
-type EditMode = "view" | "select" | "draw" | "pseudo";
+type EditMode = "view" | "select" | "draw" | "hole" | "pseudo";
 
 const initialEditMode = (): EditMode => isCompactLayout() ? "view" : "select";
 type ClassDisplayState = {
@@ -299,6 +306,9 @@ export function DatasetEditorPage({
   const [drafts, setDrafts] = useState<DraftMap>({});
   const [role, setRole] = useState<ObjectSelection>("positive");
   const [editMode, setEditMode] = useState<EditMode>(initialEditMode);
+  const editModeRef = useRef(editMode);
+  editModeRef.current = editMode;
+  const [selectedFeatureCount, setSelectedFeatureCount] = useState(0);
   const compact = useCompactLayout();
   const [scenesExpanded, setScenesExpanded] = useState(false);
   const viewModeRef = useRef(editMode === "view");
@@ -1070,12 +1080,7 @@ export function DatasetEditorPage({
   }, []);
 
   const setSelectedVertices = useCallback((selections: VertexSelection[]) => {
-    const changedFeatures = new Set<Feature<Geometry>>([
-      ...selectedVerticesRef.current.map((selection) => selection.feature),
-      ...selections.map((selection) => selection.feature),
-    ]);
-    selectedVerticesRef.current = selections;
-    changedFeatures.forEach((feature) => feature.changed());
+    updateEditorVertexSelection(selectedVerticesRef, selections, vectorLayerRef.current);
     mapRef.current?.render();
   }, []);
 
@@ -1148,8 +1153,10 @@ export function DatasetEditorPage({
         ),
       ),
     });
+    const gesture = createEditorGestureGuard();
     const select = new Select({
       layers: [vectorLayer],
+      condition: gesture.allowsSelection,
       filter: (feature) => visibleMarkup(feature as Feature<Geometry>)
         && (feature.get(ROLE_PROPERTY) === "annotation_zone") === isZoneSelection(roleRef.current),
       style: (feature) => displayedClassStyles(
@@ -1213,19 +1220,25 @@ export function DatasetEditorPage({
     const syncSnapFeature = (feature: Feature<Geometry> | undefined) => {
       if (!feature) return;
       const included = snapFeatures.getArray().includes(feature);
-      const visible = vectorSource.hasFeature(feature) && visibleMarkup(feature);
+      const visible = vectorSource.hasFeature(feature) && visibleMarkup(feature)
+        && editorSnapTargets([feature], select.getFeatures().getArray(), editModeRef.current === "select").length > 0;
       if (visible && !included) snapFeatures.push(feature);
       if (!visible && included) snapFeatures.remove(feature);
     };
     vectorSource.on("addfeature", (event) => syncSnapFeature(event.feature));
     vectorSource.on("changefeature", (event) => syncSnapFeature(event.feature));
     vectorSource.on("removefeature", (event) => syncSnapFeature(event.feature));
-    const draw = new Draw({ source: vectorSource, type: "Polygon" });
+    // Эскиз выреза не попадает в разметку как отдельный объект.
+    const draw = new Draw({
+      type: "Polygon",
+      condition: (event) => noModifierKeys(event) && primaryAction(event) &&
+        (editModeRef.current !== "hole" || select.getFeatures().getLength() === 1),
+    });
     draw.setActive(false);
     const geometryBackups = new Map<Feature<Geometry>, Geometry>();
     let drawBefore: DraftSnapshot | null = null;
     let modifyBefore: DraftSnapshot | null = null;
-    let drawCommitTimer: number | null = null;
+    let holeTarget: Feature<Geometry> | null = null;
     let vertexSelectionTimer: number | null = null;
 
     const normalized = vectorSnapshot(
@@ -1262,12 +1275,13 @@ export function DatasetEditorPage({
       setSelectedVertices([]);
     };
 
-    const selectCurrentModifyVertexAfterInteractions = () => {
+    const selectCurrentModifyVertexAfterInteractions = (event: MapBrowserEvent) => {
+      if (!gesture.allowsSelection(event)) return;
       // Map вызывает свои singleclick-listeners до interactions; ждём обновления точки Modify.
       if (vertexSelectionTimer !== null) window.clearTimeout(vertexSelectionTimer);
       vertexSelectionTimer = window.setTimeout(() => {
         vertexSelectionTimer = null;
-        selectCurrentModifyVertex();
+        if (gesture.allowsSelection(event)) selectCurrentModifyVertex();
       }, 0);
     };
 
@@ -1293,6 +1307,11 @@ export function DatasetEditorPage({
       setSelectedVertices([]);
       syncRoleFromFeature(event.selected[0] as Feature<Geometry> | undefined);
     });
+    select.getFeatures().on("change:length", () => {
+      setSelectedFeatureCount(select.getFeatures().getLength());
+    });
+    select.getFeatures().on("add", (event) => syncSnapFeature(event.element as Feature<Geometry>));
+    select.getFeatures().on("remove", (event) => syncSnapFeature(event.element as Feature<Geometry>));
     pseudoSelect.on("select", (event) => {
       const selected = pseudoSelect.getFeatures();
       setSelectedPseudoCount(selected.getLength());
@@ -1324,30 +1343,43 @@ export function DatasetEditorPage({
     });
     draw.on("drawstart", () => {
       drawBefore = captureActiveSnapshot();
+      holeTarget = editModeRef.current === "hole"
+        ? select.getFeatures().item(0) as Feature<Geometry>
+        : null;
       setDrawingState(true);
     });
     draw.on("drawabort", () => {
       drawBefore = null;
+      holeTarget = null;
       setDrawingState(false);
     });
     draw.on("drawend", (event) => {
       setDrawingState(false);
+      const before = drawBefore;
+      const target = holeTarget;
+      drawBefore = null;
+      holeTarget = null;
+      if (editModeRef.current === "hole") {
+        if (!target || !before || !vectorSource.hasFeature(target)) return;
+        try {
+          const geometry = polygonWithHole(target.getGeometry(), event.feature.getGeometry());
+          target.setGeometry(geometry);
+          recordCurrentChange(before);
+          setEditMode("select");
+        } catch (error) {
+          window.alert(error instanceof Error ? error.message : "Не удалось сделать вырез в полигоне.");
+        }
+        return;
+      }
       if (event.feature.getId() === undefined) event.feature.setId(crypto.randomUUID());
       applyObjectSelection(event.feature, roleRef.current, selectedDataset);
       if (!isEditorFeatureWithinBounds(event.feature, rasterFootprintRef.current)) {
-        drawBefore = null;
-        window.setTimeout(() => vectorSource.removeFeature(event.feature), 0);
         window.alert("Полигон должен целиком находиться внутри снимка.");
         return;
       }
       newFeaturesRef.current.add(event.feature);
-      const before = drawBefore;
-      drawBefore = null;
-      if (before) {
-        drawCommitTimer = window.setTimeout(() => {
-          if (vectorSourceRef.current === vectorSource) recordCurrentChange(before);
-        }, 0);
-      }
+      vectorSource.addFeature(event.feature);
+      if (before) recordCurrentChange(before);
     });
     modify.on("modifystart", (event) => {
       modifyBefore = captureActiveSnapshot();
@@ -1384,6 +1416,11 @@ export function DatasetEditorPage({
     const preventMiddleButtonBrowserAction = (event: MouseEvent) => {
       preventMapMiddleButtonDefault(event);
     };
+    const viewport = map.getViewport();
+    const ownerDocument = map.getOwnerDocument();
+    viewport.addEventListener("pointerdown", gesture.pointerDown, true);
+    ownerDocument.addEventListener("pointerup", gesture.pointerUp, true);
+    ownerDocument.addEventListener("pointercancel", gesture.pointerUp, true);
     target.addEventListener("mousedown", preventMiddleButtonBrowserAction, true);
     target.addEventListener("auxclick", preventMiddleButtonBrowserAction, true);
     map.addInteraction(middleDragPan);
@@ -1393,6 +1430,7 @@ export function DatasetEditorPage({
     map.addInteraction(modify);
     map.addInteraction(draw);
     map.addInteraction(snap);
+    map.on("click", gesture.registerClick);
     map.on("singleclick", selectCurrentModifyVertexAfterInteractions);
     mapRef.current = map;
     pseudoSourceRef.current = pseudoSource;
@@ -1407,11 +1445,14 @@ export function DatasetEditorPage({
     drawRef.current = draw;
 
     return () => {
-      if (drawCommitTimer !== null) window.clearTimeout(drawCommitTimer);
       if (vertexSelectionTimer !== null) window.clearTimeout(vertexSelectionTimer);
       target.removeEventListener("mousedown", preventMiddleButtonBrowserAction, true);
       target.removeEventListener("auxclick", preventMiddleButtonBrowserAction, true);
       map.un("singleclick", selectCurrentModifyVertexAfterInteractions);
+      viewport.removeEventListener("pointerdown", gesture.pointerDown, true);
+      ownerDocument.removeEventListener("pointerup", gesture.pointerUp, true);
+      ownerDocument.removeEventListener("pointercancel", gesture.pointerUp, true);
+      map.un("click", gesture.registerClick);
       map.setTarget(undefined);
       mapRef.current = null;
       pseudoSourceRef.current = null;
@@ -1427,6 +1468,7 @@ export function DatasetEditorPage({
       drawRef.current = null;
       rasterFootprintRef.current = null;
       selectedVerticesRef.current = [];
+      setSelectedFeatureCount(0);
       newFeaturesRef.current = new WeakSet();
       setDrawingState(false);
     };
@@ -1459,9 +1501,13 @@ export function DatasetEditorPage({
     const snapFeatures = snapFeaturesRef.current;
     if (snapFeatures) {
       snapFeatures.clear();
-      snapFeatures.extend(vectorSourceRef.current?.getFeatures().filter((feature) => visible(feature)) || []);
+      snapFeatures.extend(editorSnapTargets(
+        vectorSourceRef.current?.getFeatures().filter((feature) => visible(feature)) || [],
+        selectRef.current?.getFeatures().getArray() || [],
+        editMode === "select",
+      ));
     }
-  }, [hiddenClasses, activeDraft?.current.geojson, objectTypeChoices, setSelectedVertices]);
+  }, [hiddenClasses, activeDraft?.current.geojson, editMode, objectTypeChoices, setSelectedVertices]);
 
   useEffect(() => {
     vectorLayerRef.current?.changed();
@@ -1489,8 +1535,12 @@ export function DatasetEditorPage({
   }, [detail, pseudoMarkup, pseudoVisible]);
 
   useEffect(() => {
+    drawRef.current?.abortDrawing();
+  }, [detail, editMode]);
+
+  useEffect(() => {
     const sceneDeleted = Boolean(activeDraft?.current.deleted);
-    const drawing = annotationsVisible && !sceneDeleted && editMode === "draw";
+    const drawing = annotationsVisible && !sceneDeleted && (editMode === "draw" || editMode === "hole");
     const selectingPseudo = pseudoVisible
       && pseudoMarkup?.status === "ready"
       && !sceneDeleted
@@ -1501,7 +1551,7 @@ export function DatasetEditorPage({
     modifyRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
     pseudoSelectRef.current?.setActive(selectingPseudo);
     vectorLayerRef.current?.setVisible(annotationsVisible && !sceneDeleted);
-    if (editMode !== "select" || !annotationsVisible || sceneDeleted) {
+    if ((editMode !== "select" && editMode !== "hole") || !annotationsVisible || sceneDeleted) {
       setSelectedVertices([]);
       selectRef.current?.getFeatures().clear();
     }
@@ -1518,6 +1568,10 @@ export function DatasetEditorPage({
     pseudoVisible,
     setSelectedVertices,
   ]);
+
+  useEffect(() => {
+    if (editMode === "hole" && selectedFeatureCount !== 1) setEditMode("select");
+  }, [editMode, selectedFeatureCount]);
 
   useEffect(() => {
     const effectiveMode = selectedDataset?.imagery_type === "kanopus" ? bandMode : "RGB";
@@ -1562,6 +1616,10 @@ export function DatasetEditorPage({
   };
 
   const changeRole = (nextRole: ObjectSelection) => {
+    if (editMode === "hole") {
+      drawRef.current?.abortDrawing();
+      setEditMode("select");
+    }
     const selected = selectRef.current?.getFeatures().getArray() || [];
     if (selected.length && selected.some((feature) => !matchesObjectSelection(feature, nextRole))) {
       const before = captureActiveSnapshot();
@@ -1699,6 +1757,7 @@ export function DatasetEditorPage({
     if (!draft) return;
     const undone = undoDraft(draft);
     if (!undone) return;
+    setEditMode((mode) => mode === "hole" ? "select" : mode);
     const restored: SceneDraft = {
       ...draft,
       baseline: undone.baseline,
@@ -1752,7 +1811,17 @@ export function DatasetEditorPage({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTextInput(event.target) || editMode === "view") return;
+      if (event.key === "Escape" && (editMode === "hole" || drawInProgressRef.current)) {
+        event.preventDefault();
+        drawRef.current?.abortDrawing();
+        setEditMode("select");
+        return;
+      }
       if (isDeleteShortcut(event)) {
+        if (editMode === "hole") {
+          event.preventDefault();
+          return;
+        }
         if (editMode === "pseudo" && (pseudoSelectRef.current?.getFeatures().getLength() || 0) > 0) {
           event.preventDefault();
           clearPseudoSelection();
@@ -2288,6 +2357,19 @@ export function DatasetEditorPage({
                       >
                         <PencilLine size={17} />
                       </button>
+                      <button
+                        className={`${editMode === "hole" ? "primary" : "secondary"} icon-button dataset-editor-icon-button`}
+                        type="button"
+                        disabled={!annotationsVisible || Boolean(activeDraft.current.deleted) || selectedFeatureCount !== 1}
+                        aria-label="Вырезать отверстие в полигоне"
+                        aria-pressed={editMode === "hole"}
+                        title={selectedFeatureCount === 1
+                          ? "Вырезать отверстие: нарисуйте контур внутри выбранного полигона; двойной клик — завершить, Esc — отменить"
+                          : "Сначала выберите один полигон инструментом выбора и правки"}
+                        onClick={() => setEditMode(editMode === "hole" ? "select" : "hole")}
+                      >
+                        <Scissors size={17} />
+                      </button>
                       {pseudoVisible && pseudoMarkup?.status === "ready" ? (
                         <button
                           className={`${editMode === "pseudo" ? "primary" : "secondary"} icon-button dataset-editor-icon-button`}
@@ -2389,6 +2471,7 @@ export function DatasetEditorPage({
                       className="danger icon-button dataset-editor-icon-button"
                       type="button"
                       aria-label="Удалить выбранный полигон"
+                      disabled={editMode === "hole"}
                       title="Удалить выбранный полигон (Del); действие можно отменить через Ctrl+Z / Ctrl+Я"
                       onClick={deleteSelected}
                     >
@@ -2411,6 +2494,7 @@ export function DatasetEditorPage({
                     ? compact ? "Перемещайте снимок пальцем; масштаб меняйте двумя пальцами. Для изменения разметки нажмите «Править»." : "Перетаскивайте карту левой кнопкой мыши; колесо — масштаб. Разметка защищена от случайных изменений."
                     : editMode === "pseudo"
                     ? "Клик — выбрать объект сети, Shift+клик — выбрать несколько; укажите назначение и добавьте их в черновик. Del снимает выбор."
+                    : editMode === "hole" ? "Нарисуйте отверстие внутри выбранного полигона, не касаясь его границ и других отверстий. Двойной клик — вырезать, Esc — отменить, Ctrl+Z / Ctrl+Я — убрать последнюю вершину."
                     : editMode === "draw" ? "Ставьте вершины кликами; двойной клик — завершить контур. Для изменения вершин готового контура переключитесь на выбор и правку."
                     : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон; клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}
                 </div>

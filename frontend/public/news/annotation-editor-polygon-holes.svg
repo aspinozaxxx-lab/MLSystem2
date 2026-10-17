@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Отверстия в полигонах разметки</title>
+  <desc id="desc">Поясняющая схема. Слева полигон реки закрывает остров, в центре рисуется вырез, справа остров исключён из полигона, а сама река остаётся одним объектом.</desc>
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#c7d3d0" stroke-width="1"/>
+    </pattern>
+    <g id="terrain">
+      <rect width="352" height="300" rx="16" fill="#e4ebe0"/>
+      <rect width="352" height="300" rx="16" fill="url(#grid)"/>
+      <path d="M76 0H248L282 66 253 141 290 220 258 300H85L111 218 73 139 107 64Z" fill="#b5d8e0"/>
+      <path d="M159 110L208 119 220 160 192 185 150 170 140 136Z" fill="#bdcc9d" stroke="#8eaa70" stroke-width="2"/>
+    </g>
+    <path id="river" d="M76 0H248L282 66 253 141 290 220 258 300H85L111 218 73 139 107 64Z"/>
+    <path id="island" d="M159 110L208 119 220 160 192 185 150 170 140 136Z"/>
+  </defs>
+  <rect width="1280" height="640" rx="28" fill="#102533"/>
+  <text x="44" y="54" fill="#8edbd0" font-family="Arial,sans-serif" font-size="16" letter-spacing="2">ПОЯСНЯЮЩАЯ СХЕМА · ОБЩИЙ РЕДАКТОР</text>
+  <text x="44" y="108" fill="#f3f7fa" font-family="Arial,sans-serif" font-size="37" font-weight="700">Остров — не часть реки</text>
+  <text x="44" y="144" fill="#bacbd3" font-family="Arial,sans-serif" font-size="20">Выберите объект, нарисуйте вырез и сохраните точный контур.</text>
+  <g transform="translate(44 205)">
+    <text y="-20" fill="#f3f7fa" font-family="Arial,sans-serif" font-size="22" font-weight="700">1. Выберите полигон</text>
+    <use href="#terrain"/>
+    <use href="#river" fill="#f3c623" fill-opacity=".36" stroke="#f3c623" stroke-width="3"/>
+    <text y="337" fill="#bacbd3" font-family="Arial,sans-serif" font-size="18">Внешний контур закрывает остров</text>
+  </g>
+  <path d="M411 354H432M424 346L432 354 424 362" fill="none" stroke="#8edbd0" stroke-width="3" stroke-linecap="round"/>
+  <g transform="translate(464 205)">
+    <text y="-20" fill="#f3f7fa" font-family="Arial,sans-serif" font-size="22" font-weight="700">2. Обведите отверстие</text>
+    <use href="#terrain"/>
+    <use href="#river" fill="#f3c623" fill-opacity=".2" stroke="#55c5f3" stroke-width="3"/>
+    <use href="#island" fill="none" stroke="#da4a73" stroke-width="3" stroke-dasharray="8 5"/>
+    <g fill="#fff" stroke="#da4a73" stroke-width="2">
+      <circle cx="159" cy="110" r="5"/><circle cx="208" cy="119" r="5"/>
+      <circle cx="220" cy="160" r="5"/><circle cx="192" cy="185" r="5"/>
+      <circle cx="150" cy="170" r="5"/><circle cx="140" cy="136" r="5"/>
+    </g>
+    <text y="337" fill="#bacbd3" font-family="Arial,sans-serif" font-size="18">Ножницы → контур → двойной клик</text>
+  </g>
+  <path d="M831 354H852M844 346L852 354 844 362" fill="none" stroke="#8edbd0" stroke-width="3" stroke-linecap="round"/>
+  <g transform="translate(884 205)">
+    <text y="-20" fill="#f3f7fa" font-family="Arial,sans-serif" font-size="22" font-weight="700">3. Один объект с вырезом</text>
+    <use href="#terrain"/>
+    <path d="M76 0H248L282 66 253 141 290 220 258 300H85L111 218 73 139 107 64Z M159 110L208 119 220 160 192 185 150 170 140 136Z" fill="#f3c623" fill-opacity=".36" fill-rule="evenodd" stroke="#f3c623" stroke-width="3"/>
+    <text y="337" fill="#bacbd3" font-family="Arial,sans-serif" font-size="18">Остров исключён из площади реки</text>
+  </g>
+  <path d="M44 570H1236" stroke="#33505f"/>
+  <text x="44" y="607" fill="#8edbd0" font-family="Arial,sans-serif" font-size="18">Автосохранение черновика · Отмена действия · Публикация в обычном порядке</text>
+</svg>

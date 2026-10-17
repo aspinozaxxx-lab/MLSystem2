@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+import Collection from "ol/Collection";
+import Feature from "ol/Feature";
+import type OLMap from "ol/Map";
+import View from "ol/View";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import Polygon from "ol/geom/Polygon";
+import Snap from "ol/interaction/Snap";
 
 import {
   acceptPublishedDraft,
@@ -11,6 +16,7 @@ import {
   editableVertexCoordinates,
   editableVertices,
   editableVerticesInExtent,
+  editorSnapTargets,
   extendRasterResolutions,
   featureClassCounts,
   featureCounts,
@@ -19,6 +25,7 @@ import {
   isDeleteShortcut,
   isUndoShortcut,
   preventMapMiddleButtonDefault,
+  polygonWithHole,
   publishScenes,
   sceneClassCounts,
   selectedDeleteAction,
@@ -60,7 +67,174 @@ const draft = (name: string, baseline: DraftSnapshot, current: DraftSnapshot): P
   history: [],
 });
 
+describe("вырезы в полигонах общего редактора", () => {
+  const rectangle = (left: number, bottom: number, right: number, top: number) => [
+    [left, bottom], [right, bottom], [right, top], [left, top], [left, bottom],
+  ];
+
+  it.each([false, true])("добавляет настоящее отверстие независимо от направления контура: %s", (reverse) => {
+    const polygon = new Polygon([rectangle(0, 0, 10, 10)]);
+    const ring = rectangle(2, 2, 4, 4);
+    const result = polygonWithHole(polygon, new Polygon([reverse ? ring.reverse() : ring]));
+
+    expect(result).toBeInstanceOf(Polygon);
+    expect(result.getArea()).toBe(96);
+    expect(result.intersectsCoordinate([3, 3])).toBe(false);
+    expect(result.intersectsCoordinate([1, 1])).toBe(true);
+    expect(editableVertices(result)).toHaveLength(8);
+    expect((result as Polygon).getCoordinates()[0]).toEqual(polygon.getCoordinates()[0]);
+    expect(polygon.getLinearRingCount()).toBe(1);
+    expect(polygon.getArea()).toBe(100);
+  });
+
+  it("сохраняет прежние отверстия и все части составного объекта", () => {
+    const polygon = new MultiPolygon([
+      [rectangle(0, 0, 10, 10), rectangle(1, 1, 2, 2)],
+      [rectangle(20, 0, 30, 10)],
+    ]);
+    const result = polygonWithHole(polygon, new Polygon([rectangle(22, 2, 24, 4)])) as MultiPolygon;
+
+    expect(result.getCoordinates()[0]).toEqual(polygon.getCoordinates()[0]);
+    expect(result.getCoordinates()[1]).toHaveLength(2);
+    expect(result.getArea()).toBe(195);
+    expect(result.intersectsCoordinate([23, 3])).toBe(false);
+    expect(polygon.getCoordinates()[1]).toHaveLength(1);
+  });
+
+  it("находит отдельную часть, расположенную в отверстии другой части", () => {
+    const polygon = new MultiPolygon([
+      [rectangle(0, 0, 30, 30), rectangle(5, 5, 25, 25)],
+      [rectangle(10, 10, 20, 20)],
+    ]);
+    const result = polygonWithHole(polygon, new Polygon([rectangle(12, 12, 14, 14)])) as MultiPolygon;
+    expect(result.getCoordinates()[0]).toEqual(polygon.getCoordinates()[0]);
+    expect(result.getCoordinates()[1]).toHaveLength(2);
+    expect(result.getArea()).toBe(polygon.getArea() - 4);
+  });
+
+  it.each([
+    rectangle(-1, 2, 2, 4),
+    rectangle(0, 2, 2, 4),
+    [[0, 0], [2, 1], [1, 2], [0, 0]],
+    rectangle(11, 2, 13, 4),
+  ].map((ring) => ({ ring })))("отклоняет выход за внешний контур и касание его границ: %j", ({ ring }) => {
+    const polygon = new Polygon([rectangle(0, 0, 10, 10)]);
+    expect(() => polygonWithHole(polygon, new Polygon([ring]))).toThrow("целиком находиться внутри");
+    expect(polygon.getLinearRingCount()).toBe(1);
+  });
+
+  it("проверяет рёбра выреза, а не только попадание вершин внутрь", () => {
+    const concave = new Polygon([[
+      [0, 0], [10, 0], [10, 10], [6, 10], [6, 4], [4, 4], [4, 10], [0, 10], [0, 0],
+    ]]);
+    const hole = new Polygon([[[2, 2], [8, 2], [8, 8], [2, 8], [2, 2]]]);
+    expect(hole.getCoordinates()[0].every((point) => concave.intersectsCoordinate(point))).toBe(true);
+    expect(() => polygonWithHole(concave, hole)).toThrow("целиком находиться внутри");
+  });
+
+  it.each([
+    rectangle(3, 3, 4, 4),
+    rectangle(1, 1, 6, 6),
+    rectangle(4, 4, 7, 7),
+    rectangle(5, 3, 7, 4),
+  ].map((ring) => ({ ring })))("не пересекает, не касается и не охватывает прежнее отверстие: %j", ({ ring }) => {
+    const polygon = new Polygon([rectangle(0, 0, 10, 10), rectangle(2, 2, 5, 5)]);
+    expect(() => polygonWithHole(polygon, new Polygon([ring]))).toThrow("существующих отверстий");
+    expect(polygon.getArea()).toBe(91);
+  });
+
+  it("не объединяет две части MultiPolygon одним вырезом", () => {
+    const polygon = new MultiPolygon([[rectangle(0, 0, 10, 10)], [rectangle(11, 0, 20, 10)]]);
+    expect(() => polygonWithHole(polygon, new Polygon([rectangle(2, 2, 18, 4)])))
+      .toThrow("одной части");
+  });
+
+  it.each([
+    [[1, 1], [5, 5], [1, 5], [5, 1], [1, 1]],
+    [[1, 1], [5, 5], [1, 5], [4, 1], [1, 1]],
+    [[1, 1], [5, 1], [3, 1], [3, 5], [1, 5], [1, 1]],
+    [[1, 1], [2, 2], [3, 3], [1, 1]],
+    [[1, 1], [2, 2], [1, 1]],
+    [[1, 1], [NaN, 2], [3, 3], [1, 1]],
+  ].map((ring) => ({ ring })))("не допускает самопересечение, возврат по ребру и вырожденный контур: %j", ({ ring }) => {
+    const polygon = new Polygon([rectangle(0, 0, 10, 10)]);
+    expect(() => polygonWithHole(polygon, new Polygon([ring]))).toThrow();
+    expect(polygon.getArea()).toBe(100);
+  });
+
+  it("не теряет точность на координатах EPSG:3857 и не меняет размерность", () => {
+    const polygon = new Polygon([rectangle(11_478_026, 6_962_204, 11_478_036, 6_962_214)
+      .map((point) => [...point, 10])]);
+    const result = polygonWithHole(polygon, new Polygon([
+      rectangle(11_478_028, 6_962_206, 11_478_030, 6_962_208),
+    ])) as Polygon;
+    expect(result.getLayout()).toBe("XYZ");
+    expect(result.getCoordinates()[1].every((point) => point.length === 3 && point[2] === 10)).toBe(true);
+    expect(result.getArea()).toBe(96);
+  });
+
+  it("отменяет вырез целиком через общую историю черновика", () => {
+    const polygon = new Polygon([rectangle(0, 0, 10, 10)]);
+    const before: DraftSnapshot = {
+      geojson: { type: "FeatureCollection", features: [{
+        type: "Feature", id: "река-1", properties: { имя: "Река", _mlsystem2_role: "positive" },
+        geometry: { type: "Polygon", coordinates: polygon.getCoordinates() },
+      }] },
+      newFeatureIndexes: [],
+    };
+    const after = JSON.parse(JSON.stringify(before)) as DraftSnapshot;
+    const feature = (after.geojson.features as Record<string, unknown>[])[0];
+    feature.geometry = { type: "Polygon", coordinates: (polygonWithHole(polygon,
+      new Polygon([rectangle(2, 2, 4, 4)])) as Polygon).getCoordinates() };
+    const edited = { baseline: before, current: after, history: appendHistory([], before) };
+    expect(draftChanged(edited)).toBe(true);
+    expect(featureCounts(after.geojson).total).toBe(1);
+    expect(undoDraft(edited)?.current).toEqual(before);
+    expect(feature.id).toBe("река-1");
+    expect(feature.properties).toEqual((before.geojson.features as Record<string, unknown>[])[0].properties);
+  });
+});
+
 describe("черновики редактора датасетов", () => {
+  it("воспроизводит отскок настоящего Snap и устраняет его без отключения привязки к соседям", () => {
+    const selected = new Feature(new Polygon([[
+      [100, 100], [400, 100], [400, 400], [100, 400], [100, 100],
+    ]]));
+    const neighbor = new Feature(new Polygon([[
+      [430, 100], [470, 100], [470, 200], [430, 200], [430, 100],
+    ]]));
+    const view = new View({ projection: "EPSG:3857", resolution: 1, center: [0, 0] });
+    const map = {
+      getView: () => view,
+      getPixelFromCoordinate: (coordinate: number[]) => coordinate,
+    } as unknown as OLMap;
+    const beforeFeatures = new Collection([selected, neighbor]);
+    const afterFeatures = new Collection(editorSnapTargets([selected, neighbor], [selected], true));
+    const before = new Snap({ features: beforeFeatures });
+    const after = new Snap({ features: afterFeatures });
+    before.setMap(map);
+    after.setMap(map);
+    try {
+      expect(before.snapTo([109, 107], [109, 107], map)?.vertex).toEqual([109, 100]);
+      expect(after.snapTo([109, 107], [109, 107], map)).toBeNull();
+      expect(after.snapTo([425, 100], [425, 100], map)?.vertex).toEqual([430, 100]);
+    } finally {
+      beforeFeatures.clear();
+      afterFeatures.clear();
+    }
+  });
+
+  it("при правке не привязывает вершину к своему старому контуру, сохраняя привязку к соседям", () => {
+    const selected = new Polygon([[[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]]]);
+    const neighbor = new Polygon([[[5, 0], [8, 0], [8, 4], [5, 4], [5, 0]]]);
+    const visible = [selected, neighbor];
+    expect(editorSnapTargets(visible, [selected], true)).toEqual([neighbor]);
+    expect(editorSnapTargets(visible, [selected, neighbor], true)).toEqual([]);
+    expect(editorSnapTargets(visible, [], true)).toEqual(visible);
+    expect(editorSnapTargets(visible, [selected], false)).toEqual(visible);
+    expect(visible).toEqual([selected, neighbor]);
+  });
+
   it("не запрашивает сцену предыдущего датасета после переключения", () => {
     expect(isCurrentDatasetScene("новый", "старый", "старая.geojson", "старая.geojson"))
       .toBe(false);

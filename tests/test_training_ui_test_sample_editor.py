@@ -9,7 +9,7 @@ import pytest
 import numpy as np
 import rasterio
 from fastapi.testclient import TestClient
-from shapely.geometry import box, mapping
+from shapely.geometry import box, mapping, shape
 from sqlalchemy import select
 from rasterio.enums import ColorInterp
 from rasterio.transform import from_origin
@@ -93,6 +93,37 @@ def test_manual_annotations_draft_publish_and_archive_do_not_change_source(manua
     with create_session_factory(config)() as session:
         assert session.scalars(select(JobRow)).all() == []
         assert session.scalars(select(DatasetEditorDraftRow)).all() == []
+
+
+def test_manual_editor_hole_survives_publication_and_becomes_background_in_mask(manual_client):
+    client, config, sample = manual_client
+    scene = _add_image(client, sample)
+    name = scene["annotation_name"]
+    base = f"/api/v1/test-samples/{sample['id']}/editor"
+    outer = box(10, 30, 30, 50)
+    island = box(15, 35, 25, 45)
+    payload = _annotation(outer.difference(island))
+    saved = client.put(base + f"/drafts/{name}", json={
+        "base_revision": scene["revision"], "geojson": payload,
+    })
+    assert saved.status_code == 200, saved.text
+    reopened = client.get(base + f"/scenes/{name}").json()
+    assert shape(reopened["draft"]["geojson"]["features"][0]["geometry"]).equals(outer.difference(island))
+    published = client.post(base + "/drafts/publish")
+    assert published.status_code == 200, published.text
+    updated = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    assert updated["actual_object_count"] == 1
+    root = config.stored_files_root / "test-samples" / sample["id"]
+    stored = json.loads((root / name).read_text(encoding="utf-8"))["features"][0]
+    assert stored["id"] == "контур-1"
+    assert shape(stored["geometry"]).equals(outer.difference(island))
+    with rasterio.open(root / "tile_001.tif") as image, rasterio.open(root / "tile_001_mask.png") as mask:
+        values = mask.read(1)
+        assert values[image.index(20, 40)] == 0
+        assert values[image.index(12, 40)] == 1
+        assert np.count_nonzero(values) == 300
+    with create_session_factory(config)() as session:
+        assert session.scalars(select(JobRow)).all() == []
 
 
 def test_manual_import_and_conflicts_are_atomic(manual_client):
