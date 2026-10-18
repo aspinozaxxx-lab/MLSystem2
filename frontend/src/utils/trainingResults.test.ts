@@ -1,12 +1,33 @@
 import { describe, expect, it } from "vitest";
 import type { TrainingResultInfo } from "../api/types";
-import { pseudoCheckpointLabel, trainingResultFamilies } from "./trainingResults";
+import { pseudoCheckpointLabel, trainingAuthorLabel, trainingResultFamilies } from "./trainingResults";
 
 const result = (id: string, day: number, parent?: string): TrainingResultInfo => ({
   id, created_at: `2026-10-${String(day).padStart(2, "0")}T12:00:00Z`, model_name: "Сеть",
   architecture: "smp_unet_resnet34", status: "ok", continued_from_result_id: parent,
   source: "manual", pipeline_variant: "legacy", validation_fold: 0, is_primary: false,
   can_continue_training: true, input_channels: 4, quality_metric: "pixel", task: "binary",
+});
+
+describe("автор обучения", () => {
+  it("показывает фактического автора успешного обучения", () => {
+    for (const author of ["Alex", "Aspinoza"]) {
+      expect(trainingAuthorLabel({ ...result("сеть", 1), started_by: author })).toBe(`Обучил ${author}`);
+    }
+  });
+
+  it("не называет незавершённое или ошибочное обучение успешным", () => {
+    for (const status of ["queued", "running", "paused", "error", "cancelled"] as const) {
+      expect(trainingAuthorLabel({ ...result("сеть", 1), status, started_by: "Alex" })).toBe("Запустил Alex");
+    }
+  });
+
+  it("не придумывает автора старым запускам, автоматизации и импорту", () => {
+    expect(trainingAuthorLabel(result("старая", 1))).toBe("Автор не указан");
+    expect(trainingAuthorLabel({ ...result("старая", 1), started_by: null })).toBe("Автор не указан");
+    expect(trainingAuthorLabel({ ...result("авто", 1), source: "automation", started_by: "Alex" })).toBe("Автоматическое обучение");
+    expect(trainingAuthorLabel({ ...result("импорт", 1), architecture: "external_torchscript" })).toBe("Импортированная сеть");
+  });
 });
 
 describe("использованные веса псевдоразметки", () => {

@@ -106,6 +106,21 @@ def test_inference_template_imagery_and_class_contract(monkeypatch) -> None:
     assert schema["components"]["schemas"]["ImageryType"]["enum"] == ["kanopus", "ortho"]
 
 
+def test_training_result_author_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import TrainingResultInfo
+
+    assert TrainingResultInfo.model_fields["started_by"].default is None
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    schema = get_openapi_schema()["components"]["schemas"]
+    assert schema["TrainingResultInfo"]["properties"]["started_by"]["anyOf"] == [
+        {"type": "string"}, {"type": "null"},
+    ]
+    assert "started_by" not in schema["TrainingJobCreate"]["properties"]
+    assert "started_by" not in schema["TrainingContinuationCreate"]["properties"]
+
+
 def test_completed_training_continuation_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import TrainingContinuationCreate, TrainingResultInfo

@@ -1,10 +1,29 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ResultChangesTable, ResultClassCard } from "./App";
-import type { ResultChangeInfo, ResultClassInfo } from "./api/types";
+import { ResultChangesTable, ResultClassCard, ResultsTable } from "./App";
+import type { ResultChangeInfo, ResultClassInfo, TrainingResultInfo } from "./api/types";
 import { newsArticles } from "./News";
 
 describe("результаты класса на одной странице", () => {
+  it("показывает автора каждого этапа вместо технического обозначения архитектуры", () => {
+    const base: TrainingResultInfo = {
+      id: "исходная", model_name: "SegFormer B1", architecture: "smp_segformer_b1",
+      status: "ok", source: "manual", created_at: "2026-10-18T12:00:00Z", started_by: "Alex",
+      pipeline_variant: "legacy", validation_fold: 0, is_primary: false, can_continue_training: false,
+      input_channels: 4, quality_metric: "pixel", task: "binary",
+    };
+    const html = renderToStaticMarkup(<ResultsTable payload={{
+      dataset_key: "учебный", dataset_name: "Учебный", quality_metric: "pixel", test_f1_status: "unavailable",
+      results: [base, { ...base, id: "продолжение", continued_from_result_id: base.id, started_by: "Aspinoza" }],
+    }} datasets={[]} imageFolders={[]} onPseudo={() => {}} onZip={() => {}} onContinue={() => {}}
+      onPrimary={() => {}} onDeletePseudo={() => {}} showJobLog={async () => {}} onF1Queued={async () => {}} />);
+    expect(html).toContain("Обучил Alex");
+    expect(html).toContain("Обучил Aspinoza");
+    expect(html).toContain("SegFormer B1");
+    expect(html).not.toContain("smp_segformer_b1");
+    expect(newsArticles.find(item => item.slug === "training-results-author")?.date).toBe("2026-10-18");
+  });
+
   it("выделяет выбранный датасет, сохраняя основную отметку и действующие ссылки", () => {
     const item: ResultClassInfo = { key: "лес", name: "Границы леса", quality_metric: "pixel", is_custom: false, datasets: [
       { key: "основной", name: "main", quality_metric: "pixel", is_primary: true },

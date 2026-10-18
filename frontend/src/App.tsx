@@ -84,7 +84,7 @@ import type {
 } from "./api/types";
 import { TrainingContinuationForm } from "./TrainingContinuationForm";
 import { PseudoComparisonProvider, PseudoComparisonTray, PseudoCompareButton } from "./PseudoComparisonSelection";
-import { pseudoCheckpointLabel, trainingResultFamilies } from "./utils/trainingResults";
+import { pseudoCheckpointLabel, trainingAuthorLabel, trainingResultFamilies } from "./utils/trainingResults";
 import {
   defaultTrainingZipModelName,
   displayStoredFileName,
@@ -945,7 +945,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                         {row.result ? (
                           <span className="source-lines">
                             <strong>{trainingModelLabel(row.result.model_name, row.result.pipeline_variant)}</strong>
-                            <small className="muted">{row.result.architecture}</small>
+                            <small className="muted">{trainingAuthorLabel(row.result)}</small>
                           </span>
                         ) : (
                           <span className="muted">Нет успешной модели</span>
@@ -3795,7 +3795,7 @@ function TestF1CalculationState({ result }: { result: TrainingResultInfo }) {
   return <a className={`badge result-f1-state ${failed ? "error" : metric.status === "stale" ? "warning" : "neutral"}`} href={`#/test-f1/${result.id}`} title={metric.error || text}>{text}</a>;
 }
 
-function ResultsTable({
+export function ResultsTable({
   payload,
   datasets,
   imageFolders,
@@ -3866,7 +3866,7 @@ function ResultsTable({
                         ) : null}
                         <span className="training-model-name">{trainingModelLabel(result.model_name, result.pipeline_variant)}</span>
                       </strong>
-                      <small className="muted">{result.architecture}</small>
+                      <small className="muted">{trainingAuthorLabel(result)}</small>
                       {family.stages.length > 1 ? <small className="training-stage-label">Этап {stageIndex + 1}{!result.continued_from_result_id ? " · исходная сеть" : ""}</small> : null}
                       {result.continued_from_result_id ? <small className="muted">{family.stages.some(stage => stage.id === result.continued_from_result_id) ? `От этапа ${family.stages.findIndex(stage => stage.id === result.continued_from_result_id) + 1}` : "Продолжение"} · {result.continued_from_checkpoint === "last" ? "последние веса" : `лучшие веса${result.continued_from_epoch != null ? ` эпохи ${result.continued_from_epoch}` : ""}`}</small> : null}
                       {result.continued_from_result_id ? <small className="muted">{result.continued_from_dataset_source === "current" ? "Актуальный состав датасета" : "Прежний состав датасета"}</small> : null}

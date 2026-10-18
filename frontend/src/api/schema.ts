@@ -5434,6 +5434,11 @@ export interface components {
             /** Architecture */
             architecture: string;
             /**
+             * Автор запуска
+             * @description Канонический логин запустившего этот этап обучения; null, если не сохранён.
+             */
+            started_by?: string | null;
+            /**
              * Pipeline Variant
              * @default legacy
              * @enum {string}

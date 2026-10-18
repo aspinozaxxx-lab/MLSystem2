@@ -236,6 +236,7 @@ class TrainingResultInfo(BaseModel):
     dataset_version: str | None = None
     model_name: str
     architecture: str
+    started_by: str | None = Field(default=None, title="Автор запуска", description="Канонический логин запустившего этот этап обучения; null, если не сохранён.")
     pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"] = "legacy"
     validation_fold: int = Field(default=0, ge=0)
     is_primary: bool = False

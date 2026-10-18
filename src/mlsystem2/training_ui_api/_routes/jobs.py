@@ -36,9 +36,9 @@ def register_job_routes(app: FastAPI, ctx: RouteContext) -> None:
     def post_training_job(
         request: TrainingJobCreate,
         db: Session = Depends(ctx.get_db),
-        _: str = Depends(ctx.authenticated),
+        username: str = Depends(ctx.authenticated),
     ) -> JobDetail:
-        return create_training_job(db, request, ctx.config)
+        return create_training_job(db, request, ctx.config, started_by=username)
 
     @app.get("/api/v1/queues", response_model=QueueSnapshot)
     def get_queues(

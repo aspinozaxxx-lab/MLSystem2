@@ -2,6 +2,15 @@ import type { TrainingResultInfo } from "../api/types";
 
 export type TrainingResultFamily = { id: string; stages: TrainingResultInfo[] };
 
+/** Автор именно этого этапа, без приписывания старых и автоматических запусков пользователю. */
+export function trainingAuthorLabel(result: Pick<TrainingResultInfo, "started_by" | "source" | "architecture" | "status">): string {
+  if (result.architecture === "external_torchscript") return "Импортированная сеть";
+  if (result.source === "automation") return "Автоматическое обучение";
+  const author = result.started_by?.trim();
+  if (!author) return "Автор не указан";
+  return `${result.status === "ok" ? "Обучил" : "Запустил"} ${author}`;
+}
+
 /** Старые псевдоразметки без выбора чекпойнта используют лучшие веса. */
 export function pseudoCheckpointLabel(result: { checkpoint_kind?: "best" | "last"; checkpoint_epoch?: number | null }): string {
   const label = result.checkpoint_kind === "last" ? "Последние веса" : "Лучшие веса";

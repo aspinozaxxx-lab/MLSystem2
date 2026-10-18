@@ -129,9 +129,9 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
     @app.post("/api/v1/results/training/{result_id}/continue", response_model=JobDetail)
     def post_training_continuation(
         result_id: uuid.UUID, request: TrainingContinuationCreate,
-        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+        db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated),
     ) -> JobDetail:
-        row = create_continuation_job(db, result_id, request, ctx.config)
+        row = create_continuation_job(db, result_id, request, ctx.config, started_by=username)
         return _job_detail(db, row)
 
     @app.get("/api/v1/results/training/{result_id}/test-f1/view", response_model=TestF1ViewInfo)

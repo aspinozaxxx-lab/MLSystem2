@@ -28,10 +28,10 @@ from mlsystem2.training_ui_api._dataset_catalog import list_managed_datasets
 from mlsystem2.training_ui_api._models import DatasetClassRow, JobRow, PseudoMarkupResultRow, StoredFileRow, TrainingResultRow
 from mlsystem2.training_ui_api._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY, POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
-    SECONDARY_PRIORITY_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY, is_secondary_job,
+    SECONDARY_PRIORITY_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY, TRAINING_STARTED_BY_CONFIG_KEY, is_secondary_job,
 )
 from mlsystem2.training_ui_api.api import create_app
-from mlsystem2.training_ui_api.contracts import InferenceTemplateClassUpdate, InferenceTemplateCreate, TrainingContinuationCreate, TrainingUIAPIError
+from mlsystem2.training_ui_api.contracts import DatasetInfo, InferenceTemplateClassUpdate, InferenceTemplateCreate, TrainingContinuationCreate, TrainingUIAPIError
 
 
 @pytest.fixture
@@ -195,6 +195,61 @@ def test_continue_api_copies_parameters_and_keeps_original(saved_training, check
         assert session.get(JobRow, env.job_id).config == env.flat
         assert len(session.scalars(select(JobRow)).all()) == 2
         assert session.get(TrainingResultRow, env.result_id).f1_score == 0.81
+
+
+@pytest.mark.parametrize("login,author", [("alex-alias", "Alex"), ("Aspinoza", "Aspinoza")])
+def test_training_author_comes_from_session_not_request(saved_training, monkeypatch, login, author):
+    env = saved_training
+    password = uuid.uuid4().hex
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_USERS_JSON", json.dumps([
+        {"username": "Alex", "password": password, "aliases": ["alex-alias"]},
+        {"username": "Aspinoza", "password": password},
+    ]))
+    monkeypatch.setattr(_service, "_resolve_dataset_name", lambda *args: DatasetInfo(
+        key="образец", name="Учебный датасет", version="текущая-версия",
+    ))
+    with TestClient(create_app()) as client:
+        assert client.post("/api/v1/auth/login", json={"username": login, "password": password}).status_code == 200
+        response = client.post("/api/v1/training-jobs", json={
+            "dataset_key": "образец", "architecture": "smp_segformer_b1",
+            "mlflow_experiment_name": "Проверка автора", "mlflow_experiment_id": "1",
+            "run_inference_after_training": False,
+            "config": {TRAINING_STARTED_BY_CONFIG_KEY: "Подставной автор"},
+        })
+        assert response.status_code == 200, response.text
+        job_id = response.json()["id"]
+        assert TRAINING_STARTED_BY_CONFIG_KEY not in response.json()["config"]
+        rows = client.get("/api/v1/results/datasets/образец").json()["results"]
+        assert next(item for item in rows if item["job_id"] == job_id)["started_by"] == author
+        assert next(item for item in rows if item["id"] == str(env.result_id))["started_by"] is None
+        with env.factory() as session:
+            assert session.get(JobRow, uuid.UUID(job_id)).config[TRAINING_STARTED_BY_CONFIG_KEY] == author
+
+
+def test_continuation_records_own_author_and_keeps_it_on_retry(saved_training):
+    env = saved_training
+    author = env.client.get("/api/v1/auth/me").json()["username"]
+    with env.factory() as session:
+        source = session.get(JobRow, env.job_id)
+        source.config = {**source.config, TRAINING_STARTED_BY_CONFIG_KEY: "Aspinoza"}
+        session.commit()
+    request = _request(run_inference_after_training=False)
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=request)
+    assert response.status_code == 200, response.text
+    child_id = response.json()["id"]
+    assert TRAINING_STARTED_BY_CONFIG_KEY not in response.json()["config"]
+    with env.factory() as session:
+        repeated = continuation.create_continuation_job(session, env.result_id,
+            TrainingContinuationCreate(**request), env.config, started_by="Другой пользователь")
+        assert str(repeated.id) == child_id
+        assert repeated.config[TRAINING_STARTED_BY_CONFIG_KEY] == author
+        assert session.get(JobRow, env.job_id).config[TRAINING_STARTED_BY_CONFIG_KEY] == "Aspinoza"
+        without_author = continuation.create_continuation_job(session, env.result_id,
+            TrainingContinuationCreate(**_request(run_inference_after_training=False)), env.config)
+        assert TRAINING_STARTED_BY_CONFIG_KEY not in without_author.config
+    rows = env.client.get("/api/v1/results/datasets/образец").json()["results"]
+    assert next(item for item in rows if item["id"] == str(env.result_id))["started_by"] == "Aspinoza"
+    assert next(item for item in rows if item["job_id"] == child_id)["started_by"] == author
 
 
 def test_last_checkpoint_is_disabled_and_rejected_when_not_saved(saved_training):

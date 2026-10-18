@@ -28,6 +28,7 @@ from ._queueing import (
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     SECONDARY_PRIORITY_CONFIG_KEY,
     STOP_AND_SAVE_BEST_CONFIG_KEY,
+    TRAINING_STARTED_BY_CONFIG_KEY,
     next_queue_position,
 )
 from .contracts import (
@@ -127,6 +128,7 @@ def continuation_options(
 def create_continuation_job(
     session: Session, result_id: uuid.UUID, request: TrainingContinuationCreate,
     config: TrainingUIAPIConfig,
+    *, started_by: str | None = None,
 ) -> JobRow:
     # Один идентификатор отправки не создаёт вторую работу при повторе HTTP-запроса.
     dedup_key = hashlib.sha256(f"training-continuation:{result_id}:{request.request_id}".encode()).hexdigest()
@@ -155,8 +157,11 @@ def create_continuation_job(
         with markup_read_lock(config):
             current = _current_dataset(session, result, source, config)
     job_config = copy.deepcopy(source.config)
-    for transient_key in (POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY):
+    for transient_key in (POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY,
+                          TRAINING_STARTED_BY_CONFIG_KEY):
         job_config.pop(transient_key, None)
+    if started_by:
+        job_config[TRAINING_STARTED_BY_CONFIG_KEY] = started_by
     job_config.update({key: getattr(request, name) for name, key in _LIMIT_KEYS.items()})
     job_config.update(selected_options)
     job_config[CONTINUATION_KEY] = {

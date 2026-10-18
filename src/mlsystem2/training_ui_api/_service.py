@@ -98,6 +98,7 @@ from ._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     SECONDARY_PRIORITY_CONFIG_KEY,
+    TRAINING_STARTED_BY_CONFIG_KEY,
     TEST_F1_PRIORITY_CONFIG_KEY,
     STOP_AND_SAVE_BEST_CONFIG_KEY,
     ensure_queue_positions,
@@ -901,6 +902,8 @@ def create_training_job(
     session: Session,
     request: TrainingJobCreate,
     config: TrainingUIAPIConfig,
+    *,
+    started_by: str | None = None,
 ) -> JobDetail:
     if request.architecture not in UI_ARCHITECTURES:
         raise TrainingUIAPIError("Архитектура снята с запуска. Выберите SegFormer B0–B3 или другую сеть из каталога.")
@@ -930,6 +933,8 @@ def create_training_job(
         job_config["dataset.images_dir"] = dataset.images_dir
     job_config[POST_TRAINING_INFERENCE_CONFIG_KEY] = request.run_inference_after_training
     job_config[SECONDARY_PRIORITY_CONFIG_KEY] = request.secondary_priority
+    if started_by:
+        job_config[TRAINING_STARTED_BY_CONFIG_KEY] = started_by
     _validate_tile_factor_config(job_config)
     _validate_training_pipeline_variant(job_config, request.architecture)
     tile_size = _int_or_none(job_config.get("tile_preparation.tile_size"))
@@ -2762,6 +2767,7 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
                 SECONDARY_PRIORITY_CONFIG_KEY,
                 TEST_F1_PRIORITY_CONFIG_KEY,
                 STOP_AND_SAVE_BEST_CONFIG_KEY,
+                TRAINING_STARTED_BY_CONFIG_KEY,
             }
         },
         run_inference_after_training=bool(
@@ -2986,6 +2992,7 @@ def _training_result_info(
         model_name=row.model_name,
         architecture=row.architecture,
         pipeline_variant=_job_pipeline_variant(job),
+        started_by=(job.config or {}).get(TRAINING_STARTED_BY_CONFIG_KEY) if job is not None else None,
         validation_fold=_job_validation_fold(job),
         is_primary=is_primary,
         can_continue_training=can_continue_training(row, job),

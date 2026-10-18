@@ -14999,6 +14999,18 @@
             "type": "string",
             "title": "Architecture"
           },
+          "started_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Автор запуска",
+            "description": "Канонический логин запустившего этот этап обучения; null, если не сохранён."
+          },
           "pipeline_variant": {
             "type": "string",
             "enum": [

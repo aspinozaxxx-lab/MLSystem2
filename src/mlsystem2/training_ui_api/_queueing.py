@@ -15,6 +15,7 @@ from .contracts import JobSource, JobStatus, JobType
 DATASET_EDITOR_PSEUDO_OPERATION = "dataset_editor_scene_pseudo"
 TEST_SAMPLE_F1_OPERATION = "test_sample_f1"
 TEST_F1_PRIORITY_CONFIG_KEY = "ui.test_f1_priority"
+TRAINING_STARTED_BY_CONFIG_KEY = "ui.started_by"
 POST_TRAINING_INFERENCE_CONFIG_KEY = "ui.run_inference_after_training"
 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY = "ui.post_training_inference_job_ids"
 SECONDARY_PRIORITY_CONFIG_KEY = "ui.secondary_priority"
