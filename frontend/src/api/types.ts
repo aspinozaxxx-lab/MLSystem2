@@ -1,5 +1,7 @@
 import type { components } from "./schema";
 
+export type TrainingResultCommentInfo = components["schemas"]["TrainingResultCommentInfo"];
+
 export type UsageConfig = components["schemas"]["UsageConfig"];
 
 export type PseudoMarkupViewInfo = components["schemas"]["PseudoMarkupViewInfo"];

@@ -5097,6 +5097,137 @@
         }
       }
     },
+    "/api/v1/results/training/{result_id}/comment": {
+      "get": {
+        "summary": "Получить комментарий к обучению",
+        "operationId": "get_comment_api_v1_results_training__result_id__comment_get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingResultCommentInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Сохранить комментарий к обучению",
+        "operationId": "put_comment_api_v1_results_training__result_id__comment_put",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrainingResultCommentUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingResultCommentInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/results/training/{result_id}/archive": {
+      "post": {
+        "summary": "Перенести обучение в скрытый архив",
+        "operationId": "post_archive_api_v1_results_training__result_id__archive_post",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrainingResultArchiveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/results/training/{result_id}/test-f1": {
       "post": {
         "summary": "Post Training Test F1",
@@ -9543,6 +9674,17 @@
             "$ref": "#/components/schemas/JobSource",
             "default": "manual"
           },
+          "started_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By"
+          },
           "status": {
             "$ref": "#/components/schemas/JobStatus"
           },
@@ -9832,6 +9974,17 @@
           "source": {
             "$ref": "#/components/schemas/JobSource",
             "default": "manual"
+          },
+          "started_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By"
           },
           "status": {
             "$ref": "#/components/schemas/JobStatus"
@@ -14889,6 +15042,21 @@
         ],
         "title": "TrainingJobCreate"
       },
+      "TrainingResultArchiveRequest": {
+        "properties": {
+          "confirmed": {
+            "type": "boolean",
+            "const": true,
+            "title": "Подтверждение удаления в скрытый архив"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "confirmed"
+        ],
+        "title": "TrainingResultArchiveRequest"
+      },
       "TrainingResultBatchExportRequest": {
         "properties": {
           "items": {
@@ -14902,6 +15070,48 @@
         "additionalProperties": false,
         "type": "object",
         "title": "TrainingResultBatchExportRequest"
+      },
+      "TrainingResultCommentInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "comment": {
+            "type": "string",
+            "title": "Comment",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "TrainingResultCommentInfo"
+      },
+      "TrainingResultCommentUpdate": {
+        "properties": {
+          "comment": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^[^\\x00]*$",
+            "title": "Комментарий"
+          },
+          "expected_comment": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Комментарий до редактирования"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "comment",
+          "expected_comment"
+        ],
+        "title": "TrainingResultCommentUpdate"
       },
       "TrainingResultExportItem": {
         "properties": {
@@ -15010,6 +15220,23 @@
             ],
             "title": "Автор запуска",
             "description": "Канонический логин запустившего этот этап обучения; null, если не сохранён."
+          },
+          "dataset_number": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Постоянный номер сети в датасете"
+          },
+          "comment": {
+            "type": "string",
+            "title": "Комментарий к этому этапу обучения",
+            "default": ""
           },
           "pipeline_variant": {
             "type": "string",

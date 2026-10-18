@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Iterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 
 from fastapi import FastAPI, Request, status
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -43,6 +43,7 @@ from ._test_samples import (
 )
 from ._worker import run_queue_worker
 from ._usage import action_for_request, metrica_user_id
+from ._queueing import track_manual_job_author
 from .contracts import PseudolabelAPIError, TrainingUIAPIError
 
 
@@ -130,8 +131,12 @@ def create_app() -> FastAPI:
     if config.database_url.startswith("sqlite"):
         Base.metadata.create_all(session_factory.kw["bind"])
 
-    def get_db() -> Iterator[Session]:
-        yield from session_scope(session_factory)
+    def get_db(request: Request) -> Iterator[Session]:
+        principal = current_principal(request, config)
+        with contextmanager(session_scope)(session_factory) as session:
+            if principal is not None:
+                track_manual_job_author(session, principal.username)
+            yield session
 
     def authenticated(request: Request) -> str:
         return require_user(request, config)

@@ -50,7 +50,7 @@ def store_test_f1_view(
 
 def _result(session: Session, result_id: uuid.UUID) -> TrainingResultRow:
     result = session.get(TrainingResultRow, result_id)
-    if result is None or result.status != "ok":
+    if result is None or result.archived_at is not None or result.status != "ok":
         raise TrainingUIAPIError("Успешная сеть для просмотра тестового F1 не найдена.")
     return result
 
@@ -238,7 +238,7 @@ def test_f1_view(session: Session, config: TrainingUIAPIConfig, result_id: uuid.
 def prepare_test_f1_view(session: Session, config: TrainingUIAPIConfig, result_id: uuid.UUID) -> TestF1ViewInfo:
     # Блокировка сети делает два одновременных нажатия одним заданием.
     result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.id == result_id).with_for_update())
-    if result is None or result.status != "ok":
+    if result is None or result.archived_at is not None or result.status != "ok":
         raise TrainingUIAPIError("Успешная сеть для просмотра тестового F1 не найдена.")
     view = test_f1_view(session, config, result_id)
     if view.status not in {"queued", "running"} and view.status != "ready":

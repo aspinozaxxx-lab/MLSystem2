@@ -2786,7 +2786,7 @@ def test_sample_source_training_result(
 
     if row.source_training_result_id is not None:
         result = session.get(TrainingResultRow, row.source_training_result_id)
-        if result is not None and result.status == "ok":
+        if result is not None and result.status == "ok" and result.archived_at is None:
             return result
         return None
     return dataset_training_result(session, row.dataset_key)
@@ -3594,6 +3594,7 @@ def queue_dataset_test_f1_all(
                 | (TrainingResultRow.class_key == dataset_key)
             ),
             TrainingResultRow.status == "ok",
+            TrainingResultRow.archived_at.is_(None),
         )
         .order_by(
             TrainingResultRow.trained_at.desc().nullslast(),
@@ -3700,7 +3701,7 @@ def reconcile_training_result_test_f1(
 ) -> int:
     """Сверяет актуальность сохранённых оценок, не создавая заданий."""
 
-    conditions = [TrainingResultRow.status == "ok"]
+    conditions = [TrainingResultRow.status == "ok", TrainingResultRow.archived_at.is_(None)]
     if dataset_keys is not None:
         if not dataset_keys:
             return 0
@@ -3787,7 +3788,7 @@ def queue_training_result_test_f1(
 ) -> bool:
     """Создаёт задание F1 для одной сети, если её оценка неактуальна."""
 
-    if result.status != "ok":
+    if result.status != "ok" or result.archived_at is not None:
         return False
     plan = _training_result_test_plan(session, result)
     metric = session.get(TrainingResultTestMetricRow, result.id)

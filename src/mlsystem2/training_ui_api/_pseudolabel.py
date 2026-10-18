@@ -393,6 +393,8 @@ def _select_model(
         session.get(TrainingResultRow, preferred_training_result_id)
         if preferred_training_result_id is not None else None
     )
+    if preferred_result is not None and preferred_result.archived_at is not None:
+        preferred_result = None
     model_dataset_key = (
         (preferred_result.dataset_key or preferred_result.class_key) if preferred_result is not None
         else class_info.primary_dataset_key

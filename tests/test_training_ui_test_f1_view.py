@@ -185,7 +185,7 @@ def test_legacy_view_preparation_and_metric_switch_never_enqueue_inference(tmp_p
     scene = save_test_f1_scene(root, {}, {"index": 1, "image_path": str(image_path), "test_sample_id": str(sample_id)},
                                truth, truth, {"true_positive": 8})
     scene["public_id"] = "saved_tile-1"
-    result = SimpleNamespace(id=result_id, status="ok", model_name="Проверка", class_display_name="Датасет")
+    result = SimpleNamespace(id=result_id, status="ok", archived_at=None, model_name="Проверка", class_display_name="Датасет")
     sample = SimpleNamespace(content_revision=1)
     session = SimpleNamespace(scalar=lambda *_: result,
                               get=lambda model, key: result if model is TrainingResultRow else sample if model is TestSampleRow else None)

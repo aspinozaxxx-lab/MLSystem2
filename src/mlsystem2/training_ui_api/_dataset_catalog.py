@@ -271,6 +271,7 @@ def successful_training_results(
                 | (TrainingResultRow.class_key == class_or_dataset_key)
             ),
             TrainingResultRow.status == "ok",
+            TrainingResultRow.archived_at.is_(None),
         )
         .order_by(
             TrainingResultRow.trained_at.desc().nullslast(),
@@ -292,7 +293,7 @@ def primary_training_result(
     class_row = dataset_class_row(session, class_or_dataset_key)
     if class_row is not None and class_row.primary_training_result_id is not None:
         selected = session.get(TrainingResultRow, class_row.primary_training_result_id)
-        if selected is not None and selected.status == "ok":
+        if selected is not None and selected.archived_at is None and selected.status == "ok":
             return selected
     return next(
         iter(successful_training_results(session, class_or_dataset_key, limit=1)),
@@ -311,6 +312,7 @@ def dataset_training_result(
         selected = session.get(TrainingResultRow, class_row.primary_training_result_id)
         if (
             selected is not None
+            and selected.archived_at is None
             and selected.status == "ok"
             and (selected.dataset_key or selected.class_key) == dataset_key
         ):
@@ -323,6 +325,7 @@ def dataset_training_result(
                 | (TrainingResultRow.dataset_key.is_(None) & (TrainingResultRow.class_key == dataset_key))
             ),
             TrainingResultRow.status == "ok",
+            TrainingResultRow.archived_at.is_(None),
         )
         .order_by(
             TrainingResultRow.trained_at.desc().nullslast(),

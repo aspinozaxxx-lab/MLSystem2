@@ -83,6 +83,7 @@ from ._pseudolabel import PSEUDOLABEL_AOI_OPERATION
 from ._queueing import (
     DATASET_EDITOR_PSEUDO_OPERATION,
     POST_TRAINING_INFERENCE_CONFIG_KEY,
+    TRAINING_STARTED_BY_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     SECONDARY_PRIORITY_CONFIG_KEY,
     dispatch_sort_key,
@@ -1770,6 +1771,7 @@ def _queue_post_training_inference(
                     scenes_bytes=scenes_bytes,
                     config=config,
                     secondary_priority=bool(job_config.get(SECONDARY_PRIORITY_CONFIG_KEY, False)),
+                    started_by=job_config.get(TRAINING_STARTED_BY_CONFIG_KEY),
                 )
             queued_job_ids.append(str(detail.id))
         except Exception:  # noqa: BLE001

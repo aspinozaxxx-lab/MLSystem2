@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from ._models import JobRow
@@ -53,6 +53,15 @@ _ACTIVE_JOB_STATUSES = {
     JobStatus.RUNNING.value,
     JobStatus.PAUSED.value,
 }
+
+
+def track_manual_job_author(session: Session, username: str) -> None:
+    """Фиксировать автора только новых ручных заданий текущего HTTP-запроса."""
+    @event.listens_for(session, "before_flush")
+    def assign_author(db, _context, _instances):
+        for row in db.new:
+            if isinstance(row, JobRow) and row.source in {None, JobSource.MANUAL.value}:
+                row.config = {**(row.config or {}), TRAINING_STARTED_BY_CONFIG_KEY: username}
 
 
 def job_priority(row: _QueueRow) -> int:

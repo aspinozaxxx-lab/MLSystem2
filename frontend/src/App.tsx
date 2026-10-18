@@ -85,6 +85,7 @@ import type {
 import { TrainingContinuationForm } from "./TrainingContinuationForm";
 import { PseudoComparisonProvider, PseudoComparisonTray, PseudoCompareButton } from "./PseudoComparisonSelection";
 import { pseudoCheckpointLabel, trainingAuthorLabel, trainingResultFamilies } from "./utils/trainingResults";
+import { TrainingResultComment } from "./TrainingResultComment";
 import {
   defaultTrainingZipModelName,
   displayStoredFileName,
@@ -3306,6 +3307,27 @@ function DatasetResultsPanel({
     });
   };
 
+  const archiveResult = (result: TrainingResultInfo) => {
+    showModal({
+      title: `Удалить обучение${result.dataset_number ? ` #${result.dataset_number}` : ""}?`,
+      body: <>
+        <p>{payload.dataset_name} · {trainingModelLabel(result.model_name, result.pipeline_variant)}</p>
+        <p>Сеть и её псевдоразметки исчезнут из результатов и выбора сетей. Веса, метрики и комментарий сохранятся в скрытом архиве. В интерфейсе архив недоступен; при необходимости восстановление выполняется на сервере.</p>
+        <p>Другие этапы обучения останутся. Если эта сеть использовалась по умолчанию, система выберет другую доступную сеть по обычным правилам.</p>
+      </>,
+      footer: <>
+        <button className="secondary" type="button" onClick={closeModal}>Отмена</button>
+        <button className="danger" type="button" onClick={async () => {
+          const archived = await run(async () => {
+            await apiJson(`/results/training/${result.id}/archive`, { method: "POST", body: { confirmed: true } });
+            return true;
+          });
+          if (archived) { closeModal(); await reloadAfterChange(); }
+        }}><Trash2 size={16} />Подтверждаю удаление</button>
+      </>,
+    });
+  };
+
   const recalculateTestF1 = async () => {
     if (recalculatingTestF1) return;
     setRecalculatingTestF1(true);
@@ -3378,6 +3400,10 @@ function DatasetResultsPanel({
           onContinue={(result) => void showContinuation(result)}
           onPrimary={(result) => void togglePrimaryResult(result)}
           onDeletePseudo={deletePseudo}
+          onArchive={archiveResult}
+          onCommentSaved={(id, comment) => setPayload(current => current ? {
+            ...current, results: current.results.map(result => result.id === id ? { ...result, comment } : result),
+          } : current)}
           showJobLog={showJobLog}
           onF1Queued={reloadAfterChange}
         />
@@ -3624,7 +3650,7 @@ function CreateTemplateForm({
   );
 }
 
-function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: JobSummary, action: "move-up" | "move-down" | "delete") => void }) {
+export function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: JobSummary, action: "move-up" | "move-down" | "delete") => void }) {
   if (!jobs.length) return <div className="empty-state">Очередь пуста</div>;
   return (
     <div className="table-wrap">
@@ -3636,6 +3662,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
             <th>Тип</th>
             <th>Датасет</th>
             <th>Модель</th>
+            <th>Автор</th>
             <th>Создано</th>
             <th>Действия</th>
           </tr>
@@ -3657,6 +3684,7 @@ function QueueTable({ jobs, onAction }: { jobs: JobSummary[]; onAction: (job: Jo
               </td>
               <td data-label="Датасет">{queueDatasetCell(job)}</td>
               <td data-label="Модель">{queueModelCell(job)}</td>
+              <td data-label="Автор">{job.source === "automation" ? "Автоматизация" : job.started_by || "Не указан"}</td>
               <td className="technical-value" data-label="Создано">{formatDateTime(job.created_at)}</td>
               <td>
                 <div className="inline-row" onClick={(event) => event.stopPropagation()}>
@@ -3804,6 +3832,8 @@ export function ResultsTable({
   onContinue,
   onPrimary,
   onDeletePseudo,
+  onArchive,
+  onCommentSaved,
   showJobLog,
   onF1Queued,
 }: {
@@ -3815,6 +3845,8 @@ export function ResultsTable({
   onContinue: (result: TrainingResultInfo) => void;
   onPrimary: (result: TrainingResultInfo) => void;
   onDeletePseudo: (item: PseudoMarkupResultInfo) => void;
+  onArchive?: (result: TrainingResultInfo) => void;
+  onCommentSaved?: (id: string, comment: string) => void;
   showJobLog: (jobId: string) => Promise<void>;
   onF1Queued: () => Promise<void>;
 }) {
@@ -3864,9 +3896,10 @@ export function ResultsTable({
                             <Star className={result.is_primary ? "primary-star" : undefined} size={17} fill={result.is_primary ? "currentColor" : "none"} />
                           </button>
                         ) : null}
-                        <span className="training-model-name">{trainingModelLabel(result.model_name, result.pipeline_variant)}</span>
+                        <span className="training-model-name">{result.dataset_number ? `#${result.dataset_number} ` : ""}{trainingModelLabel(result.model_name, result.pipeline_variant)}</span>
                       </strong>
                       <small className="muted">{trainingAuthorLabel(result)}</small>
+                      <TrainingResultComment resultId={result.id} comment={result.comment} onSaved={comment => onCommentSaved?.(result.id, comment)} />
                       {family.stages.length > 1 ? <small className="training-stage-label">Этап {stageIndex + 1}{!result.continued_from_result_id ? " · исходная сеть" : ""}</small> : null}
                       {result.continued_from_result_id ? <small className="muted">{family.stages.some(stage => stage.id === result.continued_from_result_id) ? `От этапа ${family.stages.findIndex(stage => stage.id === result.continued_from_result_id) + 1}` : "Продолжение"} · {result.continued_from_checkpoint === "last" ? "последние веса" : `лучшие веса${result.continued_from_epoch != null ? ` эпохи ${result.continued_from_epoch}` : ""}`}</small> : null}
                       {result.continued_from_result_id ? <small className="muted">{result.continued_from_dataset_source === "current" ? "Актуальный состав датасета" : "Прежний состав датасета"}</small> : null}
@@ -3914,6 +3947,9 @@ export function ResultsTable({
                   <td className="technical-value" title="Эпоха лучших весов этого этапа" data-label="Эпоха этапа">{result.epoch ?? "—"}</td>
                   <td className="technical-value" title="Создано" data-label="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
                   <td className="action-cell">
+                    {onArchive && !isActiveStatus(result.status) ? <button className="danger icon-button" type="button"
+                      title="Удалить обучение в скрытый архив" aria-label={`Удалить обучение${result.dataset_number ? ` #${result.dataset_number}` : ""}`}
+                      onClick={() => onArchive(result)}><Trash2 size={15} /></button> : null}
                     {result.status === "ok" ? (
                       <>
                         {result.can_continue_training ? <button className="secondary icon-button" type="button" title="Продолжить обучение от выбранного чекпойнта" aria-label={`Продолжить обучение сети ${result.model_name}`} onClick={() => onContinue(result)}><Play size={15} /></button> : null}

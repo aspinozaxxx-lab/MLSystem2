@@ -45,6 +45,8 @@ from mlsystem2.training_ui_api.contracts import (
 )
 
 from .common import RouteContext
+from mlsystem2.training_ui_api._result_metadata import archive_training_result, result_comment, update_result_comment
+from mlsystem2.training_ui_api.contracts import TrainingResultArchiveRequest, TrainingResultCommentInfo, TrainingResultCommentUpdate
 from mlsystem2.training_ui_api._pseudo_viewer import pseudo_markup_footprint, pseudo_markup_raster, pseudo_markup_view
 from mlsystem2.training_ui_api._pseudo_comparison import _ComparisonCancelled, pseudo_comparison_counts, pseudo_comparison_layers
 from mlsystem2.training_ui_api._raster_http import raster_response, raster_revision
@@ -97,10 +99,25 @@ def _accepts_gzip(value: str) -> bool:
 
 
 def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
+    @app.get("/api/v1/results/training/{result_id}/comment", response_model=TrainingResultCommentInfo, summary="Получить комментарий к обучению")
+    def get_comment(result_id: uuid.UUID, db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)):
+        return result_comment(db, result_id)
+
+    @app.put("/api/v1/results/training/{result_id}/comment", response_model=TrainingResultCommentInfo, summary="Сохранить комментарий к обучению")
+    def put_comment(result_id: uuid.UUID, request: TrainingResultCommentUpdate,
+                    db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)):
+        return update_result_comment(db, result_id, request)
+
+    @app.post("/api/v1/results/training/{result_id}/archive", status_code=204, summary="Перенести обучение в скрытый архив")
+    def post_archive(result_id: uuid.UUID, request: TrainingResultArchiveRequest,
+                     db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        archive_training_result(db, result_id, username)
+        return Response(status_code=204)
+
     @app.post("/api/v1/results/training/{result_id}/test-f1", response_model=TrainingResultTestF1Info | None)
     def post_training_test_f1(result_id: uuid.UUID, db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)):
         row = db.scalar(select(TrainingResultRow).where(TrainingResultRow.id == result_id).with_for_update())
-        if row is None:
+        if row is None or row.archived_at is not None:
             raise HTTPException(404, "Результат обучения не найден.")
         if row.status != "ok":
             raise HTTPException(400, "F1 доступен только для успешно обученной сети.")

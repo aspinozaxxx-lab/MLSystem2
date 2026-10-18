@@ -226,6 +226,26 @@ class TestF1ViewInfo(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class TrainingResultCommentInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    comment: str = ""
+
+
+class TrainingResultCommentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    comment: str = Field(max_length=2000, pattern=r"^[^\x00]*$", title="Комментарий")
+    expected_comment: str = Field(max_length=2000, title="Комментарий до редактирования")
+
+
+class TrainingResultArchiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed: Literal[True] = Field(title="Подтверждение удаления в скрытый архив")
+
+
 class TrainingResultInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -237,6 +257,8 @@ class TrainingResultInfo(BaseModel):
     model_name: str
     architecture: str
     started_by: str | None = Field(default=None, title="Автор запуска", description="Канонический логин запустившего этот этап обучения; null, если не сохранён.")
+    dataset_number: int | None = Field(default=None, ge=1, title="Постоянный номер сети в датасете")
+    comment: str = Field(default="", title="Комментарий к этому этапу обучения")
     pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"] = "legacy"
     validation_fold: int = Field(default=0, ge=0)
     is_primary: bool = False
@@ -415,6 +437,9 @@ __all__ = [
     "TrainingResultBatchExportRequest",
     "TrainingResultExportItem",
     "TrainingResultInfo",
+    "TrainingResultCommentInfo",
+    "TrainingResultCommentUpdate",
+    "TrainingResultArchiveRequest",
     "TrainingResultTestF1Info",
     "TestF1ScoreInfo",
     "TestF1SceneInfo",

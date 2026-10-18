@@ -7,6 +7,7 @@ import type { TrainingResultInfo } from "./api/types";
 import { newsArticles } from "./News";
 
 const result: TrainingResultInfo = {
+  comment: "",
   id: "учебная-сеть", model_name: "SegFormer B0", architecture: "smp_segformer_b0", input_channels: 4,
   created_at: "2026-10-15T09:00:00Z", source: "manual", status: "ok", pipeline_variant: "next_gen2",
   quality_metric: "pixel", validation_fold: 0, is_primary: false, can_continue_training: true, task: "binary",

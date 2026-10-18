@@ -218,8 +218,12 @@ def test_training_author_comes_from_session_not_request(saved_training, monkeypa
         })
         assert response.status_code == 200, response.text
         job_id = response.json()["id"]
+        assert response.json()["started_by"] == author
+        queue = client.get("/api/v1/queues").json()["jobs"]
+        assert next(item for item in queue if item["id"] == job_id)["started_by"] == author
         assert TRAINING_STARTED_BY_CONFIG_KEY not in response.json()["config"]
         rows = client.get("/api/v1/results/datasets/образец").json()["results"]
+        assert next(item for item in rows if item["job_id"] == job_id)["dataset_number"] == 1
         assert next(item for item in rows if item["job_id"] == job_id)["started_by"] == author
         assert next(item for item in rows if item["id"] == str(env.result_id))["started_by"] is None
         with env.factory() as session:

@@ -483,8 +483,18 @@ class JobRow(Base):
     automation_rule: Mapped[AutomationRuleRow | None] = relationship()
 
 
+class TrainingResultCounterRow(Base):
+    __tablename__ = "training_result_counters"
+
+    dataset_key: Mapped[str] = mapped_column(String(180), primary_key=True)
+    last_number: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class TrainingResultRow(Base):
     __tablename__ = "training_results"
+    __table_args__ = (
+        Index("uq_training_results_dataset_number", "class_key", "dataset_number", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     source: Mapped[str] = mapped_column(String(32), default="manual", index=True)
@@ -499,6 +509,10 @@ class TrainingResultRow(Base):
     class_display_name: Mapped[str] = mapped_column(String(240))
     architecture: Mapped[str] = mapped_column(String(96))
     model_name: Mapped[str] = mapped_column(String(160))
+    dataset_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comment: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_by: Mapped[str | None] = mapped_column(String(180), nullable=True)
     quality_metric: Mapped[str] = mapped_column(String(32), default="pixel")
     task: Mapped[str] = mapped_column(String(32), default="binary")
     class_schema: Mapped[list[dict[str, Any]]] = mapped_column(_json_type(), default=list)

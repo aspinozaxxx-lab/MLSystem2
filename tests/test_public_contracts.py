@@ -106,11 +106,29 @@ def test_inference_template_imagery_and_class_contract(monkeypatch) -> None:
     assert schema["components"]["schemas"]["ImageryType"]["enum"] == ["kanopus", "ortho"]
 
 
+def test_training_result_metadata_contract(monkeypatch) -> None:
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import TrainingResultInfo, TrainingResultCommentUpdate, TrainingResultArchiveRequest
+
+    assert TrainingResultInfo.model_fields["comment"].default == ""
+    assert TrainingResultInfo.model_fields["dataset_number"].default is None
+    assert TrainingResultCommentUpdate.model_fields["expected_comment"].is_required()
+    assert TrainingResultArchiveRequest.model_fields["confirmed"].is_required()
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    paths = get_openapi_schema()["paths"]
+    assert {"get", "put"} <= paths["/api/v1/results/training/{result_id}/comment"].keys()
+    assert "post" in paths["/api/v1/results/training/{result_id}/archive"]
+    assert not any("restore" in path and "training" in path for path in paths)
+
+
 def test_training_result_author_contract(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
-    from mlsystem2.training_ui_api.contracts import TrainingResultInfo
+    from mlsystem2.training_ui_api.contracts import JobSummary, JobDetail, TrainingResultInfo
 
     assert TrainingResultInfo.model_fields["started_by"].default is None
+    assert JobSummary.model_fields["started_by"].default is None
+    assert JobDetail.model_fields["started_by"].default is None
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     schema = get_openapi_schema()["components"]["schemas"]

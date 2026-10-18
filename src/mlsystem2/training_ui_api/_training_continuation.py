@@ -22,6 +22,7 @@ from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import find_managed_dataset
 from ._markup_lock import markup_read_lock
 from ._models import JobRow, TrainingResultRow
+from ._result_metadata import next_result_number
 from ._template_selection import effective_inference_template_row
 from ._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY,
@@ -56,6 +57,7 @@ _OPTION_KEYS = {
 def can_continue_training(result: TrainingResultRow, job: JobRow | None) -> bool:
     return bool(
         result.status == ResultStatus.OK.value
+        and result.archived_at is None
         and result.mlflow_run_id
         and job is not None
         and job.type == JobType.TRAINING.value
@@ -67,7 +69,7 @@ def can_continue_training(result: TrainingResultRow, job: JobRow | None) -> bool
 def _source(session: Session, result_id: uuid.UUID) -> tuple[TrainingResultRow, JobRow]:
     result = session.get(TrainingResultRow, result_id)
     job = session.get(JobRow, result.job_id) if result is not None and result.job_id else None
-    if result is None:
+    if result is None or result.archived_at is not None:
         raise TrainingUIAPIError("Результат обучения не найден.")
     if not can_continue_training(result, job):
         raise TrainingUIAPIError("Продолжение доступно для завершённого обучения с сохранёнными параметрами и лучшими весами.")
@@ -191,6 +193,7 @@ def create_continuation_job(
     session.add(row)
     session.flush()
     session.add(TrainingResultRow(
+        dataset_number=next_result_number(session, result.class_key),
         source=JobSource.MANUAL.value, dataset_key=current.key if current else result.dataset_key,
         dataset_version=current.version if current else result.dataset_version, class_key=result.class_key,
         class_display_name=result.class_display_name, architecture=result.architecture,

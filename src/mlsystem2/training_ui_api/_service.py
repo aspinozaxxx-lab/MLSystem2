@@ -93,6 +93,7 @@ from ._models import (
     TrainingTemplateRow,
 )
 from ._processes import terminate_job_process
+from ._result_metadata import next_result_number
 from ._pseudo_viewer import pseudo_checkpoint_details
 from ._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY,
@@ -397,6 +398,7 @@ def _result_card_training_results(
                 | TrainingResultRow.class_key.in_(ordered_dataset_keys)
             ),
             TrainingResultRow.status == ResultStatus.OK.value,
+            TrainingResultRow.archived_at.is_(None),
         )
         .order_by(
             TrainingResultRow.trained_at.desc().nullslast(),
@@ -421,7 +423,7 @@ def _result_card_training_results(
     if class_row is None or class_row.primary_training_result_id is None:
         return selected, last_training_time
     primary = session.get(TrainingResultRow, class_row.primary_training_result_id)
-    if primary is None or primary.status != ResultStatus.OK.value:
+    if primary is None or primary.archived_at is not None or primary.status != ResultStatus.OK.value:
         return selected, last_training_time
     primary_dataset_key = _training_result_dataset_key(primary, active_dataset_keys)
     if primary_dataset_key is not None:
@@ -960,6 +962,7 @@ def create_training_job(
     session.flush()
     session.add(
         TrainingResultRow(
+            dataset_number=next_result_number(session, request.dataset_key),
             source=JobSource.MANUAL.value,
             dataset_key=request.dataset_key,
             dataset_version=dataset.version,
@@ -1062,7 +1065,7 @@ def set_queue_enabled(
 
 def job_detail(session: Session, job_id: uuid.UUID) -> JobDetail:
     row = session.get(JobRow, job_id)
-    if row is None:
+    if row is None or _archived_result_job(session, job_id):
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
     return _job_detail(session, row)
 
@@ -1073,7 +1076,7 @@ def job_log(
     config: TrainingUIAPIConfig,
 ) -> JobLogInfo:
     row = session.get(JobRow, job_id)
-    if row is None:
+    if row is None or _archived_result_job(session, job_id):
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
     run_dir = _job_run_dir(row, config)
     if run_dir is not None:
@@ -1117,7 +1120,7 @@ def delete_job(
     preserve_cancelled: bool = False,
 ) -> JobDetail:
     row = session.get(JobRow, job_id)
-    if row is None:
+    if row is None or _archived_result_job(session, job_id):
         raise TrainingUIAPIError(f"Задание не найдено: {job_id}")
     if row.source == JobSource.AUTOMATION.value:
         raise TrainingUIAPIError(
@@ -1222,8 +1225,9 @@ def dataset_results(
         .where(
             TrainingResultRow.class_key == dataset_key,
             TrainingResultRow.status != ResultStatus.CANCELLED.value,
+            TrainingResultRow.archived_at.is_(None),
         )
-        .order_by(TrainingResultRow.created_at.desc())
+        .order_by(TrainingResultRow.dataset_number.desc().nullslast(), TrainingResultRow.created_at.desc(), TrainingResultRow.id.desc())
     ).all()
     pseudo_by_training_id = _class_pseudo_results(session, [row.id for row in rows])
     job_rows = _result_jobs(
@@ -1337,7 +1341,7 @@ def set_primary_training_result(
     """Назначить успешный результат основной сетью его класса."""
 
     row = session.get(TrainingResultRow, result_id)
-    if row is None:
+    if row is None or row.archived_at is not None:
         raise TrainingUIAPIError(f"Результат обучения не найден: {result_id}")
     if row.status != ResultStatus.OK.value:
         raise TrainingUIAPIError("Основной можно назначить только успешно обученную сеть.")
@@ -1371,7 +1375,7 @@ def clear_primary_training_result(
     """Снять явную отметку основной сети и включить выбор последней успешной."""
 
     row = session.get(TrainingResultRow, result_id)
-    if row is None:
+    if row is None or row.archived_at is not None:
         raise TrainingUIAPIError(f"Результат обучения не найден: {result_id}")
     class_row = dataset_class_row(session, row.dataset_key or row.class_key)
     if class_row is None:
@@ -1428,10 +1432,11 @@ def result_changes(
         _job_change_info(session, row, datasets_by_key) for row in _queue_rows(session)
         if class_key is None or _job_dataset_key(row) in dataset_keys
     ]
-    training_query = select(TrainingResultRow).order_by(TrainingResultRow.updated_at.desc())
+    training_query = select(TrainingResultRow).where(TrainingResultRow.archived_at.is_(None)).order_by(TrainingResultRow.updated_at.desc())
     pseudo_query = (
         select(PseudoMarkupResultRow)
         .where(PseudoMarkupResultRow.status == ResultStatus.OK.value)
+        .where(~PseudoMarkupResultRow.training_result.has(TrainingResultRow.archived_at.is_not(None)))
         .order_by(PseudoMarkupResultRow.updated_at.desc())
     )
     if class_key is None:
@@ -1595,6 +1600,7 @@ def create_pseudo_markup_job(
     config: TrainingUIAPIConfig,
     secondary_priority: bool = False,
     checkpoint: Literal["best", "last"] = "best",
+    started_by: str | None = None,
 ) -> JobDetail:
     if checkpoint not in {"best", "last"}:
         raise TrainingUIAPIError("Выберите лучший или последний чекпойнт.")
@@ -1756,6 +1762,7 @@ def create_pseudo_markup_job(
             "inference_template_config": inference_template_config,
             SECONDARY_PRIORITY_CONFIG_KEY: secondary_priority,
             **checkpoint_config,
+            **({TRAINING_STARTED_BY_CONFIG_KEY: started_by} if started_by else {}),
         },
     )
     session.add(row)
@@ -1918,7 +1925,7 @@ def delete_pseudo_markup_result(
     config: TrainingUIAPIConfig,
 ) -> PseudoMarkupResultInfo:
     row = session.get(PseudoMarkupResultRow, result_id)
-    if row is None:
+    if row is None or (row.training_result is not None and row.training_result.archived_at is not None):
         raise TrainingUIAPIError(f"Результат псевдоразметки не найден: {result_id}")
     detail = _pseudo_markup_info(session, row)
     job = session.get(JobRow, row.job_id) if row.job_id is not None else None
@@ -2075,7 +2082,7 @@ def _validate_batch_export_uniqueness(request: TrainingResultBatchExportRequest)
 
 def _training_result_row_for_export(session: Session, result_id: uuid.UUID) -> TrainingResultRow:
     row = session.get(TrainingResultRow, result_id)
-    if row is None:
+    if row is None or row.archived_at is not None:
         raise TrainingUIAPIError(f"Результат обучения не найден: {result_id}")
     if row.status != ResultStatus.OK.value:
         raise TrainingUIAPIError("Экспорт доступен только для успешного результата обучения.")
@@ -2226,7 +2233,7 @@ def _resolve_training_result(
     if training_result_id is None:
         return None
     row = session.get(TrainingResultRow, training_result_id)
-    if row is None:
+    if row is None or row.archived_at is not None:
         raise TrainingUIAPIError(f"Результат обучения не найден: {training_result_id}")
     return row
 
@@ -2313,9 +2320,22 @@ def _best_training_checkpoint(
         return None
 
 
+def _archived_result_job(session: Session, job_id: uuid.UUID) -> bool:
+    return session.scalar(select(TrainingResultRow.id).where(
+        TrainingResultRow.archived_at.is_not(None), TrainingResultRow.job_id == job_id,
+    ).limit(1)) is not None or session.scalar(select(PseudoMarkupResultRow.id).where(
+        PseudoMarkupResultRow.job_id == job_id,
+        PseudoMarkupResultRow.training_result.has(TrainingResultRow.archived_at.is_not(None)),
+    ).limit(1)) is not None
+
+
 def stored_file(session: Session, file_id: uuid.UUID) -> StoredFileRow:
     row = session.get(StoredFileRow, file_id)
-    if row is None:
+    archived = session.scalar(select(PseudoMarkupResultRow.id).where(
+        PseudoMarkupResultRow.geojson_file_id == file_id,
+        PseudoMarkupResultRow.training_result.has(TrainingResultRow.archived_at.is_not(None)),
+    ).limit(1)) is not None
+    if row is None or archived:
         raise TrainingUIAPIError(f"Файл не найден: {file_id}")
     return row
 
@@ -2513,6 +2533,8 @@ def _stop_process_and_cleanup(row: JobRow) -> None:
 
 
 def _delete_job_rows(session: Session, row: JobRow) -> None:
+    if _archived_result_job(session, row.id):
+        return
     if _job_purpose(row) == "test_sample_f1":
         metric = session.scalar(
             select(TrainingResultTestMetricRow).where(TrainingResultTestMetricRow.job_id == row.id)
@@ -2557,6 +2579,7 @@ def _delete_cancelled_results_for_class(session: Session, class_key: str) -> Non
         select(TrainingResultRow).where(
             TrainingResultRow.class_key == class_key,
             TrainingResultRow.status == ResultStatus.CANCELLED.value,
+            TrainingResultRow.archived_at.is_(None),
         )
     ).all()
     training_result_ids = [item.id for item in training_results]
@@ -2564,6 +2587,7 @@ def _delete_cancelled_results_for_class(session: Session, class_key: str) -> Non
         select(PseudoMarkupResultRow).where(
             PseudoMarkupResultRow.class_key == class_key,
             PseudoMarkupResultRow.status == ResultStatus.CANCELLED.value,
+            ~PseudoMarkupResultRow.training_result.has(TrainingResultRow.archived_at.is_not(None)),
         )
     ).all():
         session.delete(result)
@@ -2690,6 +2714,7 @@ def _job_summary(session: Session, row: JobRow) -> JobSummary:
         type=JobType(row.type),
         purpose=_job_purpose(row),
         source=JobSource(row.source),
+        started_by=(row.config or {}).get(TRAINING_STARTED_BY_CONFIG_KEY),
         status=JobStatus(row.status),
         queue_position=row.queue_position,
         dataset_key=row.dataset_key,
@@ -2742,6 +2767,7 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
         type=JobType(row.type),
         purpose=_job_purpose(row),
         source=JobSource(row.source),
+        started_by=(row.config or {}).get(TRAINING_STARTED_BY_CONFIG_KEY),
         status=JobStatus(row.status),
         queue_position=row.queue_position,
         dataset_key=row.dataset_key,
@@ -2993,6 +3019,8 @@ def _training_result_info(
         architecture=row.architecture,
         pipeline_variant=_job_pipeline_variant(job),
         started_by=(job.config or {}).get(TRAINING_STARTED_BY_CONFIG_KEY) if job is not None else None,
+        dataset_number=row.dataset_number,
+        comment=row.comment,
         validation_fold=_job_validation_fold(job),
         is_primary=is_primary,
         can_continue_training=can_continue_training(row, job),

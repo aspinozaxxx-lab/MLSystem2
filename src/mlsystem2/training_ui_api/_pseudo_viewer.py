@@ -86,7 +86,8 @@ def pseudo_markup_raster(session: Session, config: TrainingUIAPIConfig, result_i
 
 def _ready_result(session: Session, result_id: uuid.UUID) -> PseudoMarkupResultRow:
     result = session.get(PseudoMarkupResultRow, result_id)
-    if result is None or result.status != "ok" or result.geojson_file is None:
+    if (result is None or result.status != "ok" or result.geojson_file is None
+        or (result.training_result is not None and result.training_result.archived_at is not None)):
         raise TrainingUIAPIError("Готовая псевдоразметка не найдена")
     if not Path(result.geojson_file.path).is_file():
         raise TrainingUIAPIError("Файл псевдоразметки больше недоступен")

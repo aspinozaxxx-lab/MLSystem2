@@ -986,7 +986,7 @@ def editor_pseudo_job_info(
     except (TypeError, ValueError) as exc:
         raise TrainingUIAPIError("Параметры задания псевдоразметки повреждены") from exc
     training_result = session.get(TrainingResultRow, training_result_id)
-    if training_result is None:
+    if training_result is None or training_result.archived_at is not None:
         return DatasetEditorPseudoMarkupInfo(
             status="unavailable",
             job_id=row.id,

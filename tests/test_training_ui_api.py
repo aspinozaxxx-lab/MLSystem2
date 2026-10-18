@@ -869,6 +869,7 @@ def test_successful_training_does_not_assign_primary_star(
             architecture="smp_segformer_b2",
             config={
                 "ui.run_inference_after_training": True,
+                "ui.started_by": "Alex",
                 "ui.secondary_priority": True,
             },
         )
@@ -898,6 +899,7 @@ def test_successful_training_does_not_assign_primary_star(
         assert post_training_inference_calls[0]["dataset_key"] == dataset.key
         assert post_training_inference_calls[0]["training_result_id"] == result.id
         assert post_training_inference_calls[0]["secondary_priority"] is True
+        assert post_training_inference_calls[0]["started_by"] == "Alex"
         assert job.config["ui.post_training_inference_job_ids"] == [
             "00000000-0000-0000-0000-000000000123"
         ]

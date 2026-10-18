@@ -3,6 +3,7 @@ import type { TrainingResultInfo } from "../api/types";
 import { pseudoCheckpointLabel, trainingAuthorLabel, trainingResultFamilies } from "./trainingResults";
 
 const result = (id: string, day: number, parent?: string): TrainingResultInfo => ({
+  comment: "",
   id, created_at: `2026-10-${String(day).padStart(2, "0")}T12:00:00Z`, model_name: "Сеть",
   architecture: "smp_unet_resnet34", status: "ok", continued_from_result_id: parent,
   source: "manual", pipeline_variant: "legacy", validation_fold: 0, is_primary: false,

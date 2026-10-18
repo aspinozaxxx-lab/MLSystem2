@@ -1843,6 +1843,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/training/{result_id}/comment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Получить комментарий к обучению */
+        get: operations["get_comment_api_v1_results_training__result_id__comment_get"];
+        /** Сохранить комментарий к обучению */
+        put: operations["put_comment_api_v1_results_training__result_id__comment_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/results/training/{result_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Перенести обучение в скрытый архив */
+        post: operations["post_archive_api_v1_results_training__result_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/training/{result_id}/test-f1": {
         parameters: {
             query?: never;
@@ -3386,6 +3421,8 @@ export interface components {
             purpose: "training" | "pseudo_markup" | "test_sample_f1";
             /** @default manual */
             source: components["schemas"]["JobSource"];
+            /** Started By */
+            started_by?: string | null;
             status: components["schemas"]["JobStatus"];
             /** Queue Position */
             queue_position: number;
@@ -3506,6 +3543,8 @@ export interface components {
             purpose: "training" | "pseudo_markup" | "test_sample_f1";
             /** @default manual */
             source: components["schemas"]["JobSource"];
+            /** Started By */
+            started_by?: string | null;
             status: components["schemas"]["JobStatus"];
             /** Queue Position */
             queue_position: number;
@@ -5395,10 +5434,38 @@ export interface components {
              */
             secondary_priority: boolean;
         };
+        /** TrainingResultArchiveRequest */
+        TrainingResultArchiveRequest: {
+            /**
+             * Подтверждение удаления в скрытый архив
+             * @constant
+             */
+            confirmed: true;
+        };
         /** TrainingResultBatchExportRequest */
         TrainingResultBatchExportRequest: {
             /** Items */
             items?: components["schemas"]["TrainingResultExportItem"][];
+        };
+        /** TrainingResultCommentInfo */
+        TrainingResultCommentInfo: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Comment
+             * @default
+             */
+            comment: string;
+        };
+        /** TrainingResultCommentUpdate */
+        TrainingResultCommentUpdate: {
+            /** Комментарий */
+            comment: string;
+            /** Комментарий до редактирования */
+            expected_comment: string;
         };
         /** TrainingResultExportItem */
         TrainingResultExportItem: {
@@ -5438,6 +5505,13 @@ export interface components {
              * @description Канонический логин запустившего этот этап обучения; null, если не сохранён.
              */
             started_by?: string | null;
+            /** Постоянный номер сети в датасете */
+            dataset_number?: number | null;
+            /**
+             * Комментарий к этому этапу обучения
+             * @default
+             */
+            comment: string;
             /**
              * Pipeline Variant
              * @default legacy
@@ -9588,6 +9662,105 @@ export interface operations {
                         [key: string]: unknown;
                     };
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_comment_api_v1_results_training__result_id__comment_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingResultCommentInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_comment_api_v1_results_training__result_id__comment_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrainingResultCommentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingResultCommentInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_archive_api_v1_results_training__result_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrainingResultArchiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

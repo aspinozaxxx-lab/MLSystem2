@@ -14,7 +14,7 @@ from mlsystem2.training_ui_api._config import TrainingUIAPIConfig
 @dataclass(frozen=True)
 class RouteContext:
     config: TrainingUIAPIConfig
-    get_db: Callable[[], Iterator[Session]]
+    get_db: Callable[[Request], Iterator[Session]]
     authenticated: Callable[[Request], str]
     pseudolabel_authenticated: Callable[[Request], str]
 

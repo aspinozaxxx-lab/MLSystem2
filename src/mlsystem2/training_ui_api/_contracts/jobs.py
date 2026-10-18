@@ -82,6 +82,7 @@ class JobSummary(BaseModel):
     type: JobType
     purpose: Literal["training", "pseudo_markup", "test_sample_f1"]
     source: JobSource = JobSource.MANUAL
+    started_by: str | None = None
     status: JobStatus
     queue_position: int
     dataset_key: str | None = None
@@ -120,6 +121,7 @@ class JobDetail(BaseModel):
     type: JobType
     purpose: Literal["training", "pseudo_markup", "test_sample_f1"]
     source: JobSource = JobSource.MANUAL
+    started_by: str | None = None
     status: JobStatus
     queue_position: int
     dataset_key: str | None = None

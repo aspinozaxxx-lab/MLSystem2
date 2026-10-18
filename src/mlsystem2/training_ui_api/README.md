@@ -102,6 +102,8 @@
 - `POST /api/v1/results/datasets/{dataset_key}/pseudo-markup`
 - `POST /api/v1/results/datasets/{dataset_key}/test-f1`
 - `POST /api/v1/results/training/{result_id}/triton-zip`
+- `GET|PUT /api/v1/results/training/{result_id}/comment` — общая заметка, защита от конкурентной перезаписи.
+- `POST /api/v1/results/training/{result_id}/archive` — скрытый архив с обязательным подтверждением; данные сохраняются.
 - `POST /api/v1/scene-list-export`
 - `POST /api/v1/markup-export`
 - `GET /api/v1/markup-export/{export_id}/tiles/{tile_index}/preview`
@@ -133,6 +135,13 @@
 - `GET /api/v1/files/{file_id}/download`
 
 OpenAPI доступен стандартно по `/openapi.json`.
+
+Результаты имеют постоянные номера внутри каждого датасета: старые получают номера по времени создания,
+новые — из атомарного счётчика. Архивирование не переиспользует номера. Под автором редактируется общая
+заметка; потеря фокуса сохраняет текст, конфликт или ошибка связи не уничтожает черновик в строке.
+Скрытый архив сохраняет веса, задания и метрики, но исключён из выбора сетей и просмотра результатов.
+Восстановление — только обслуживанием на сервере: проверить UUID и очистить `archived_at/archived_by`
+у `training_results`. Прежний номер сохраняется; основную сеть после восстановления назначают явно.
 
 `GET /api/v1/datasets` возвращает плоский список датасетов MLMarkup, а `GET /api/v1/classes` и
 `GET /api/v1/results/classes` — классы с вложенным списком `datasets`. Класс задаёт единый тип снимков:

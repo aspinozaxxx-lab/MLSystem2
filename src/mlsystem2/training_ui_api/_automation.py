@@ -16,6 +16,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ._result_metadata import next_result_number
+
 from mlsystem2.mlflow_adapter.api import (
     create_experiment,
     get_best_training_checkpoint,
@@ -339,6 +341,7 @@ def _ensure_training_for_rule(
     session.flush()
     session.add(
         TrainingResultRow(
+            dataset_number=next_result_number(session, dataset.key),
             source=JobSource.AUTOMATION.value,
             automation_rule_id=rule.id,
             dataset_key=dataset.key,
@@ -369,7 +372,7 @@ def _ensure_pseudo_markup_for_rule(
         architecture=rule.architecture,
         dataset_version=dataset.version,
     )
-    if training_result is None or training_result.status != ResultStatus.OK.value:
+    if training_result is None or training_result.archived_at is not None or training_result.status != ResultStatus.OK.value:
         return
     if training_result.mlflow_run_id is None:
         return

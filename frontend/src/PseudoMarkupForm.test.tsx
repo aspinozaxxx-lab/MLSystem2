@@ -16,6 +16,7 @@ vi.mock("react", async (importOriginal) => {
 });
 
 const result: TrainingResultInfo = {
+  comment: "",
   id: "сеть-28", model_name: "SegFormer B2", architecture: "smp_segformer_b2", input_channels: 3,
   epoch: 7, created_at: "2026-10-14T12:00:00Z", source: "manual", status: "ok", pipeline_variant: "object_f1_v2",
   quality_metric: "objects", validation_fold: 0, is_primary: false, can_continue_training: true, task: "binary",
