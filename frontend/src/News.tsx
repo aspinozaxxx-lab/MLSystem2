@@ -14,6 +14,13 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "mlflow-metric-descriptions",
+  date: "2026-10-19",
+  title: "Пояснения к метрикам MLflow",
+  updates: [
+    "В запусках обучения MLflow появился русский справочник каждой записанной метрики: что означает, зачем нужна, единицы и как читать. Откройте ссылку в Description или Artifacts → reports → metric_descriptions.html; внутри справочника наведение на название показывает подсказку. Числа, графики и правила выбора моделей не меняются.",
+  ],
+}, {
   slug: "next-gen4-disjoint-tiles",
   date: "2026-10-19",
   title: "Next-gen4: отдельные обучающие и проверочные тайлы",

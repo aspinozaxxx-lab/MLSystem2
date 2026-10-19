@@ -20,6 +20,7 @@
 - `log_run_config(run: MLflowRunRef, config_path: str | Path) -> None` - пишет YAML-конфиг запуска.
 - `log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None` - пишет перечисленные ниже loss, learning rate, pixel, optional object и threshold метрики одной эпохи и tag `quality_metric`.
 - `log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None` - пишет итоговые `train/epochs_total`, `train/training_time_sec`, `train/best_quality_f1`, `train/best_threshold_pixel_f1`.
+- `log_metric_descriptions(run: MLflowRunRef) -> None` — добавляет русский справочник уже записанных метрик, включая завершённые запуски; не пишет числовых метрик, не открывает запуск и не меняет его статус. Использует только публичный клиент MLflow.
 - `log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None` - пишет историю обучения и checkpoint-файлы.
 - `log_timing_report(run: MLflowRunRef, report: TimingReport) -> None` - пишет отчет времени выполнения.
 - `log_pipeline_report(run: MLflowRunRef, report: PipelineReport) -> None` - пишет итоговый отчет конвейера.
@@ -35,7 +36,7 @@
 - `MLflowStartRunRequest` - поля `enabled`, `tracking_uri`, `experiment_name`, `dataset`, `run_name`, `tags`.
 - `MLflowRunRef` - поля `run_id`, `experiment_name`, `tracking_uri`, `active`.
 - `MLflowArtifactRef` - ссылка на артефакт MLflow.
-- `MLflowBestCheckpoint` - поля `tracking_uri`, `run_id`, `metric_name`, `f1_score`, `epoch`, `artifact_path`, `artifact_uri`, `threshold`.
+- `MLflowBestCheckpoint` - поля `tracking_uri`, `run_id`, `metric_name`, `quality_metric`, `f1_score`, `epoch`, `artifact_path`, `artifact_uri`, `threshold`.
 - `MLflowDownloadedArtifact` - поля `run_id`, `artifact_path`, `local_path`.
 - `MLflowRunArtifactInfo` - поля `tracking_uri`, `run_id`, `artifact_path`, `artifact_uri` произвольного файла завершённого запуска.
 - `MLflowTrainingProgress` - поле `completed_epochs`.
@@ -71,6 +72,10 @@
 - `val/object_recall` — только при наличии object validation
 - `train/epoch_time_sec`
 - `train/learning_rate` — во всех вариантах обучения, если значение задано; скорость обучения текущей эпохи до шага scheduler
+- `train/region_loss`, `train/boundary_loss`, `val/region_loss`, `val/boundary_loss` — диагностика object f1/v2.
+- `val/macro_pixel_f1`, `val/macro_pixel_precision`, `val/macro_pixel_recall`, `val/macro_pixel_iou`, `val/micro_pixel_f1`, `val/micro_pixel_precision`, `val/micro_pixel_recall` — доступные агрегаты сцен или типов.
+- `val/foreground_pixel_f1`, `val/foreground_pixel_precision`, `val/foreground_pixel_recall` — объединение типов multiclass.
+- `val/class/{slug}/{precision|recall|f1|iou}` — метрики каждого типа multiclass.
 - `val/performed` — `0/1` для разреженной next-gen validation
 - `val/scene/{scene_id}/{pixel_f1|pixel_precision|pixel_recall|fixed_0_5_*}` — для next-gen
 - `val/fixed_0_5_pixel_f1`, `val/fixed_0_5_pixel_precision`, `val/fixed_0_5_pixel_recall` — для next-gen
@@ -82,46 +87,15 @@
 - `train/epochs_total`
 - `train/training_time_sec`
 - `train/best_quality_f1`
+- `train/best_object_f1` — вместо `train/best_quality_f1` при объектном критерии checkpoint.
 - `train/best_threshold_pixel_f1`
+- `train/best_macro_pixel_f1`, `train/best_confidence_threshold` — если доступны.
+- `train/stopped_early` — команда остановки с сохранением; не индикатор срабатывания patience.
 - `train/peak_vram_bytes` — для next-gen
+- `test/loss`, `test/pixel_f1`, `test/pixel_precision`, `test/pixel_recall`, `test/threshold`, `test/checkpoint_epoch`; для multiclass дополнительно `test/macro_pixel_f1`, `test/micro_pixel_f1`, `test/foreground_pixel_f1`; для object f1/v2 — `test/object_f1`, `test/object_precision`, `test/object_recall`. Вложенные отчёты не становятся числовыми метриками.
 
 ## Алгоритм работы и его особенности
 
-Для object_f1_v2 история и validation_by_scene содержат выбранные параметры разделения, поиск порога и диагностику границ/склеек/дроблений. Вложенные object_separation и per_scene_metrics сохраняются в test_metrics.json; log_training_metrics отправляет только числовые значения, без преобразования словарей/списков в float.
+Открывает запуск с готовыми dataset/tags; без имени использует класс, дату и следующий номер. Конфиги, разметку, отчёты и checkpoint сохраняет как артефакты; scalar params нормализует. Эпохи без validation не получают val-полей, кроме performed. Best читается по метаданным критерия: next-gen2/3/4 — минимум val/loss, object — object F1; историческая quality_f1 сохраняет приоритет. При равенстве берётся ранняя эпоха; usable требует FINISHED, threshold и best.pt.
 
-Для object_f1 журнал эпох дополнен train/region_loss, train/boundary_loss, val/region_loss, val/boundary_loss. Объектовые результаты используют существующие val/object_f1, precision/recall; train/learning_rate сохраняется. Дубли quality_* не добавляются.
-
-Новые next-gen2 runs получают checkpoint_selection_metric=val_loss и читаются по минимуму val/loss.
-Исторические quality_f1 runs продолжают читаться по F1; без тега сохраняется исторический выбор по loss.
-При равенстве выбирается ранняя эпоха. Возвращаемые F1 и threshold относятся к выбранным весам.
-Решение сохраняется в reports/checkpoint_selection.json. После обучения next-gen2 публикует
-итоговые test/loss, test/pixel_precision, test/pixel_recall, test/pixel_f1, test/threshold,
-test/checkpoint_epoch и reports/test_metrics.json. Старые runs не изменяются.
-
-`start_run` подключается к `tracking_uri`, выбирает experiment и запускает run. Если `request.dataset` задан, адаптер сначала проверяет наличие одноименного MLflow dataset в experiment и создает его при отсутствии, затем добавляет MLflow tag `dataset` и логирует MLflow input dataset через `mlflow.log_input`; имя, source и tag dataset равны переданному значению. Адаптер не вычисляет имя датасета и не ходит в папки датасета; вызывающий модуль должен передать готовое имя без расширения `.geojson`. Если `request.run_name` задан, имя используется как есть. Если имя не задано и в tags есть `class`, адаптер строит имя вида `{class}_{DDMM}_{номер}`: например, `deforestation_2305_1`. Номер считается по уже существующим run за тот же день и класс. Если поиск run недоступен, используется номер `1`.
-
-`log_run_config` сохраняет YAML как `config/train_config.yaml`. `log_dataset_artifacts` сохраняет исходные файлы разметки в `dataset/`. `log_tile_preparation` сохраняет отчет как `reports/tile_preparation.json`.
-
-`log_training_epoch` вызывается из `train_pipeline` через progress sink на событии `epoch_finished`. Он логирует только метрики, перечисленные в разделе "Публикуемые MLflow-метрики". Это обеспечивает появление HPO-сигналов в MLflow во время долгого обучения без диагностического шума.
-
-`log_training_metrics` не дублирует per-epoch метрики и игнорирует эпохи без validation при выборе best.
-`log_training_epoch` для таких эпох пишет train loss/time/LR и `val/performed=0`; для next-gen validation
-дополнительно пишет macro/micro и per-scene метрики. `train/learning_rate` записывается один раз
-на каждой эпохе всех вариантов, если значение задано, независимо от validation и поснимочных метрик.
-В новых запусках `val/quality_f1`, `val/quality_precision`, `val/quality_recall` не публикуются.
-Внутренние поля `EpochMetrics.val_quality_*`, выбор checkpoint и early stopping сохраняются.
-`log_training_artifacts` пишет полную историю и best/final checkpoint. Для next-gen из diagnostics также
-сохраняются `config/resolved_train_config.json`, `reports/split_manifest.json`, `preprocessing.json`,
-`runtime_environment.json`, `validation_by_scene.json`, optional `inference_merge_comparison.json` и
-`checkpoint_hashes.json`; runtime содержит commit, Python/packages, CUDA/GPU, peak VRAM и dataset revision;
-безопасные scalar/JSON параметры flatten-ятся, строки ограничиваются по длине.
-
-`get_best_training_checkpoint` для запуска с tag `quality_metric=pixel|objects` сначала читает историческую
-`val/quality_f1`. При её отсутствии для `objects` используются `val/object_f1`, затем
-`val/best_threshold_object_f1`; для `pixel` — `val/macro_pixel_f1`, если она есть.
-Общий fallback и критерий запуска без tag — `val/best_threshold_pixel_f1`.
-Так binary pixel, scene-macro, multiclass macro и object сохраняют тот же выбор эпохи без дублирующего
-графика. При равном F1 выбирается более ранняя эпоха. `val/best_threshold` той же эпохи возвращается
-вместе с checkpoint summary. Исторические метрики, теги и артефакты не изменяются.
-
-`get_finished_run_artifact` проверяет статус запуска, точное имя и то, что найден именно файл. `download_run_artifact` оборачивает публичный MLflow client и нужен вызывающим модулям, которым требуется локальный файл артефакта без прямого импорта MLflow.
+Справочник каждой записанной метрики — reports/metric_descriptions.html и .json; контекст берётся из безопасных тегов. HTML автономный, названия имеют подсказки. Обновляется при изменении ключей/контекста, но не чисел. В Description заменяется только помеченная ссылка; пользовательский текст не обрезается при лимите 8000 символов. Сбой справки не прерывает обучение. Явный API дополняет и завершённые запуски без открытия/смены статуса. Новая метрика требует описания и теста покрытия. Подробности — в docs/architecture.md.

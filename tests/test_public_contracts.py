@@ -46,6 +46,7 @@ EXPECTED_API = {
         "log_run_config",
         "log_training_epoch",
         "log_training_metrics",
+        "log_metric_descriptions",
         "log_training_artifacts",
         "log_timing_report",
         "log_pipeline_report",

@@ -25,6 +25,7 @@ from ._client import log_timing_report as _log_timing_report
 from ._client import log_training_epoch as _log_training_epoch
 from ._client import log_training_artifacts as _log_training_artifacts
 from ._client import log_training_metrics as _log_training_metrics
+from ._client import log_metric_descriptions as _log_metric_descriptions
 from ._client import mark_run_killed as _mark_run_killed
 from ._client import start_run as _start_run
 from .contracts import (
@@ -124,6 +125,11 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
     _log_training_metrics(run, result)
 
 
+def log_metric_descriptions(run: MLflowRunRef) -> None:
+    """Добавить справку к записанным метрикам без изменения статуса запуска и весов."""
+    _log_metric_descriptions(run)
+
+
 def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
     _log_training_artifacts(run, result)
 
@@ -159,6 +165,7 @@ __all__ = [
     "log_run_config",
     "log_training_epoch",
     "log_training_metrics",
+    "log_metric_descriptions",
     "log_training_artifacts",
     "log_timing_report",
     "log_pipeline_report",

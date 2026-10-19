@@ -71,6 +71,18 @@ def test_adapter_roundtrip_with_real_mlflow(tmp_path: Path, monkeypatch) -> None
 
         stored = client.get_run(run.run_id)
         assert stored.info.status == "FINISHED"
+        import json
+
+        before = [(item.step, item.value, item.timestamp) for item in client.get_metric_history(run.run_id, "train/loss")]
+        client.set_tag(run.run_id, "mlflow.note.content", "Условия пользователя")
+        api.log_metric_descriptions(run)
+        assert client.get_run(run.run_id).info.status == "FINISHED"
+        assert [(item.step, item.value, item.timestamp) for item in client.get_metric_history(run.run_id, "train/loss")] == before
+        assert client.get_run(run.run_id).data.tags["mlflow.note.content"].startswith("Условия пользователя\n\n")
+        glossary = client.download_artifacts(run.run_id, "reports/metric_descriptions.json", str(tmp_path))
+        assert set(json.loads(Path(glossary).read_text(encoding="utf-8"))["metrics"]) == set(stored.data.metrics)
+        html = client.download_artifacts(run.run_id, "reports/metric_descriptions.html", str(tmp_path))
+        assert "Справочник метрик Гровики" in Path(html).read_text(encoding="utf-8")
         assert stored.data.tags["dataset"] == dataset_name
         assert list(stored.data.params.values()) == ["149"]
         assert stored.inputs.dataset_inputs[0].dataset.name == dataset_name

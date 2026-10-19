@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from hashlib import sha1, sha256
 import json
+import logging
 import os
 from pathlib import Path
 import posixpath
@@ -26,6 +27,9 @@ from .contracts import (
     MLflowRunStatus,
     MLflowStartRunRequest,
     MLflowTrainingProgress,
+)
+from ._metric_descriptions import (
+    HTML_PATH, JSON_PATH, VERSION, build_catalog, render_html, update_run_note,
 )
 
 
@@ -429,6 +433,7 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         if not metrics.validation_performed:
             mlflow.log_metric("val/performed", 0, step=metrics.epoch)
             mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
+            _try_log_metric_descriptions(run)
             return
         mlflow.log_metric("val/loss", metrics.val_loss, step=metrics.epoch)
         mlflow.log_metric("val/best_threshold", metrics.val_best_threshold, step=metrics.epoch)
@@ -527,6 +532,7 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики эпохи в MLflow") from exc
+    _try_log_metric_descriptions(run)
 
 
 def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
@@ -565,6 +571,48 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
             mlflow.log_metric("train/peak_vram_bytes", float(peak_vram_bytes))
     except Exception as exc:
         raise MLflowAdapterError("Не удалось записать метрики обучения в MLflow") from exc
+    _try_log_metric_descriptions(run)
+
+
+def log_metric_descriptions(run: MLflowRunRef) -> None:
+    """Обновить только справку; не открывать run и не менять числовую историю или статус."""
+    if not run.active:
+        return
+    try:
+        client = _mlflow().tracking.MlflowClient(tracking_uri=run.tracking_uri)
+        stored = client.get_run(run.run_id)
+        if not stored.data.metrics:
+            return
+        tags = stored.data.tags
+        context = {key: str(tags[key]) for key in (
+            "pipeline_variant", "task", "quality_metric", "checkpoint_selection_metric",
+        ) if key in tags}
+        catalog = build_catalog(stored.data.metrics, context)
+        html = render_html(catalog)
+        digest = sha256((json.dumps(catalog, ensure_ascii=False, sort_keys=True) + html).encode("utf-8")).hexdigest()
+        note = tags.get("mlflow.note.content", "")
+        updated_note = update_run_note(note, str(stored.info.experiment_id), run.run_id)
+        if tags.get("grovika.metric_descriptions.sha256") != digest:
+            client.log_dict(run.run_id, catalog, JSON_PATH)
+            client.log_text(run.run_id, html, HTML_PATH)
+            client.set_tag(run.run_id, "grovika.metric_descriptions.version", VERSION)
+            client.set_tag(run.run_id, "grovika.metric_descriptions.sha256", digest)
+        # Не обрезаем пользовательский текст ради ссылки при лимите MLflow 8000 символов.
+        if updated_note != note and len(updated_note) <= 8000:
+            client.set_tag(run.run_id, "mlflow.note.content", updated_note)
+    except Exception as exc:
+        raise MLflowAdapterError("Не удалось записать справочник метрик MLflow") from exc
+
+
+def _try_log_metric_descriptions(run: MLflowRunRef) -> None:
+    try:
+        log_metric_descriptions(run)
+    except MLflowAdapterError:
+        # Справка не должна прерывать обучение; следующая эпоха повторит попытку.
+        logging.getLogger(__name__).warning(
+            "Не удалось обновить описания MLflow-метрик запуска %s; обучение продолжается",
+            run.run_id, exc_info=True,
+        )
 
 
 def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
@@ -708,9 +756,12 @@ def end_run(run: MLflowRunRef, status: MLflowRunStatus) -> None:
         active = _active_run(mlflow)
         if _active_run_id(active) == run.run_id:
             mlflow.end_run(status=status.value)
+            # end_run дожидается отложенной записи метрик MLflow; справка видит и их.
+            _try_log_metric_descriptions(run)
             return
         client = mlflow.tracking.MlflowClient()
         client.set_terminated(run.run_id, status.value)
+        _try_log_metric_descriptions(run)
     except Exception as exc:
         raise MLflowAdapterError("Не удалось завершить запуск MLflow") from exc
 

@@ -226,6 +226,7 @@ def test_mlflow_keeps_structured_test_reports_out_of_scalar_metrics(monkeypatch)
 
     logged = {}
     monkeypatch.setattr(_client, "_ensure_run_active", lambda run: SimpleNamespace(log_metric=lambda key, value: logged.update({key: value})))
+    monkeypatch.setattr(_client, "_try_log_metric_descriptions", lambda run: None)
     result = TrainResult(history=[], epochs_total=0, training_time_sec=0, best_checkpoint_path="best.pt",
                          final_checkpoint_path=None, artifacts=[], diagnostics={"test_metrics": {
                              "object_f1": .8, "object_separation": {"boundary_threshold": .35},

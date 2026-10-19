@@ -268,6 +268,7 @@ def test_public_contracts_and_mlflow_sampling_artifacts(monkeypatch):
     sampler.update_feedback(feedback())
     recorded, artifacts = [], []
     monkeypatch.setattr(_client, "_ensure_run_active", lambda run: SimpleNamespace(log_metric=lambda *a, **k: recorded.append(a), set_tag=lambda *a: None))
+    monkeypatch.setattr(_client, "_try_log_metric_descriptions", lambda run: None)
     monkeypatch.setattr(_client, "_log_dict", lambda data, path: artifacts.append((path, deepcopy(data))))
     metrics = EpochMetrics(epoch=1, train_loss=0.2, val_loss=0.3, epoch_time_sec=1,
         adaptive_sampling=sampler.snapshot())

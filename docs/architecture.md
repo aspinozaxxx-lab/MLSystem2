@@ -1136,6 +1136,16 @@ N+1 FP32 вероятностей. После `SlidingWindowSegmentation` бри
 9. `train_pipeline` передает в `train` progress sink. Train-loss пишется для каждой завершённой эпохи; val-метрики `next_gen` существуют только для эпох с полной validation.
 10. `mlflow_adapter` записывает итоговые метрики, checkpoint, SHA-256, resolved JSON, split manifest, preprocessing, runtime/CUDA/packages/dataset revision, per-scene validation, optional Gaussian comparison, tile/timing и итоговый отчёты.
 
+`mlflow_adapter` сопровождает каждую публикуемую метрику русским описанием в
+`reports/metric_descriptions.html` и `.json`; в Description запуска добавляет ссылку, сохраняя
+пользовательский текст. Справочник содержит формулу, назначение, единицы, ориентир и особенности
+агрегации/порога выбранного конвейера; HTML показывает подсказку при наведении на название.
+Штатные имена, значения, шаги и алгоритмы расчёта не меняются. Обновляются только метаданные при
+изменении набора метрик; после завершения выполняется контроль с учётом отложенной записи MLflow.
+Справка не должна прерывать обучение. Публичный
+`mlflow_adapter.api.log_metric_descriptions` позволяет дополнить завершённый или текущий запуск
+без повторного старта, завершения и изменения весов. Собственная сборка интерфейса MLflow не нужна.
+
 ## Конвейер next-gen4
 
 `train.pipeline_variant=next_gen4` наследует автоматический фон, loss, optimizer, scheduler и полную

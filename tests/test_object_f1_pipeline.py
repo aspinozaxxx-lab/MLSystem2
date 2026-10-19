@@ -482,6 +482,7 @@ def test_object_mlflow_summary_has_no_quality_duplicates(monkeypatch):
     from mlsystem2.train.contracts import EpochMetrics, TrainResult
     logged = {}
     monkeypatch.setattr(_client, "_ensure_run_active", lambda run: SimpleNamespace(log_metric=lambda name,value,**kwargs: logged.update({name:value})))
+    monkeypatch.setattr(_client, "_try_log_metric_descriptions", lambda run: None)
     run = MLflowRunRef(run_id="проверка",experiment_name="проверка",tracking_uri="local",active=True)
     _client.log_training_metrics(run,TrainResult(history=[EpochMetrics(epoch=1,train_loss=1,val_loss=1,
         val_quality_f1=.7,val_best_threshold_pixel_f1=.8,epoch_time_sec=1)],epochs_total=1,training_time_sec=1,
