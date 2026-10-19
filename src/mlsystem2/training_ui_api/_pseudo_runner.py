@@ -37,6 +37,7 @@ from shapely.ops import transform as shapely_transform
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid as shapely_make_valid
+from ._raster_valid_data import _valid_pixels_footprint, valid_data_mask
 import yaml
 
 from mlsystem2.dataset_preparing.api import resolve_scene_images
@@ -367,7 +368,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             )
             config = _native_inference_config(loaded, config)
             _apply_native_object_precision(torch, config)
-            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
                 threshold = float(config["threshold"])
                 profile = _postprocess_profile_from_config(
                     _POSTPROCESS_NONE, config.get("postprocess_config")
@@ -445,7 +446,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     device=device,
                     postprocess_profile=profile,
                     object_types=list(config.get("object_types") or []),
-                    **({"notebook": True, "batch_size": int(config["batch_size"])} if config.get("pipeline_variant") in {"next_gen2", "next_gen3"} else {}),
+                    **({"notebook": True, "batch_size": int(config["batch_size"]), "pad_edges": config.get("pipeline_variant") == "next_gen4"} if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"} else {}),
                 )
                 predicted_instances = None
             with warnings.catch_warnings():
@@ -1230,7 +1231,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             )
             config = _native_inference_config(loaded, config)
             _apply_native_object_precision(torch, config)
-            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
                 threshold = float(config["threshold"])
                 postprocess_profile = _postprocess_profile_from_config(
                     _POSTPROCESS_NONE, config.get("postprocess_config")
@@ -1583,7 +1584,7 @@ def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str
                 "batch_size": next_gen2_inference_batch_size(int(metadata.get("sample_size") or config.get("tile_size") or 512), str(getattr(spec, "name", "smp_segformer_b0"))),
                 "inference_merge": "gaussian_instances", "threshold_source": f"{variant}_profile",
                 **({"inference_precision": "fp32_no_tf32"} if variant == "object_f1_v2" else {})}
-    if variant not in {"next_gen2", "next_gen3"}:
+    if variant not in {"next_gen2", "next_gen3", "next_gen4"}:
         return config
     return {
         **config,
@@ -1905,12 +1906,13 @@ def _infer_scene(
                     postprocess_profile=postprocess_profile, confidence_map=result.probabilities[0])
             finally:
                 accumulator.close()
-        if config.get("pipeline_variant") in {"next_gen2", "next_gen3"}:
+        if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"}:
             mask_window = Window(0, 0, dataset.width, dataset.height)
             mask, confidence_map = _infer_notebook_scene_mask(
                 dataset=dataset, input_indexes=input_indexes, input_channels=input_channels,
                 torch=torch, model=model, tile_size=tile_size, stride=stride,
                 batch_size=batch_size, threshold=threshold, device=device, metrics=performance,
+                pad_edges=config.get("pipeline_variant") == "next_gen4",
             )
         elif aoi_wgs84 is not None:
             if dataset.crs is None:
@@ -1972,6 +1974,10 @@ def _infer_scene(
             postprocess_profile,
             list(config.get("object_types") or []),
         )
+        if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"}:
+            valid = valid_data_mask(dataset, mask_window, input_indexes)
+            mask[~valid] = 0
+            confidence_map[~valid] = 0
         features = _features_from_mask(
             mask,
             dataset.window_transform(mask_window),
@@ -1981,6 +1987,7 @@ def _infer_scene(
             config,
             postprocess_profile=postprocess_profile,
             confidence_map=confidence_map,
+            valid_mask=valid if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"} else None,
         )
         performance["postprocessing_sec"] = float(
             performance.get("postprocessing_sec", 0.0)
@@ -1991,7 +1998,7 @@ def _infer_scene(
 def _infer_notebook_scene_mask(
     *, dataset, input_indexes: tuple[int, ...], input_channels: int,
     torch, model, tile_size: int, stride: int, batch_size: int,
-    threshold: float, device: str, metrics: dict[str, Any] | None = None,
+    threshold: float, device: str, metrics: dict[str, Any] | None = None, pad_edges: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Полные окна и порог после гауссова усреднения, как в eval-ноутбуке."""
     _validate_window_grid(tile_size, stride)
@@ -2003,15 +2010,22 @@ def _infer_notebook_scene_mask(
     axis = np.arange(tile_size)
     gaussian = np.exp(-((axis - tile_size / 2) ** 2) / (2 * (tile_size / 4) ** 2))
     weight = np.outer(gaussian, gaussian).astype(np.float32)
+    valid = valid_data_mask(dataset, indexes=input_indexes)
     windows = [Window(x, y, tile_size, tile_size)
-               for y in range(0, dataset.height - tile_size + 1, stride)
-               for x in range(0, dataset.width - tile_size + 1, stride)]
+               for y in range(0, dataset.height if pad_edges else dataset.height - tile_size + 1, stride)
+               for x in range(0, dataset.width if pad_edges else dataset.width - tile_size + 1, stride)]
     index = 0
     while index < len(windows):
         pending = windows[index:index + int(performance["effective_batch_size"])]
         read_started = time.perf_counter()
-        images = np.stack([dataset.read(indexes=input_indexes, window=window,
-                                       out_dtype="float32", masked=False) for window in pending])
+        images = np.zeros((len(pending), len(input_indexes), tile_size, tile_size), dtype=np.float32)
+        for i, window in enumerate(pending):
+            x, y = int(window.col_off), int(window.row_off)
+            w, h = min(tile_size, dataset.width - x), min(tile_size, dataset.height - y)
+            images[i, :, :h, :w] = dataset.read(indexes=input_indexes, window=Window(x, y, w, h), out_dtype="float32", masked=False)
+            if pad_edges:
+                # Вход next-gen4 совпадает с train: raster mask тоже становится нулём.
+                images[i, :, :h, :w] *= valid[y:y+h, x:x+w]
         if images.shape[1] == 3 and input_channels == 4:
             images = np.concatenate((images, np.zeros_like(images[:, :1])), axis=1)
         performance["reading_sec"] = (
@@ -2025,12 +2039,15 @@ def _infer_notebook_scene_mask(
             probability_sum = np.zeros((probabilities.shape[1], dataset.height, dataset.width), dtype=np.float32)
         for window, probability in zip(pending, probabilities, strict=True):
             x, y = int(window.col_off), int(window.row_off)
-            probability_sum[..., y:y + tile_size, x:x + tile_size] += probability * weight
-            weight_sum[y:y + tile_size, x:x + tile_size] += weight
+            w, h = min(tile_size, dataset.width - x), min(tile_size, dataset.height - y)
+            valid_weight = weight[:h, :w] * valid[y:y+h, x:x+w]
+            probability_sum[..., y:y+h, x:x+w] += probability[..., :h, :w] * valid_weight
+            weight_sum[y:y+h, x:x+w] += valid_weight
         index += len(pending)
         performance["tile_count"] = int(performance.get("tile_count", 0)) + len(pending)
     np.maximum(weight_sum, 1e-6, out=weight_sum)
     probability_sum /= weight_sum
+    probability_sum[..., ~valid] = 0
     if probability_sum.ndim == 3:
         labels = np.argmax(probability_sum, axis=0).astype(np.uint8)
         confidence = np.max(probability_sum, axis=0)
@@ -2550,6 +2567,7 @@ def _infer_test_tile_mask(
     context: int = 0,
     notebook: bool = False,
     batch_size: int | None = None,
+    pad_edges: bool = False,
 ) -> np.ndarray:
     with rasterio.open(image_path) as dataset:
         input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
@@ -2561,6 +2579,7 @@ def _infer_test_tile_mask(
                 dataset=dataset, input_indexes=input_indexes, input_channels=input_channels,
                 torch=torch, model=model, tile_size=tile_size, stride=stride,
                 batch_size=batch_size or next_gen2_inference_batch_size(tile_size), threshold=threshold, device=device,
+                pad_edges=pad_edges,
             )
         windows = [] if notebook else _windows(dataset.width, dataset.height, tile_size, stride, context)
         for window in windows:
@@ -2600,6 +2619,8 @@ def _infer_test_tile_mask(
             preserve_border_objects=True,
         )
         if not _has_vector_postprocess(postprocess_profile) or not np.any(mask):
+            if notebook:
+                mask[~valid_data_mask(dataset, indexes=input_indexes)] = 0
             return mask
         if dataset.crs is None:
             raise RuntimeError(
@@ -2630,7 +2651,7 @@ def _infer_test_tile_mask(
                 geometries.append((processed, class_id))
         if not geometries:
             return np.zeros_like(mask)
-        return rasterio_features.rasterize(
+        result = rasterio_features.rasterize(
             sorted(
                 geometries,
                 key=lambda item: _object_type_sort_key(item[1], object_types or []),
@@ -2641,6 +2662,9 @@ def _infer_test_tile_mask(
             dtype="uint8",
             all_touched=False,
         )
+        if notebook:
+            result[~valid_data_mask(dataset, indexes=input_indexes)] = 0
+        return result
 
 
 def _predict_tile(
@@ -2776,6 +2800,7 @@ def _features_from_mask(
     config: dict[str, Any],
     postprocess_profile: _PostprocessProfile = _POSTPROCESS_NONE,
     confidence_map: np.ndarray | None = None,
+    valid_mask: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     source_crs = str(crs) if crs is not None else None
@@ -2785,6 +2810,7 @@ def _features_from_mask(
     if confidence_map is not None and confidence_map.shape != mask.shape:
         raise RuntimeError("Размер карты уверенности не совпадает с маской результата.")
     class_ids = sorted(object_type_by_id) if object_type_by_id else [1]
+    footprint = _valid_pixels_footprint(valid_mask, transform=transform) if valid_mask is not None else None
     for class_id in class_ids:
         binary_mask = mask == class_id if object_type_by_id else mask > 0
         if config.get("pipeline_variant") in {"object_f1", "object_f1_v2"}:
@@ -2834,6 +2860,11 @@ def _features_from_mask(
                 if processed_geometry.is_empty:
                     continue
                 geometry = mapping(processed_geometry)
+            if footprint is not None:
+                clipped = shape(geometry).intersection(footprint)
+                if clipped.is_empty:
+                    continue
+                geometry = mapping(clipped)
             if source_crs:
                 geometry = transform_geom(source_crs, "EPSG:4326", geometry)
             properties = {
@@ -3403,7 +3434,7 @@ def _configured_postprocess_profile(
     config: dict[str, Any],
     fallback_image_count: int,
 ) -> _PostprocessProfile:
-    if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+    if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
         return _POSTPROCESS_NONE
     name = config.get("postprocess_profile")
     if name is None:
@@ -3927,7 +3958,7 @@ def _checkpoint_inference_window(
     variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
     # Сетка eval-ноутбука независима от нарезки нового обучения без нахлёста.
     checkpoint_stride = (
-        max(1, checkpoint_tile_size // 2) if variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
+        max(1, checkpoint_tile_size // 2) if variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}
         else core_size if checkpoint_context else int(stride)
     )
     if checkpoint_stride <= 0 or checkpoint_stride > core_size:
@@ -4115,7 +4146,7 @@ def _summary(
                 "threshold_source": config.get("threshold_source"),
                 "inference_merge": config.get("inference_merge"),
                 "batch_size": config.get("batch_size"),
-            } if config.get("pipeline_variant") in {"next_gen2", "next_gen3"} else {}),
+            } if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"} else {}),
             "f1_score": config.get("checkpoint_f1_score"),
             "epoch": config.get("checkpoint_epoch"),
         },

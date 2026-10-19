@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">Next-gen4: тайлы без пересечений</title>
+  <desc id="description">Условная схема: размер тайла выбирается, шаг равен размеру. Разные выборки не перекрываются внутри исходного снимка, nodata исключён.</desc>
+  <rect width="1200" height="630" rx="28" fill="#101e32"/>
+  <g font-family="Arial, sans-serif" fill="#e7f0ff">
+    <text x="64" y="78" font-size="36" font-weight="700">Next-gen4 · тайлы без пересечений</text>
+    <text x="64" y="120" font-size="22" fill="#a8bcd5">Поясняющая схема · не снимок и не прогноз сети</text>
+    <g stroke="#101e32" stroke-width="8">
+      <rect x="64" y="164" width="180" height="150" fill="#259b7a"/><rect x="244" y="164" width="180" height="150" fill="#4088d7"/><rect x="424" y="164" width="180" height="150" fill="#259b7a"/>
+      <rect x="64" y="314" width="180" height="150" fill="#259b7a"/><rect x="244" y="314" width="180" height="150" fill="#ad7cd6"/><rect x="424" y="314" width="180" height="150" fill="#259b7a"/>
+    </g>
+    <text x="104" y="248" font-size="27">Обучение</text><text x="278" y="248" font-size="25">Проверка</text><text x="464" y="248" font-size="27">Обучение</text>
+    <text x="104" y="398" font-size="27">Обучение</text><text x="300" y="398" font-size="27">Тест</text><text x="464" y="398" font-size="27">Обучение</text>
+    <rect x="480" y="408" width="120" height="52" fill="#08101d"/><text x="496" y="440" font-size="21">nodata</text>
+    <text x="660" y="220" font-size="27" font-weight="700">Размер выбирается</text>
+    <text x="660" y="264" font-size="24">512 · 768 · 1024 · 1536 px</text>
+    <text x="660" y="325" font-size="27" font-weight="700">Шаг = размер тайла</text>
+    <text x="660" y="369" font-size="23">Общий тайл — одна выборка</text>
+    <text x="660" y="427" font-size="24" fill="#a8bcd5">Фон подбирается автоматически</text>
+    <text x="64" y="536" font-size="23">Разбиение по тайлам: 60% / 20% / 20%. Не по сценам.</text>
+    <text x="64" y="578" font-size="21" fill="#a8bcd5">Пересечения разных TIFF разрешены; для новых территорий нужен отдельный тест.</text>
+  </g>
+</svg>

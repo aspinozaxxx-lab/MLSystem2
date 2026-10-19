@@ -727,11 +727,11 @@ def _build_training_config(
         )
     flat = dict(row.config or {})
     pipeline_variant = str(_flat_value(flat, "train.pipeline_variant", "legacy"))
-    if pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+    if pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
         flat.setdefault("train.pretrained", True)
         flat.update({key: value for key, value in fixed_pipeline_defaults(pipeline_variant).items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512)
-        flat["tile_preparation.stride"] = tile_size // 2
+        flat["tile_preparation.stride"] = tile_size if pipeline_variant == "next_gen4" else tile_size // 2
         flat["train.batch_size"] = next_gen2_train_batch_size(tile_size, row.architecture)
     positive_factor = _float_value(flat, "tile_preparation.positive_factor", 0.5)
     hard_negative_factor = _float_value(flat, "tile_preparation.hard_negative_factor", 0.0)
@@ -754,7 +754,7 @@ def _build_training_config(
     )
     task = "multiclass" if manifest is not None else "binary"
     raw_loss = str(_flat_value(flat, "train.loss", "bce_dice"))
-    if pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+    if pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
         loss = raw_loss
     elif task == "multiclass":
         loss = (
@@ -776,7 +776,7 @@ def _build_training_config(
             "val_fraction": _float_value(flat, "dataset.val_fraction", 0.2),
         },
         "tile_preparation": {
-            **({"seed": 42} if pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"} else {}),
+            **({"seed": 42} if pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"} else {}),
             "tile_size": _int_value(flat, "tile_preparation.tile_size", row.tile_size or 512),
             "stride": _int_value(flat, "tile_preparation.stride", row.tile_size or 512),
             "context": _int_value(flat, "tile_preparation.context", 0),
@@ -832,7 +832,7 @@ def _build_training_config(
             "max_train_batches_per_epoch": _optional_int(flat, "train.max_train_batches_per_epoch"),
             "max_val_batches_per_epoch": (
                 None
-                if pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
+                if pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}
                 else _optional_int(flat, "train.max_val_batches_per_epoch")
             ),
             "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),
@@ -943,7 +943,7 @@ def _build_pseudo_markup_config(
             )
         if threshold is None:
             threshold = _float_value(flat, "train.threshold", 0.5)
-        if flat.get("train.pipeline_variant") in {"next_gen2", "next_gen3"}:
+        if flat.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"}:
             threshold = NEXT_GEN2_INFERENCE_THRESHOLD
         class_row = dataset_class_row(session, class_key)
         imagery_type = str(
@@ -1000,7 +1000,7 @@ def _build_pseudo_markup_config(
             ),
             "batch_size": (
                 1 if external_manifest is not None else (
-                    next_gen2_inference_batch_size(tile_size, training_result.architecture if training_result is not None else row.architecture) if flat.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
+                    next_gen2_inference_batch_size(tile_size, training_result.architecture if training_result is not None else row.architecture) if flat.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}
                     else _int_value(flat, "train.batch_size", 1)
                 )
             ),
@@ -1029,7 +1029,7 @@ def _last_pseudo_checkpoint_snapshot(
     metadata = dict(loaded.artifact.metadata or {})
     parameters = dict(loaded.model.spec.parameters or {})
     variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
-    if variant in {"next_gen2", "next_gen3"}:
+    if variant in {"next_gen2", "next_gen3", "next_gen4"}:
         threshold = NEXT_GEN2_INFERENCE_THRESHOLD
     elif variant in {"object_f1", "object_f1_v2"}:
         threshold = (parameters.get("object_separation") or {}).get("foreground_threshold", 0.5)
@@ -1120,7 +1120,7 @@ def _build_pseudolabel_aoi_config(
         "input_channels": _int_value(state, "input_channels", 4),
         "postprocess_config": state.get("inference_template_config") or {},
         "threshold": (
-            NEXT_GEN2_INFERENCE_THRESHOLD if state.get("pipeline_variant") in {"next_gen2", "next_gen3"}
+            NEXT_GEN2_INFERENCE_THRESHOLD if state.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"}
             else float(threshold) if threshold is not None else None
         ),
         "tile_size": _int_value(state, "tile_size", 768),
@@ -1258,7 +1258,7 @@ def _build_test_sample_f1_config(
         checkpoint_f1_score = checkpoint.f1_score
         checkpoint_epoch = checkpoint.epoch
         checkpoint_threshold = checkpoint.threshold
-        if flat.get("train.pipeline_variant") in {"next_gen2", "next_gen3"}:
+        if flat.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"}:
             checkpoint_threshold = NEXT_GEN2_INFERENCE_THRESHOLD
         inference_tile_size = _int_value(flat, "tile_preparation.tile_size", 768)
         inference_context = _int_value(flat, "tile_preparation.context", 0)
@@ -1272,7 +1272,7 @@ def _build_test_sample_f1_config(
         )
         input_channels = _int_value(flat, "train.input_channels", 4)
         batch_size = _int_value(flat, "train.batch_size", 1)
-        if flat.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+        if flat.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
             batch_size = next_gen2_inference_batch_size(inference_tile_size, training_result.architecture)
     row.tile_size = inference_tile_size
     row.config = {

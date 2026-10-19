@@ -23,6 +23,8 @@
 
 `ModelSpec.parameters.pipeline_variant=next_gen3` сохраняет ABI next-gen2: два внутренних binary logits либо N+1 multiclass, min-max и автономное восстановление без загрузки pretrained. `parameters.sampler` хранит версию автоматической политики; состояние контроллера хранится в metadata, не является командой инференсу или повторной загрузки весов.
 
+`next_gen4` сохраняет тот же ABI и требует `preprocessing.mask_output_nodata=true`: нулевые во всех входных каналах пиксели дают фон внутри обёртки PyTorch/ONNX. Флаг сохраняется в спецификации checkpoint; восстановление автономное. Исторические спецификации других вариантов не меняются.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.

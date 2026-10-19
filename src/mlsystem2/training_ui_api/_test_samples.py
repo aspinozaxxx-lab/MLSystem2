@@ -4156,8 +4156,8 @@ def _effective_inference_template(
         session.get(JobRow, training_result.job_id)
         if training_result is not None and training_result.job_id is not None else None
     )
-    if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3"}:
-        hash_payload["inference_profile"] = "next_gen2_eval_v1"
+    if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"}:
+        hash_payload["inference_profile"] = "notebook_valid_data_v2"
     if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") == "object_f1":
         hash_payload["inference_profile"] = "object_f1_instances_v1"
     if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") == "object_f1_v2":

@@ -173,7 +173,7 @@ def registered_vector_types(monkeypatch):
 
     urban, base, functional = ModuleType("urban"), ModuleType("urban.base.brick"), ModuleType("urban.functional")
     urban.VectorizeMasks, urban.FilterSmallObjects = OriginalVectorizeMasks, Base
-    base.PolygonProcessingBrick, functional.io = Base, None
+    base.Brick, base.PolygonProcessingBrick, functional.io = Base, Base, None
     monkeypatch.setitem(sys.modules, "urban", urban)
     monkeypatch.setitem(sys.modules, "urban.base.brick", base)
     monkeypatch.setitem(sys.modules, "urban.functional", functional)

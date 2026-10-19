@@ -19,14 +19,13 @@ from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
-from .contracts import TrainingUIAPIError
-
-
 _VALID_FOOTPRINT_MAX_SIDE = 4096
 _VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
 
 
 def valid_data_footprint(image_path: Path) -> BaseGeometry:
+    from .contracts import TrainingUIAPIError
+
     try:
         status = image_path.stat()
     except OSError as exc:
@@ -44,6 +43,8 @@ def _cached_valid_data_footprint(
     _modified_ns: int,
     _size_bytes: int,
 ) -> BaseGeometry:
+    from .contracts import TrainingUIAPIError
+
     try:
         with rasterio.open(image_path) as source:
             if source.width <= 0 or source.height <= 0:
@@ -117,6 +118,25 @@ def _cached_valid_data_footprint(
             f"Не удалось построить footprint валидных данных: {Path(image_path).name}"
         )
     return footprint
+
+
+def valid_data_mask(dataset, window=None, indexes=None):
+    """Маска инференса: raster mask/alpha, nodata всех входных каналов и padding."""
+    indexes = tuple(indexes or range(1, dataset.count + 1))
+    if window is None:
+        result = dataset.dataset_mask() > 0
+        for _, block in dataset.block_windows(1):
+            x, y, w, h = map(int, (block.col_off, block.row_off, block.width, block.height))
+            result[y:y+h, x:x+w] &= valid_data_mask(dataset, block, indexes)
+        return result
+    image = dataset.read(indexes=indexes, window=window, masked=False)
+    valid = (dataset.dataset_mask(window=window) > 0) & np.isfinite(image).all(axis=0)
+    if ColorInterp.alpha in dataset.colorinterp:
+        alpha = dataset.colorinterp.index(ColorInterp.alpha) + 1
+        valid &= dataset.read(alpha, window=window) > 0
+    nodata = dataset.nodata if dataset.nodata is not None else 0
+    valid &= ~np.all(np.isnan(image) if np.isnan(nodata) else image == nodata, axis=0)
+    return valid
 
 
 def clip_geometries_to_valid_data(
@@ -212,6 +232,12 @@ def _valid_pixels_footprint(
     *,
     transform: rasterio.Affine,
 ) -> BaseGeometry:
+    if not bool(np.any(valid_pixels)):
+        return GeometryCollection()
+    if bool(np.all(valid_pixels)):
+        height, width = valid_pixels.shape
+        return Polygon((transform * (0, 0), transform * (width, 0),
+                        transform * (width, height), transform * (0, height)))
     parts = [
         _polygonal_geometry(shape(geometry))
         for geometry, value in shapes(

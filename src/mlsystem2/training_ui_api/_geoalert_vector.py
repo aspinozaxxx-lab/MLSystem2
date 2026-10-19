@@ -9,6 +9,7 @@ import shapely
 from shapely.ops import transform as transform_geometry
 
 from ._compact_geometry import is_compact_polygon
+from ._raster_valid_data import _valid_pixels_footprint, valid_data_mask
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,6 +23,22 @@ def register_vector_bricks() -> None:
     from urban.base.brick import PolygonProcessingBrick
     from urban.functional import io
     import rasterio
+    from urban.base.brick import Brick
+
+    class ClipToRasterValidData(Brick):
+        input_raster: str = "input"
+        vectors: list[str]
+
+        def __call__(self, path):
+            with rasterio.open(Path(path) / f"{self.input_raster}.tif") as source:
+                valid = valid_data_mask(source)
+                footprint = _valid_pixels_footprint(valid, transform=source.transform)
+                for vector in self.vectors:
+                    fc = io.read_fc(path, vector, crs=source.crs)
+                    if not fc.empty:
+                        fc.geometry = [geometry.intersection(footprint) for geometry in fc.geometry]
+                        fc = fc.filter(lambda feature: not feature.geometry.is_empty)
+                    io.save_fc(fc, path, vector, explode=True, keep_only_geometry_types=[shapely.Polygon, shapely.MultiPolygon])
 
     class VectorizeMasks(OriginalVectorizeMasks):
         mark_boundary_objects: bool = False

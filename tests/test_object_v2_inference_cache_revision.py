@@ -26,13 +26,15 @@ def _digest(payload: dict) -> str:
         ("legacy", None),
         ("next_gen", None),
         ("next_gen2", "next_gen2_eval_v1"),
+        ("next_gen3", "next_gen2_eval_v1"),
+        ("next_gen4", None),
         ("object_f1", "object_f1_instances_v1"),
         ("object_f1_v2", "object_f1_instances_v2"),
         ("object_f1_v2", "object_f1_instances_v2_interior_geodesic"),
     ],
 )
 @pytest.mark.parametrize("managed", [False, True])
-def test_f1_revision_changes_only_v2_hash(variant, previous_profile, managed) -> None:
+def test_f1_revision_changes_only_affected_profiles(variant, previous_profile, managed) -> None:
     source_job = SimpleNamespace(config={"train.pipeline_variant": variant})
     session = SimpleNamespace(scalar=lambda _query: None, get=lambda _kind, _key: source_job)
     result = SimpleNamespace(job_id="training-job")
@@ -55,6 +57,9 @@ def test_f1_revision_changes_only_v2_hash(variant, previous_profile, managed) ->
     if variant == "object_f1_v2":
         assert current != _digest(previous_payload)
         assert current == _digest({**previous_payload, "inference_profile": _V2_PROFILE})
+    elif variant in {"next_gen2", "next_gen3", "next_gen4"}:
+        assert current != _digest(previous_payload)
+        assert current == _digest({**previous_payload, "inference_profile": "notebook_valid_data_v2"})
     else:
         assert current == _digest(previous_payload)
 
@@ -107,7 +112,7 @@ def test_editor_revision_preserves_previous_payload_and_invalidates_v2_dedup() -
     )
 
 
-@pytest.mark.parametrize("variant", [None, "legacy", "next_gen2", "object_f1", "object_f1_v2"])
+@pytest.mark.parametrize("variant", [None, "legacy", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"])
 def test_editor_scene_job_uses_source_variant_and_records_only_v2_revision(
     tmp_path, monkeypatch, variant,
 ) -> None:
@@ -158,6 +163,9 @@ def test_editor_scene_job_uses_source_variant_and_records_only_v2_revision(
     if variant == "object_f1_v2":
         assert snapshot["inference_profile"] == _V2_PROFILE
         expected_hash = _digest({**previous_payload, "inference_profile": _V2_PROFILE})
+    elif variant in {"next_gen2", "next_gen3", "next_gen4"}:
+        assert snapshot["inference_profile"] == "notebook_valid_data_v2"
+        expected_hash = _digest({**previous_payload, "inference_profile": "notebook_valid_data_v2"})
     else:
         assert "inference_profile" not in snapshot
         expected_hash = _digest(previous_payload)

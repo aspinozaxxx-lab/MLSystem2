@@ -38,7 +38,7 @@ def _window_statistics(dataset, index):
         else dataset._read_invalid_data_pixels(source, window)
     )
     supervision = dataset._read_supervision_mask(item.scene_index, source, window, invalid)
-    if dataset._pipeline_variant == "next_gen3":
+    if dataset._pipeline_variant in {"next_gen3", "next_gen4"}:
         semantic = supervision if dataset.uses_multiclass_masks else supervision[0]
         negatives = (dataset._read_class_hard_negative_masks(item.scene_index, source, window, invalid, supervision)
                      if dataset._has_class_specific_hard_negatives else None)
@@ -92,7 +92,7 @@ def training_statistics(dataset, requested_workers):
     negatives = np.empty(length, dtype=bool)
     counts = np.zeros(_class_count(dataset), dtype=np.int64)
     tiles = [None] * length
-    profile = "next-gen3" if dataset._pipeline_variant == "next_gen3" else "object f1 v2"
+    profile = dataset._pipeline_variant.replace("_", "-") if dataset._pipeline_variant in {"next_gen3", "next_gen4"} else "object f1 v2"
     started = last_report = time.monotonic()
     completed = 0
     LOGGER.info("%s: начало точной статистики train, окон=%s, процессов=%s", profile, length, workers)

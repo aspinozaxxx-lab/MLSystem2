@@ -220,7 +220,7 @@ def run_train_pipeline(
         timings.append(timing)
         train_loader, val_loader = loaders
         test_loader = None
-        if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+        if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
             test_loader, test_timing = timed_call(
                 "tile_preparation_test",
                 lambda: deps.create_tile_dataloader(_tile_request(
@@ -241,7 +241,7 @@ def run_train_pipeline(
                     "positive_factor_used",
                     settings.tile_preparation.positive_factor,
                 )
-                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}
                 else None
             ),
             hard_negative_factor_used=(
@@ -250,7 +250,7 @@ def run_train_pipeline(
                     "hard_negative_factor_used",
                     settings.tile_preparation.hard_negative_factor,
                 )
-                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}
                 else None
             ),
             background_factor_used=(
@@ -259,7 +259,7 @@ def run_train_pipeline(
                     "background_factor_used",
                     settings.tile_preparation.background_factor,
                 )
-                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
+                if _uses_weighted_sampler(train_loader) and settings.train.pipeline_variant not in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}
                 else None
             ),
         )
@@ -295,7 +295,7 @@ def run_train_pipeline(
         train_result = _expect_train_result(train_result)
 
         tile_report = _tile_preparation_report(settings, train_loader, val_loader, test_loader)
-        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
             _attach_next_gen_diagnostics(
                 train_result,
                 settings,
@@ -404,7 +404,7 @@ def _mlflow_start_request(
             "task": settings.train.task,
             "seed": str(settings.tile_preparation.seed),
             **({"checkpoint_selection_metric": "val/object_f1" if settings.train.pipeline_variant in {"object_f1", "object_f1_v2"} else "val_loss"}
-               if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"} else {}),
+               if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"} else {}),
         },
     )
 
@@ -412,7 +412,7 @@ def _mlflow_start_request(
 def _dataset_request(settings: SystemSettings) -> DatasetPreparationRequest:
     expected_band_names = (
         ["RED", "GRN", "BLU", "NIR"][:settings.train.input_channels]
-        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}
         else []
     )
     if settings.dataset.classes:
@@ -491,7 +491,7 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
 def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
     return TileSplitRequest(
         val_fraction=settings.dataset.val_fraction,
-        test_fraction=0.2 if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"} else 0.0,
+        test_fraction=0.2 if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"} else 0.0,
         seed=settings.tile_preparation.seed,
         strategy=(
             "scene_groups" if settings.train.pipeline_variant in {"object_f1", "object_f1_v2"} else "scene_fold"
@@ -593,7 +593,7 @@ def _tile_request(
 
 def _model_spec(settings: SystemSettings, train_loader: object | None = None) -> ModelSpec:
     parameters: dict[str, object] = {}
-    if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+    if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
         dataset = getattr(train_loader, "dataset", None)
         parameters = {
             "pipeline_variant": settings.train.pipeline_variant,
@@ -617,11 +617,13 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None) ->
                           object_separation={"foreground_threshold": 0.5, "boundary_threshold": 0.5, "min_marker_pixels": 4},
                           input_channel_policy="rgb_alpha_mask" if settings.train.input_channels == 3 else "rgb_nir",
                           instance_parts="polygon", merge="gaussian_full_coverage", export_contract=4)
-    if settings.train.pipeline_variant == "next_gen3":
+    if settings.train.pipeline_variant in {"next_gen3", "next_gen4"}:
         sampling_loader = train_loader.loader if isinstance(train_loader, _CountingLoader) else train_loader
         sampler = getattr(sampling_loader, "sampler", None)
         parameters["sampler"] = sampler.snapshot()["policy"] if sampler is not None else {"version": "adaptive_background_v1"}
         parameters["valid_pixel_policy"] = "raster_mask_and_annotation_region"
+        if settings.train.pipeline_variant == "next_gen4":
+            parameters["preprocessing"]["mask_output_nodata"] = True
     if settings.train.pipeline_variant == "object_f1_v2":
         parameters.update(
             output_layout="background_interior_boundary", boundary_width=8,
@@ -693,7 +695,7 @@ def _load_or_create_model(
                 map_location=settings.train.device,
             )
         )
-        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+        if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
             loaded_spec = loaded.model.spec
             if (
                 loaded_spec.name != spec.name
@@ -789,7 +791,7 @@ def _attach_next_gen_diagnostics(
         }
     )
 
-    if settings.train.pipeline_variant in {"next_gen2", "next_gen3"}:
+    if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4"}:
         result.diagnostics.pop("validation_fold", None)
         result.diagnostics.pop("validation_by_scene", None)
 
@@ -1224,11 +1226,11 @@ def _tile_preparation_report(
 
 
 def _sampling_mode(settings: SystemSettings, loader: object) -> str:
-    if settings.train.pipeline_variant == "next_gen3":
+    if settings.train.pipeline_variant in {"next_gen3", "next_gen4"}:
         return "adaptive_background_v1" if hasattr(_loader_attr(loader, "sampler"), "update_feedback") else "full_natural_validation"
-    if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"} and _loader_attr(loader, "cache_mode"):
+    if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"} and _loader_attr(loader, "cache_mode"):
         return "full_natural_validation"
-    if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+    if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
         return "weighted_positive_15" if _uses_weighted_sampler(loader) else "full_natural_validation"
     cache_mode = _loader_attr(loader, "cache_mode")
     if cache_mode == "memory":
@@ -1327,7 +1329,7 @@ def _train_request(
                                if settings.train.pipeline_variant == "object_f1_v2" else None),
             class_weights=(
                 list(getattr(getattr(train_loader, "dataset", None), "notebook_class_weights", []))
-                if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"} else []
+                if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"} else []
             ),
             validation_interval_epochs=(
                 settings.next_gen.validation_interval_epochs
@@ -1337,7 +1339,7 @@ def _train_request(
             threshold_mode=(
                 settings.next_gen.threshold_mode
                 if settings.train.pipeline_variant == "next_gen"
-                else "fixed" if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"} else "optimize"
+                else "fixed" if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"} else "optimize"
             ),
             evaluate_gaussian_blend=(
                 settings.next_gen.evaluate_gaussian_blend
@@ -1400,7 +1402,7 @@ def _train_request(
                 "dataset_revision": _dataset_revision(dataset),
                 "code_revision": _code_revision(settings.runtime.project_root),
             }
-            if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"}
+            if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}
             else {}
         ),
     )

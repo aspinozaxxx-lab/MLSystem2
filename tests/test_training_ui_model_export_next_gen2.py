@@ -34,7 +34,7 @@ def test_onnx_preserves_probabilities_instead_of_thresholding(tmp_path):
 
 @pytest.mark.parametrize("override", [None, 0.8])
 @pytest.mark.parametrize("tile_size,channels", [(512, 4), (768, 3), (1024, 4), (1536, 3)])
-@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3"])
+@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3", "next_gen4"])
 def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, override, tile_size, channels, variant):
     metadata = {"pipeline_variant": variant, "sample_size": tile_size,
                 "inference_context": 0, "confidence_threshold": 0.5}
@@ -68,14 +68,17 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         assert info["output_kind"] == "probabilities"
         assert calls[0]["probability_output"] is True
         assert 'name: "probabilities"' in config and "TYPE_UINT8" not in config
-        split, segmentation, threshold, vectorize = pipeline["bricks"]
+        split, segmentation, threshold, vectorize, clip = pipeline["bricks"]
         assert split["apply_mask"] is False
         assert segmentation["_class"] == "SlidingWindowSegmentation"
         assert segmentation["window_size"] == tile_size and segmentation["stride"] == tile_size // 2
         assert segmentation["adapter"]["output_dtype"] == "float32"
+        assert segmentation["pad_edges"] is (variant == "next_gen4")
         assert threshold["_class"] == "MultiThresholding"
         assert threshold["thresholds"] == [expected_threshold] and threshold["strict_more"]
         assert vectorize["value_property_name"] == "class_id"
+        assert clip == {"_class": "ClipToRasterValidData", "input_raster": "input", "vectors": vectorize["output_fcs"]}
+        assert info["inference_profile"] == "notebook_valid_data_v2"
     finally:
         archive.cleanup()
 
@@ -102,10 +105,11 @@ def test_multiclass_archive_keeps_background_and_named_class_outputs(monkeypatch
         assert calls[0]["output_channels"] == 4 and calls[0]["probability_output"]
         assert info["task"] == "multiclass" and info["output_channels"] == ["background", "type_1", "type_2", "type_3"]
         assert "dims: [ -1, 4, -1, -1 ]" in config
-        _, windows, choose, vectorize = pipeline["bricks"]
+        _, windows, choose, vectorize, clip = pipeline["bricks"]
         assert len(windows["output_labels"]) == 4
         assert choose["_class"] == "MulticlassProbabilityMasks" and choose["threshold"] == 0.9
         assert choose["output_masks"] == ["type_1", "type_2", "type_3"]
         assert vectorize["output_fcs"] == ["type_1", "type_2", "type_3"]
+        assert clip["vectors"] == ["type_1", "type_2", "type_3"]
     finally:
         archive.cleanup()

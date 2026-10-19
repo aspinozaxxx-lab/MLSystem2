@@ -43,6 +43,7 @@ def bricks(monkeypatch):
     urban.FilterSmallObjects = FilterSmallObjects
     urban.VectorizeMasks = VectorizeMasks
     base = ModuleType("urban.base.brick")
+    base.Brick = BaseModel
     base.PolygonProcessingBrick = PolygonProcessingBrick
     functional = ModuleType("urban.functional")
     functional.io = None

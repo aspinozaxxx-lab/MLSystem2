@@ -83,7 +83,7 @@ def test_inference_probabilities_and_mask_match_eval_notebook(tmp_path, batch_si
     torch.set_num_threads(2)
     reference = _eval_notebook_functions()
     image, _ = _scene(tmp_path)
-    # Маска TIFF не должна скрывать исходные пиксели от нормализации ноутбука.
+    # Нормализация получает исходные значения, но итог строго ограничен valid-data.
     with rasterio.open(image, "r+") as dataset:
         valid = np.full((100, 100), 255, dtype=np.uint8)
         valid[32:64, 32:64] = 0
@@ -95,11 +95,15 @@ def test_inference_probabilities_and_mask_match_eval_notebook(tmp_path, batch_si
     wrapped = _factory._wrap_next_gen(_spec(), model).model
     metrics = {}
     with rasterio.open(image) as dataset:
+        valid = _pseudo_runner.valid_data_mask(dataset, indexes=(1, 2, 3, 4))
         actual_mask, actual_probabilities = _pseudo_runner._infer_notebook_scene_mask(
             dataset=dataset, input_indexes=(1, 2, 3, 4), input_channels=4,
             torch=torch, model=wrapped, tile_size=32, stride=16,
             batch_size=batch_size, threshold=reference["theshold"], device="cpu", metrics=metrics,
         )
+    # Вне nodata исправленный инференс побитово совпадает с эталонным ноутбуком.
+    expected_probabilities[~valid] = 0
+    expected_mask[~valid] = 0
     np.testing.assert_array_equal(actual_probabilities, expected_probabilities)
     np.testing.assert_array_equal(actual_mask, expected_mask)
     assert metrics["tile_count"] == 25
@@ -137,6 +141,8 @@ def test_pseudo_and_test_f1_use_eval_threshold_without_changing_checkpoint_metri
     model = _eval_model()
     reference = _eval_notebook_functions()
     expected_mask, _ = reference["sliding_window_inference"](model, image, 32, 16, 8)
+    with rasterio.open(image) as source:
+        expected_mask[~_pseudo_runner.valid_data_mask(source)] = 0
     checkpoint_metadata = {"pipeline_variant": "next_gen2", "confidence_threshold": 0.5,
                            "val_best_threshold": 0.5, "sample_size": 32, "inference_context": 0}
     loaded = SimpleNamespace(model=_factory._wrap_next_gen(_spec(channels), model),

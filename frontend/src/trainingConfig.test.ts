@@ -167,10 +167,10 @@ describe("профиль object f1", () => {
   });
 });
 
-describe("автоматический фон next-gen3", () => {
+describe.each(["next_gen3", "next_gen4"])("автоматический фон %s", (variant) => {
   const defaults = {
     legacy: { "train.loss": "bce_dice" },
-    next_gen3: { "train.pipeline_variant": "next_gen3", "train.loss": "cross_entropy_tversky",
+    [variant]: { "train.pipeline_variant": variant, "train.loss": "cross_entropy_tversky",
       "tile_preparation.tile_size": 512, "train.batch_size": 16, "train.pretrained": true,
       "train.max_val_batches_per_epoch": null },
   };
@@ -178,17 +178,22 @@ describe("автоматический фон next-gen3", () => {
     const template = { architecture: "smp_segformer_b0", default_config: defaults.legacy,
       config_schema: { ...schema, fields: [...schema.fields, {
         key: "train.pipeline_variant", label: "Конвейер", value_type: "select", tooltip: "", required: true,
-        options: ["legacy", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"],
+        options: ["legacy", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"],
       }], pipeline_defaults: defaults } };
-    const chosen = trainingConfigForTemplate(template, task, "next_gen3", false);
-    expect(chosen["train.pipeline_variant"]).toBe("next_gen3");
+    const chosen = trainingConfigForTemplate(template, task, variant, false);
+    expect(chosen["train.pipeline_variant"]).toBe(variant);
     expect(chosen["train.loss"]).toBe("cross_entropy_tversky");
     expect(chosen["train.pretrained"]).toBe(false);
     expect(chosen["train.max_val_batches_per_epoch"]).toBeNull();
     for (const key of ["tile_preparation.positive_factor", "tile_preparation.background_factor", "train.batch_size"]) {
-      expect(trainingConfigFieldVisible(key, "next_gen3", "smp_segformer_b0")).toBe(false);
+      expect(trainingConfigFieldVisible(key, variant, "smp_segformer_b0")).toBe(false);
     }
-    expect(configWithField(chosen, "tile_preparation.tile_size", 768, defaults)["train.batch_size"]).toBe(8);
+    for (const [index, size] of [512, 768, 1024, 1536].entries()) {
+      const resized = configWithField(chosen, "tile_preparation.tile_size", size, defaults);
+      expect(resized["train.batch_size"]).toBe([16, 8, 4, 2][index]);
+      expect(resized["tile_preparation.stride"]).toBe(variant === "next_gen4" ? size : size / 2);
+      expect(trainingConfigFieldVisible("tile_preparation.tile_size", variant, "smp_segformer_b0")).toBe(true);
+    }
     expect(configWithField(chosen, "train.pipeline_variant", "legacy", defaults)["train.loss"]).toBe("bce_dice");
   });
 });

@@ -8,6 +8,7 @@ import time
 import numpy as np
 import rasterio
 from rasterio.windows import Window
+from mlsystem2.training_ui_api._raster_valid_data import valid_data_mask
 
 
 _OBJECT_PERFORMANCE_FILENAME = "object_inference_performance.json"
@@ -35,11 +36,13 @@ def register_notebook_bricks() -> None:
         window_size: int = Field(gt=0)
         stride: int = Field(gt=0)
         sigma_scale: float = Field(default=0.25, gt=0)
+        pad_edges: bool = False
 
         def __call__(self, path):
             _sliding_window_probabilities(
                 Path(path), self.input_rasters, self.output_labels, self.adapter,
                 self.window_size, self.stride, self.sigma_scale,
+                pad_edges=self.pad_edges,
             )
 
     class ObjectF1Segmentation(ModelBrick):
@@ -143,11 +146,13 @@ def _split_unmasked(source_path: Path, directory: Path, labels: list[str]) -> No
             directory / f"{label}.tif", "w", **_raster_profile(source, source.dtypes[index]),
         )) for index, label in enumerate(labels)]
         for _, window in source.block_windows(1):
+            valid = valid_data_mask(source, window, tuple(range(1, len(labels) + 1)))
             for index, output in enumerate(outputs, start=1):
                 output.write(source.read(index, window=window, masked=False), 1, window=window)
+                output.write_mask(valid.astype("uint8") * 255, window=window)
 
 
-def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, stride, sigma_scale):
+def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, stride, sigma_scale, *, pad_edges=False):
     """Объединить полные окна как в ноутбуке, храня в RAM только одну полосу."""
     if not 0 < stride <= size or not np.isfinite(sigma_scale) or sigma_scale <= 0:
         raise ValueError("Некорректные шаг или Gaussian sigma оконного инференса.")
@@ -166,22 +171,33 @@ def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, str
         weight = np.outer(gaussian, gaussian).astype(np.float32)
         sums = np.zeros((len(outputs), size, width), dtype=np.float32)
         weights = np.zeros((size, width), dtype=np.float32)
-        rows = range(0, height - size + 1, stride) if width >= size else range(0)
+        rows = range(0, height if pad_edges else height - size + 1, stride) if width >= size or pad_edges else range(0)
         written = 0
         for y in rows:
-            for x in range(0, width - size + 1, stride):
-                window = Window(x, y, size, size)
-                image = np.stack([s.read(1, window=window, out_dtype="float32", masked=False) for s in sources])
+            for x in range(0, width if pad_edges else width - size + 1, stride):
+                w, h = min(size, width-x), min(size, height-y)
+                window = Window(x, y, w, h)
+                image = np.zeros((len(sources), size, size), dtype=np.float32)
+                image[:, :h, :w] = np.stack([s.read(1, window=window, out_dtype="float32", masked=False) for s in sources])
+                valid = np.logical_and.reduce([s.dataset_mask(window=window) > 0 for s in sources])
+                valid &= np.any(image[:, :h, :w] != 0, axis=0)
+                if not valid.any():
+                    continue
+                if pad_edges:
+                    image[:, :h, :w] *= valid
                 probabilities = np.asarray(adapter(image), dtype=np.float32)
                 if probabilities.shape != (len(outputs), size, size) or not np.isfinite(probabilities).all():
                     raise ValueError("Adapter next-gen2 вернул некорректную карту вероятностей.")
-                sums[:, :, x:x + size] += probabilities * weight
-                weights[:, x:x + size] += weight
-            count = size if y == rows[-1] else stride
+                current_weight = weight[:h, :w] * valid
+                sums[:, :h, x:x+w] += probabilities[:, :h, :w] * current_weight
+                weights[:h, x:x+w] += current_weight
+            count = min(size if y == rows[-1] else stride, height-y)
             denominator = np.maximum(weights[:count], 1e-6)
             window = Window(0, y, width, count)
+            valid_output = weights[:count] > 0
             for target, values in zip(targets, sums, strict=True):
                 target.write(values[:count] / denominator, 1, window=window)
+                target.write_mask(valid_output.astype("uint8") * 255, window=window)
             written = y + count
             if y != rows[-1]:
                 sums[:, :size - stride] = sums[:, stride:].copy()

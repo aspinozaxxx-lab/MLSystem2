@@ -1026,7 +1026,7 @@ HTTP-кэш обязан перепроверять ETag; ответ 304 раз�
 
 ## Конвейер Обучения
 
-В Гровике выбираются архитектура, `legacy`, `next_gen2` или `next_gen3` и галочка «Предобученные веса».
+В Гровике выбираются архитектура, `legacy`, `next_gen2`, `next_gen3` или `next_gen4` и галочка «Предобученные веса».
 Четыре SegFormer B0/B1/B2/B3 используют SMP и поддерживают эти конвейеры; у остальных сетей доступен `legacy`.
 Галочка управляет `train.pretrained`: включённая загружает ImageNet-веса соответствующего MiT encoder,
 выключенная оставляет случайную инициализацию всей сети. Голова создаётся заново в обоих случаях.
@@ -1036,12 +1036,12 @@ HTTP-кэш обязан перепроверять ETag; ответ 304 раз�
 Прежний legacy без предобучения сохраняет raw-вход. HF не предлагается для новых ручных и автоматических
 обучений; его исторические задания, результаты, checkpoint, шаблоны инференса, псевдоразметка и экспорт сохраняются.
 Явный выбор конвейера сохраняется при смене архитектуры или датасета, если он поддерживается;
-для multiclass доступны `legacy`, `next_gen2` и `next_gen3` у SegFormer B0/B1/B2/B3. Профиль берётся из шаблона выбранной архитектуры.
+для multiclass доступны `legacy`, `next_gen2`, `next_gen3` и `next_gen4` у SegFormer B0/B1/B2/B3. Профиль берётся из шаблона выбранной архитектуры.
 `next_gen` снят с новых ручных и автоматических запусков: его поля убраны из схемы формы,
 старые шаблоны переводятся на `next_gen2` при штатном обновлении каталога.
 Исторические jobs, MLflow и checkpoint сохраняют `next_gen`; его исполнение и чтение оставлены
 для уже созданных заданий и результатов. Новые HTTP API и миграции БД не требуются.
-`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|object_f1|object_f1_v2`. Конфигурация и checkpoint без
+`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|object_f1|object_f1_v2`. Конфигурация и checkpoint без
 этого поля всегда трактуются как `legacy`; его оконный split, balanced validation, аугментации только
 positive/hard-negative, cosine scheduler, пороги и обработка nodata не меняются. `next_gen` не является
 отдельным верхнеуровневым модулем: он реализован приватными ветками тех же фасадов `settings`,
@@ -1135,6 +1135,29 @@ N+1 FP32 вероятностей. После `SlidingWindowSegmentation` бри
 8. `train` выполняет PyTorch обучение segmentation-модели, validation, early stopping и best/final checkpoints. `legacy` сохраняет AdamW с cosine scheduler и прежние binary/multiclass loss и пороги; `next_gen` использует AdamW с `ReduceLROnPlateau`, полную validation и scene-macro pixel F1. Для binary рассчитываются пиксельная и объектовая F1; `train.quality_metric` выбирает метрику best checkpoint и early stopping в `legacy` и `next_gen`; `next_gen2` использует минимум validation loss. Объекты сопоставляются один к одному при `IoU ≥ 0,5`. Для multiclass основной score — macro pixel F1 по типам. В `legacy` nodata представлен target background `0` и входит в loss и TP/FP/FN; в `next_gen` valid-mask полностью исключает его из этих расчётов. `background_weight`, `pos_weight` и `hard_negative_weight` сохраняют прежнюю семантику на valid pixels. Binary checkpoint остаются совместимыми; next-gen metadata дополнительно содержит variant, preprocessing, band contract, split/fold, scheduler, threshold policy, pretrained provenance и dataset/code revision.
 9. `train_pipeline` передает в `train` progress sink. Train-loss пишется для каждой завершённой эпохи; val-метрики `next_gen` существуют только для эпох с полной validation.
 10. `mlflow_adapter` записывает итоговые метрики, checkpoint, SHA-256, resolved JSON, split manifest, preprocessing, runtime/CUDA/packages/dataset revision, per-scene validation, optional Gaussian comparison, tile/timing и итоговый отчёты.
+
+## Конвейер next-gen4
+
+`train.pipeline_variant=next_gen4` наследует автоматический фон, loss, optimizer, scheduler и полную
+validation/test next-gen3. Размер окна остаётся выбираемым: 512/768/1024/1536; шаг подготовки равен
+размеру окна, context=0. Сетка привязана к (0,0) исходного TIFF, краевые окна дополняются nodata.
+Зоны одного TIFF используют общую сетку. Случайный split 60/20/20 назначает все зональные представления
+одного исходного тайла одной части. По сценам данные не делятся; пересечения разных TIFF разрешены.
+Manifest содержит `grid_policy=non_overlapping_padded_v1`, `split_unit=source_tile`, число исходных
+тайлов и проверку `same_source_overlap_pairs=0`. Соседние тайлы и разные съёмки одной территории
+не гарантируют независимость территорий; обычная тестовая разметка внутри train также не становится
+независимой автоматически. Остальные варианты обучения и существующие шаблоны не переключаются.
+
+Нативный, ONNX и Triton checkpoint next-gen4 сохраняют `mask_output_nodata=true` в preprocessing:
+вход с нулём во всех модельных каналах даёт фон. Raster mask/alpha дополнительно учитывается
+исполнителем инференса. Gaussian-инференс сохраняет шаг половины окна, отдельно от обучающей сетки;
+next-gen4 дополняет края для полного покрытия. Невалидные пиксели не участвуют в накоплении весов,
+а вход next-gen4 обнуляется под raster mask до нормализации, как при обучении;
+результат обнуляется после морфологии и обрезается по valid footprint после геометрических фильтров.
+Тот же nodata-fix применяется к новым инференсам существующих next-gen2/3 весов без изменения весов
+и исторических обучающих метрик. Сохранённые предсказания не переписываются; сигнатура текущей
+тестовой оценки меняется на `notebook_valid_data_v2`. Переносимый ZIP содержит тот же приватный
+код маски валидности и финальный брик `ClipToRasterValidData`.
 
 ## Конвейер next-gen3
 

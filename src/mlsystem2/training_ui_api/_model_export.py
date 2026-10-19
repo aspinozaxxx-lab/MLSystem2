@@ -40,6 +40,8 @@ _BOUNDARY_TAG = "_touches_raster_boundary"
 
 def _object_inference_metadata(variant: object) -> dict[str, str]:
     """Версия текущей CPU-постобработки, независимая от весов checkpoint."""
+    if variant in {"next_gen2", "next_gen3", "next_gen4"}:
+        return {"inference_profile": "notebook_valid_data_v2"}
     if variant != "object_f1_v2":
         return {}
     return {
@@ -100,7 +102,7 @@ def build_triton_model_export_zip(
         task, class_schema = _checkpoint_task_schema(loaded)
         metadata = loaded.artifact.metadata
         parameters = getattr(loaded.model.spec, "parameters", None) or {}
-        next_gen2 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) in {"next_gen2", "next_gen3"}
+        next_gen2 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) in {"next_gen2", "next_gen3", "next_gen4"}
         variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
         object_f1 = variant in {"object_f1", "object_f1_v2"}
         separation = object_separation_config(loaded.model.spec) if variant == "object_f1_v2" else None
@@ -205,6 +207,7 @@ def build_triton_model_export_zip(
                 object_output=object_f1,
                 object_separation=separation.model_dump() if separation is not None else None,
                 batch_size=inference_batch_size,
+                pad_edges=variant == "next_gen4",
             ),
         )
         if object_f1 or next_gen2:
@@ -363,6 +366,7 @@ def build_geoalert_pipeline_yaml(
     object_separation: dict[str, object] | None = None,
     threshold: float = 0.9,
     batch_size: int = 1,
+    pad_edges: bool = False,
 ) -> str:
     """Собрать pipeline повторно, не дублируя тяжёлый Triton model export."""
 
@@ -382,6 +386,7 @@ def build_geoalert_pipeline_yaml(
         object_separation=object_separation,
         threshold=threshold,
         batch_size=batch_size,
+        pad_edges=pad_edges,
     )
 
 
@@ -1077,6 +1082,7 @@ def _pipeline_yaml(
     object_separation: dict[str, object] | None = None,
     threshold: float = 0.5,
     batch_size: int = 1,
+    pad_edges: bool = False,
 ) -> str:
     core_size = _validate_inference_window(sample_size, context)
     if input_channels == 3:
@@ -1206,6 +1212,7 @@ config:
         segmentation["window_size"] = sample_size
         segmentation["stride"] = max(1, sample_size // 2)
         segmentation["sigma_scale"] = 0.25
+        segmentation["pad_edges"] = pad_edges
         for key in ("bounds", "sample_size", "nodata"):
             segmentation.pop(key, None)
         mask_labels = segmentation["output_labels"]
@@ -1223,6 +1230,8 @@ config:
         for brick in bricks:
             if brick["_class"] == "VectorizeMasks":
                 brick["value_property_name"] = "class_id"
+        vectors = next(brick["output_fcs"] for brick in bricks if brick["_class"] == "VectorizeMasks")
+        bricks.append({"_class": "ClipToRasterValidData", "input_raster": "input", "vectors": vectors})
         result = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
     return result
 
@@ -1485,6 +1494,7 @@ def _write_probability_runtime(export_root: Path) -> None:
              "inference/_objects.py", "models/__init__.py", "models/contracts.py",
              "training_ui_api/__init__.py", "training_ui_api/_geoalert_notebook.py",
              "training_ui_api/_geoalert_vector.py", "training_ui_api/_compact_geometry.py",
+             "training_ui_api/_raster_valid_data.py",
              "training_ui_api/_object_inference.py"]
     for relative in files:
         target = export_root / "runtime" / "mlsystem2" / relative

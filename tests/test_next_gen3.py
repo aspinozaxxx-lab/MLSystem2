@@ -279,7 +279,8 @@ def test_public_contracts_and_mlflow_sampling_artifacts(monkeypatch):
 
 
 @pytest.mark.parametrize("architecture", ["smp_segformer_b0", "segformer_b0"])
-def test_four_epochs_checkpoint_offline_and_onnx(tmp_path, monkeypatch, architecture):
+@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4"])
+def test_four_epochs_checkpoint_offline_and_onnx(tmp_path, monkeypatch, architecture, variant):
     torch = pytest.importorskip("torch")
     pytest.importorskip("segmentation_models_pytorch")
     pytest.importorskip("transformers")
@@ -293,26 +294,34 @@ def test_four_epochs_checkpoint_offline_and_onnx(tmp_path, monkeypatch, architec
     torch.set_num_threads(2)
     torch.manual_seed(42)
     source = scene(tmp_path)
-    datasets = {mode: TileDataset(scenes=[source], tile_size=32, stride=16, mode=mode,
-        seed=42, augmentation_level=0, pipeline_variant="next_gen3",
+    if variant == "next_gen4":
+        # В новой сетке исходный единичный positive попал в held-out;
+        # добавляем второй объект в известный train-тайл, не меняя старый эталон.
+        annotation = Path(source.annotation_file)
+        payload = json.loads(annotation.read_text(encoding="utf-8"))
+        payload["features"].append({"type": "Feature", "properties": {}, "geometry": mapping(box(76, 20, 80, 24))})
+        annotation.write_text(json.dumps(payload), encoding="utf-8")
+    datasets = {mode: TileDataset(scenes=[source], tile_size=32, stride=32 if variant == "next_gen4" else 16, mode=mode,
+        seed=42, augmentation_level=0, pipeline_variant=variant,
         tile_split=TileSplitRequest(val_fraction=0.2, test_fraction=0.2)) for mode in ("train", "val", "test")}
     sampler = AdaptiveBackgroundSampler(datasets["train"].adaptive_sampling_tiles(), seed=42)
     loaders = {mode: torch.utils.data.DataLoader(data, batch_size=4,
         sampler=sampler if mode == "train" else None, collate_fn=_collate_tile_batch) for mode, data in datasets.items()}
     spec = ModelSpec(name=architecture, input_channels=4, output_channels=1,
-        parameters={"pipeline_variant": "next_gen3", "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6},
+        parameters={"pipeline_variant": variant, "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6,
+                    **({"mask_output_nodata": True} if variant == "next_gen4" else {})},
                     "sampler": sampler.snapshot()["policy"]})
     handle = create_model(spec)
     result = train_model(TrainRequest(model=handle, train_loader=loaders["train"], val_loader=loaders["val"],
         test_loader=loaders["test"], checkpoint_dir=str(tmp_path / "checkpoints"), sample_size=32,
-        config=TrainConfig(pipeline_variant="next_gen3", epochs=4, batch_size=4, device="cpu",
+        config=TrainConfig(pipeline_variant=variant, epochs=4, batch_size=4, device="cpu",
                            learning_rate=1e-4, weight_decay=0.01, early_stopping_patience=10,
                            loss="cross_entropy_tversky", class_weights=datasets["train"].notebook_class_weights)))
     assert result.epochs_total == 4
     assert len(result.diagnostics["adaptive_sampling"]["history"]) == 4
     assert result.diagnostics["test_metrics"]["checkpoint_epoch"] >= 1
     payload = torch.load(result.final_checkpoint_path, map_location="cpu", weights_only=True)
-    assert payload["metadata"]["pipeline_variant"] == "next_gen3"
+    assert payload["metadata"]["pipeline_variant"] == variant
     assert payload["metadata"]["adaptive_sampling"]["state"]["epoch"] == 4
     assert payload["metadata"]["adaptive_sampling"]["policy"]["version"] == "adaptive_background_v1"
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
@@ -330,7 +339,8 @@ def test_four_epochs_checkpoint_offline_and_onnx(tmp_path, monkeypatch, architec
         data.close()
 
 
-def test_multiclass_training_keeps_partial_negatives_out_of_background_mining(tmp_path):
+@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4"])
+def test_multiclass_training_keeps_partial_negatives_out_of_background_mining(tmp_path, variant):
     torch = pytest.importorskip("torch")
     from mlsystem2.models.api import create_model
     from mlsystem2.models.contracts import ModelSpec
@@ -362,8 +372,9 @@ def test_multiclass_training_keeps_partial_negatives_out_of_background_mining(tm
     train = torch.utils.data.DataLoader(Samples(), batch_size=2, sampler=sampler, collate_fn=_collate_tile_batch)
     val = torch.utils.data.DataLoader(Samples(), batch_size=2, collate_fn=_collate_tile_batch)
     model = create_model(ModelSpec(name="smp_segformer_b0", input_channels=3, output_channels=3,
-        parameters={"pipeline_variant": "next_gen3", "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6}}))
-    config = TrainConfig(pipeline_variant="next_gen3", task="multiclass", epochs=2, batch_size=2,
+        parameters={"pipeline_variant": variant, "preprocessing": {"mode": "window_minmax", "epsilon": 1e-6,
+                    **({"mask_output_nodata": True} if variant == "next_gen4" else {})}}))
+    config = TrainConfig(pipeline_variant=variant, task="multiclass", epochs=2, batch_size=2,
         device="cpu", learning_rate=1e-4, weight_decay=0.01, early_stopping_patience=5,
         loss="cross_entropy_tversky", class_weights=[0.5, 1, 1.5], class_schema=[
             {"id": i, "slug": f"class_{i}", "name": f"Класс {i}", "color": "#00aa66"} for i in (1, 2)])
@@ -376,7 +387,8 @@ def test_multiclass_training_keeps_partial_negatives_out_of_background_mining(tm
 
 
 @pytest.mark.parametrize("imagery,channels", [("kanopus", 4), ("ortho", 3)])
-def test_manual_job_and_worker_yaml_keep_next_gen3_without_switching_templates(tmp_path, monkeypatch, imagery, channels):
+@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4"])
+def test_manual_job_and_worker_yaml_keep_variant_without_switching_templates(tmp_path, monkeypatch, imagery, channels, variant):
     from sqlalchemy import select
     from mlsystem2.settings.contracts import SystemSettings
     from mlsystem2.training_ui_api._config import get_config
@@ -399,9 +411,10 @@ def test_manual_job_and_worker_yaml_keep_next_gen3_without_switching_templates(t
     Base.metadata.create_all(factory.kw["bind"])
     with factory() as session:
         job = _service.create_training_job(session, TrainingJobCreate(dataset_key="Озера/main",
-            architecture="smp_segformer_b0", mlflow_experiment_id="1", mlflow_experiment_name="Проверка next-gen3",
-            config={"train.pipeline_variant": "next_gen3", "train.pretrained": False}), config)
-        assert job.pipeline_variant == "next_gen3"
+            architecture="smp_segformer_b0", mlflow_experiment_id="1", mlflow_experiment_name="Проверка конвейера",
+            config={"train.pipeline_variant": variant, "train.pretrained": False,
+                    "tile_preparation.tile_size": 768}), config)
+        assert job.pipeline_variant == variant
         assert job.config["train.quality_metric"] == "pixel"
         stored = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == job.id))
         assert stored.dataset_version == "проверочная-ревизия"
@@ -409,7 +422,9 @@ def test_manual_job_and_worker_yaml_keep_next_gen3_without_switching_templates(t
         # Worker создаёт overlay; эти общие поля CLI получает из основного settings.yml.
         payload["mlflow"] = {"enabled": False, "tracking_uri": "file:///unused", **payload["mlflow"]}
         settings = SystemSettings.model_validate(payload)
-        assert settings.train.pipeline_variant == "next_gen3"
+        assert settings.train.pipeline_variant == variant
+        assert settings.tile_preparation.tile_size == 768
+        assert settings.tile_preparation.stride == (768 if variant == "next_gen4" else 384)
         assert settings.train.input_channels == channels
         assert settings.train.max_val_batches_per_epoch is None
         assert all(t.default_config["train.pipeline_variant"] == "legacy" for t in session.scalars(select(TrainingTemplateRow)))

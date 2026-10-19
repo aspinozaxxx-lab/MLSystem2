@@ -29,7 +29,7 @@ class TrainConfig(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "object_f1", "object_f1_v2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"] = "legacy"
     class_weights: list[float] = Field(default_factory=list)
     object_separation: ObjectSeparationConfig | None = None
     calibrate_object_threshold: bool = True
@@ -72,7 +72,7 @@ class TrainConfig(BaseModel):
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
         if self.task == "multiclass" and self.loss not in multiclass_losses | {"cross_entropy_tversky"}:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
-        if self.pipeline_variant in {"next_gen2", "next_gen3", "object_f1", "object_f1_v2"}:
+        if self.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
             if self.loss != "cross_entropy_tversky":
                 raise ValueError("next-gen2 требует CrossEntropy + Tversky")
             if self.pipeline_variant in {"object_f1", "object_f1_v2"} and self.task != "binary":

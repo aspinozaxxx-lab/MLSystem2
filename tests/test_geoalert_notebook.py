@@ -34,6 +34,7 @@ def test_split_preserves_pixels_under_tiff_mask(tmp_path, channels):
             np.testing.assert_array_equal(band.read(1), image[index])
             assert band.nodata is None
             assert band.transform == from_origin(100, 500, 0.5, 0.5)
+            assert not band.dataset_mask()[3:12, 3:12].any()
 
 
 @pytest.mark.parametrize("channels", [3, 4])
@@ -69,6 +70,8 @@ def test_stripe_merge_matches_full_notebook_arrays(tmp_path, channels, height, w
             counts[y:y + size, x:x + size] += weight
             windows += 1
     expected /= np.maximum(counts, 1e-6)
+    # Исправленный инференс совпадает на valid-data, raster mask обнуляется.
+    expected[3:12, 3:12] = 0
     with rasterio.open(tmp_path / "probability.tif") as result:
         np.testing.assert_array_equal(result.read(1), expected)
         assert result.dtypes == ("float32",)

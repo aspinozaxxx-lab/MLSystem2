@@ -182,6 +182,7 @@ def vector_runtime(monkeypatch):
     urban.VectorizeMasks = VectorizeMasks
     urban.FilterSmallObjects = FilterSmallObjects
     base = ModuleType("urban.base.brick")
+    base.Brick = BaseModel
     base.PolygonProcessingBrick = PolygonProcessingBrick
     functional = ModuleType("urban.functional")
     io = ModuleType("urban.functional.io")
@@ -272,7 +273,10 @@ def test_export_metadata_distinguishes_current_algorithm_from_checkpoint(profile
             assert current["cuda_use_tf32"] is False
             assert current["object_separation"] == separation
         else:
-            assert "inference_profile" not in current
+            if profile == "next_gen2":
+                assert current["inference_profile"] == "notebook_valid_data_v2"
+            else:
+                assert "inference_profile" not in current
             assert "object_separation_algorithm" not in current
             assert "object_simplification_algorithm" not in current
             assert "inference_precision" not in current
