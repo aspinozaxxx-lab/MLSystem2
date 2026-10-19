@@ -3051,6 +3051,7 @@ def _training_result_info(
         trained_at=row.trained_at,
         created_at=row.created_at,
         started_at=job.started_at if job is not None else None,
+        runtime_minutes=_job_runtime_minutes(session, row.job_id, jobs_by_id),
         mlflow_run_url=row.mlflow_run_url,
         sample_size_hint=job.tile_size if job is not None else None,
         status=_public_result_status(session, row.status, row.job_id, jobs_by_id),

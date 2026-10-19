@@ -126,11 +126,15 @@ def test_training_result_metadata_contract(monkeypatch) -> None:
 
     assert TrainingResultInfo.model_fields["comment"].default == ""
     assert TrainingResultInfo.model_fields["dataset_number"].default is None
+    assert TrainingResultInfo.model_fields["runtime_minutes"].default is None
     assert TrainingResultCommentUpdate.model_fields["expected_comment"].is_required()
     assert TrainingResultArchiveRequest.model_fields["confirmed"].is_required()
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
     paths = get_openapi_schema()["paths"]
+    runtime = get_openapi_schema()["components"]["schemas"]["TrainingResultInfo"]["properties"]["runtime_minutes"]
+    assert {"type": "integer", "minimum": 0} in runtime["anyOf"]
+    assert {"type": "null"} in runtime["anyOf"]
     assert {"get", "put"} <= paths["/api/v1/results/training/{result_id}/comment"].keys()
     assert "post" in paths["/api/v1/results/training/{result_id}/archive"]
     assert not any("restore" in path and "training" in path for path in paths)

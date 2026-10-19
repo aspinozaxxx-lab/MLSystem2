@@ -101,6 +101,16 @@ describe("format helpers", () => {
     expect(formatTrainingResultDate("error", null, null, "2026-06-10T11:00:00")).toContain("11:00");
   });
 
+  it.each([[30, "30м"], [90, "1:30"], [0, "0м"]])("добавляет длительность обучения %i после даты", (minutes, label) => {
+    expect(formatTrainingResultDate("ok", "2026-10-19T12:30:00", "2026-10-19T12:00:00", "2026-10-19T11:00:00", minutes))
+      .toMatch(new RegExp(`12:30.*\\(за ${label}\\)$`));
+  });
+
+  it.each([null, undefined])("не подменяет неизвестную длительность обучения нулём", (minutes) => {
+    expect(formatTrainingResultDate("ok", "2026-10-19T12:30:00", null, "2026-10-19T11:00:00", minutes))
+      .not.toContain("(за");
+  });
+
   it("normalizes displayed stored file names", () => {
     expect(displayStoredFileName("Засоления\\main_segformer b2_07_38_06_06.geojson")).toBe("Засоления_main_segformer b2_07_38_06_06.geojson");
   });

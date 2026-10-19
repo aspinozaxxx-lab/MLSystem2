@@ -3945,7 +3945,7 @@ export function ResultsTable({
                     {result.status === "ok" && result.test_f1 ? <TestF1RefreshButton status={result.test_f1.status} endpoint={`/results/training/${result.id}/test-f1`} label={result.model_name} onQueued={onF1Queued} /> : null}
                   </td>
                   <td className="technical-value" title="Эпоха лучших весов этого этапа" data-label="Эпоха этапа">{result.epoch ?? "—"}</td>
-                  <td className="technical-value" title="Создано" data-label="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at)}</td>
+                  <td className="technical-value" title="Создано; в скобках — время от старта до завершения, включая подготовку и паузы, без ожидания в очереди" data-label="Создано">{formatTrainingResultDate(result.status, result.trained_at, result.started_at, result.created_at, result.runtime_minutes)}</td>
                   <td className="action-cell">
                     {onArchive && !isActiveStatus(result.status) ? <button className="danger icon-button" type="button"
                       title="Удалить обучение в скрытый архив" aria-label={`Удалить обучение${result.dataset_number ? ` #${result.dataset_number}` : ""}`}

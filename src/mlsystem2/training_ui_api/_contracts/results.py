@@ -277,6 +277,7 @@ class TrainingResultInfo(BaseModel):
     trained_at: datetime | None = None
     created_at: datetime
     started_at: datetime | None = None
+    runtime_minutes: int | None = Field(default=None, ge=0, title="Длительность обучения, минут", description="Полные минуты от старта задания до завершения, включая подготовку и паузы, без ожидания в очереди; null, если время неизвестно или задание не завершено.")
     mlflow_run_url: str | None = None
     sample_size_hint: int | None = None
     status: Literal["queued", "running", "paused", "ok", "error", "cancelled"]

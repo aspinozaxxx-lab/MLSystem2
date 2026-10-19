@@ -51,8 +51,11 @@ export function formatTrainingResultDate(
   trainedAt: string | null | undefined,
   startedAt: string | null | undefined,
   createdAt: string | null | undefined,
+  runtimeMinutes?: number | null,
 ): string {
-  return formatDateTime(status === "ok" ? trainedAt : startedAt || createdAt);
+  const date = formatDateTime(status === "ok" ? trainedAt : startedAt || createdAt);
+  const runtime = runtimeMinutes == null ? "" : formatRuntimeMinutes(runtimeMinutes);
+  return runtime ? `${date} (за ${runtime})` : date;
 }
 
 export function formatRuntimeMinutes(value: number | null | undefined): string {

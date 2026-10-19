@@ -5637,6 +5637,11 @@ export interface components {
             created_at: string;
             /** Started At */
             started_at?: string | null;
+            /**
+             * Длительность обучения, минут
+             * @description Полные минуты от старта задания до завершения, включая подготовку и паузы, без ожидания в очереди; null, если время неизвестно или задание не завершено.
+             */
+            runtime_minutes?: number | null;
             /** Mlflow Run Url */
             mlflow_run_url?: string | null;
             /** Sample Size Hint */

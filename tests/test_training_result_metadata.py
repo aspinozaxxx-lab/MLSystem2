@@ -64,6 +64,37 @@ def login(client):
     assert client.post("/api/v1/auth/login", json={"username": "Alex", "password": "test"}).status_code == 200
 
 
+@pytest.mark.parametrize(("start", "finish", "expected"), [
+    ("2026-10-19T12:00:00+00:00", "2026-10-19T13:30:59+00:00", 90),
+    ("2026-10-19T13:00:00+03:00", "2026-10-19T10:30:00+00:00", 30),
+    ("2026-10-19T12:00:00", "2026-10-19T12:00:30", 0),
+    (None, "2026-10-19T13:30:00+00:00", None),
+    ("2026-10-19T12:00:00+00:00", None, None),
+    (None, None, None),
+])
+def test_training_duration_uses_job_times_without_queue_wait(context, start, finish, expected):
+    _, factory, config, result_id, job_id, _ = context
+    with factory() as session:
+        row = session.get(TrainingResultRow, result_id)
+        job = session.get(JobRow, job_id)
+        job.created_at = datetime(2026, 10, 18, tzinfo=timezone.utc)
+        job.started_at = datetime.fromisoformat(start) if start is not None else None
+        job.finished_at = datetime.fromisoformat(finish) if finish is not None else None
+        info = _service._training_result_info(session, row, config=config)
+        assert info.runtime_minutes == expected
+        mapped = _service._training_result_info(session, row, config=config, jobs_by_id={job.id: job})
+        assert mapped.runtime_minutes == expected
+        assert mapped.model_dump(mode="json")["runtime_minutes"] == expected
+
+
+def test_historical_training_without_job_has_unknown_duration(context):
+    _, factory, config, result_id, _, _ = context
+    with factory() as session:
+        row = session.get(TrainingResultRow, result_id)
+        row.job_id = None
+        assert _service._training_result_info(session, row, config=config).runtime_minutes is None
+
+
 def test_comment_requires_authentication_and_is_shared_persistent_plain_text(context):
     client, factory, config, result_id, job_id, _ = context
     endpoint = f"/api/v1/results/training/{result_id}/comment"

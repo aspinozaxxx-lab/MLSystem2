@@ -34,17 +34,18 @@ describe("результаты класса на одной странице", (
     expect(filled).not.toContain("dialog");
     expect(newsArticles.find(item => item.slug === "training-results-notes-and-archive")?.date).toBe("2026-10-18");
   });
-  it("показывает автора каждого этапа вместо технического обозначения архитектуры", () => {
+  it("показывает автора каждого этапа и длительность после даты без выдуманного времени старых запусков", () => {
     const base: TrainingResultInfo = {
       comment: "",
       id: "исходная", model_name: "SegFormer B1", architecture: "smp_segformer_b1", dataset_number: 21,
       status: "ok", source: "manual", created_at: "2026-10-18T12:00:00Z", started_by: "Alex",
+      trained_at: "2026-10-18T13:30:00Z", runtime_minutes: 90,
       pipeline_variant: "legacy", validation_fold: 0, is_primary: false, can_continue_training: false,
       input_channels: 4, quality_metric: "pixel", task: "binary",
     };
     const html = renderToStaticMarkup(<ResultsTable payload={{
       dataset_key: "учебный", dataset_name: "Учебный", quality_metric: "pixel", test_f1_status: "unavailable",
-      results: [base, { ...base, id: "продолжение", dataset_number: 24, continued_from_result_id: base.id, started_by: "Aspinoza" }],
+      results: [base, { ...base, id: "продолжение", dataset_number: 24, continued_from_result_id: base.id, started_by: "Aspinoza", runtime_minutes: null }],
     }} datasets={[]} imageFolders={[]} onPseudo={() => {}} onZip={() => {}} onContinue={() => {}}
       onPrimary={() => {}} onArchive={() => {}} onDeletePseudo={() => {}} showJobLog={async () => {}} onF1Queued={async () => {}} />);
     expect(html).toContain("Обучил Alex");
@@ -54,6 +55,8 @@ describe("результаты класса на одной странице", (
     expect(html).toContain("#24 SegFormer B1");
     expect(html).toContain("Удалить обучение #21");
     expect(html).not.toContain("smp_segformer_b1");
+    expect(html).toContain("(за 1:30)</td>");
+    expect(html.match(/\(за /g)).toHaveLength(1);
     expect(newsArticles.find(item => item.slug === "training-results-author")?.date).toBe("2026-10-18");
   });
 
