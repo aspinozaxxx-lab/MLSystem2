@@ -13,6 +13,7 @@
   "dependencies": {
     "lucide-react": "^1.21.0",
     "ol": "^10.6.1",
+    "polygon-clipping": "0.15.7",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

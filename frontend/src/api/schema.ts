@@ -502,6 +502,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/polygon-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** История подтверждённых публикаций выбранного полигона */
+        get: operations["polygon_history_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__polygon_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import": {
         parameters: {
             query?: never;
@@ -2225,6 +2242,42 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AnnotationFeatureHistory */
+        AnnotationFeatureHistory: {
+            /**
+             * Version Id
+             * Format: uuid
+             */
+            version_id: string;
+            /** Feature Id */
+            feature_id: string;
+            /** Entries */
+            entries: components["schemas"]["AnnotationFeatureHistoryEntry"][];
+        };
+        /** AnnotationFeatureHistoryEntry */
+        AnnotationFeatureHistoryEntry: {
+            /** Id */
+            id: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "baseline" | "created" | "updated" | "deleted";
+            /** Username */
+            username?: string | null;
+            /** Published At */
+            published_at?: string | null;
+            /** Commit */
+            commit?: string | null;
+            /** Feature */
+            feature?: {
+                [key: string]: unknown;
+            } | null;
+            /** Crs */
+            crs?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** AnnotationVersionCatalog */
         AnnotationVersionCatalog: {
             /**
@@ -2300,6 +2353,11 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
             /** Usages */
             usages?: components["schemas"]["AnnotationVersionUsage"][];
         };
@@ -6701,6 +6759,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnnotationVersionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    polygon_history_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__polygon_history_get: {
+        parameters: {
+            query: {
+                feature_id: string;
+                version_id?: string | null;
+            };
+            header?: never;
+            path: {
+                dataset_key: string;
+                annotation_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnotationFeatureHistory"];
                 };
             };
             /** @description Validation Error */

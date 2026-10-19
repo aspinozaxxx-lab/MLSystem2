@@ -1157,6 +1157,81 @@
         }
       }
     },
+    "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/polygon-history": {
+      "get": {
+        "summary": "История подтверждённых публикаций выбранного полигона",
+        "operationId": "polygon_history_api_v1_dataset_editor_datasets__dataset_key__scenes__annotation_name__polygon_history_get",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          },
+          {
+            "name": "annotation_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Annotation Name"
+            }
+          },
+          {
+            "name": "feature_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Feature Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationFeatureHistory"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import": {
       "post": {
         "summary": "Загрузить GeoJSON новых снимков в черновики",
@@ -6317,6 +6392,117 @@
   },
   "components": {
     "schemas": {
+      "AnnotationFeatureHistory": {
+        "properties": {
+          "version_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Version Id"
+          },
+          "feature_id": {
+            "type": "string",
+            "title": "Feature Id"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationFeatureHistoryEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version_id",
+          "feature_id",
+          "entries"
+        ],
+        "title": "AnnotationFeatureHistory"
+      },
+      "AnnotationFeatureHistoryEntry": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "baseline",
+              "created",
+              "updated",
+              "deleted"
+            ],
+            "title": "Action"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "feature": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature"
+          },
+          "crs": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "action"
+        ],
+        "title": "AnnotationFeatureHistoryEntry"
+      },
       "AnnotationVersionCatalog": {
         "properties": {
           "image_id": {
@@ -6483,6 +6669,11 @@
             "format": "date-time",
             "title": "Updated At"
           },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
           "usages": {
             "items": {
               "$ref": "#/components/schemas/AnnotationVersionUsage"
@@ -6497,7 +6688,8 @@
           "id",
           "name",
           "revision",
-          "updated_at"
+          "updated_at",
+          "created_at"
         ],
         "title": "AnnotationVersionInfo"
       },

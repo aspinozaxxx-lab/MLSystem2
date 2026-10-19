@@ -83,9 +83,11 @@ def is_background_test_f1_job(row: _QueueRow) -> bool:
 
 
 def is_urgent_job(row: _QueueRow) -> bool:
-    if is_background_test_f1_job(row):
-        return False
     config = row.config or {}
+    if config.get("operation") == TEST_SAMPLE_F1_OPERATION and config.get(
+        TEST_F1_PRIORITY_CONFIG_KEY
+    ) in {"background", "manual"}:
+        return False
     return (
         config.get(URGENT_PRIORITY_CONFIG_KEY) == URGENT_PRIORITY_VALUE
         or config.get("operation") == TEST_SAMPLE_F1_OPERATION

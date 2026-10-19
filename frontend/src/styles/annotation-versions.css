@@ -1,5 +1,18 @@
-.annotation-versions { display: flex; align-items: end; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; padding: .65rem; border: 1px solid var(--border, #d4dbe4); border-radius: .6rem; }
-.annotation-versions > label { display: grid; gap: .3rem; flex: 1 1 15rem; min-width: 0; }
-.annotation-versions select { max-width: 100%; width: 100%; }
-.annotation-version-usage { flex: 1 1 100%; line-height: 1.5; }
-@media (max-width: 700px) { .annotation-versions > button { flex: 1; min-height: 44px; } }
+.dataset-editor-scene-entry { position: relative; min-width: 0; }
+.dataset-editor-scene-entry > button:first-child { width: 100%; padding-bottom: 2rem; }
+.dataset-editor-scene-list .annotation-version-count { position: absolute; bottom: .4rem; right: .5rem; display: inline-flex; align-items: center; gap: .25rem; width: auto; padding: .2rem .45rem; min-height: 25px; font-size: .72rem; border-radius: 1rem; }
+.annotation-versions-menu { z-index: 1200; width: min(350px, calc(100vw - 16px)); max-height: min(640px, calc(100dvh - 32px)); overflow-y: auto; overscroll-behavior: contain; padding: .65rem; border: 1px solid var(--border); border-radius: .8rem; background: var(--surface, #fff); color: var(--text); box-shadow: 0 14px 45px #0003; display: grid; gap: .6rem; }
+.annotation-versions-menu header { display: grid; gap: .3rem; }
+.annotation-versions-menu small { font-size: .75rem; line-height: 1.45; }
+.annotation-version-cards { display: grid; gap: .45rem; }
+.annotation-version-card { display: flex; align-items: start; border: 1px solid var(--border); border-radius: .6rem; }
+.annotation-version-card.selected { border-color: #0284c7; background: #0284c710; }
+.annotation-version-choice { flex: 1; min-width: 0; border: 0; border-radius: .6rem; background: transparent; color: inherit; padding: .65rem; display: grid; gap: .25rem; text-align: left; overflow-wrap: anywhere; }
+.annotation-version-choice strong { display: flex; align-items: center; gap: .3rem; }
+.annotation-version-delete { margin: .35rem; padding: .3rem; min-width: 28px; min-height: 28px; }
+.annotation-version-create { justify-content: center; display: flex; align-items: center; gap: .35rem; }
+.polygon-history { padding: .6rem .8rem; border-top: 1px solid var(--border); font-size: .8rem; }
+.polygon-history header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.polygon-history p { margin: .4rem 0; }
+.polygon-history-events { display: flex; flex-wrap: wrap; gap: .4rem; max-height: 170px; overflow-y: auto; margin-top: .5rem; }
+.polygon-history-events button { display: grid; gap: .25rem; text-align: left; padding: .45rem; }

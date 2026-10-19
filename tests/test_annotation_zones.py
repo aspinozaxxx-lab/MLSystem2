@@ -195,11 +195,14 @@ def test_invalid_predictions_have_no_loss_or_gradient(pipeline, loss, channels):
     assert torch.isfinite(empty) and empty.item() == 0
 
 
-def test_editor_preserves_zone_outside_footprint():
+def test_editor_clips_zone_by_footprint_without_modifying_source():
     from mlsystem2.training_ui_api._dataset_editor import _clip_geojson_to_footprint
 
-    original = payload([feature("zone", box(20, 20, 30, 30))])
-    assert _clip_geojson_to_footprint(original, box(0, 0, 10, 10)) == original
+    original = payload([feature("zone", box(-5, -5, 30, 30))])
+    result = _clip_geojson_to_footprint(original, box(0, 0, 10, 10))
+    assert shape(result["features"][0]["geometry"]).equals(box(0, 0, 10, 10))
+    assert result["features"][0]["id"] == "zone"
+    assert shape(original["features"][0]["geometry"]).equals(box(-5, -5, 30, 30))
 
 
 @pytest.mark.parametrize("pipeline", ["legacy", "next_gen2", "object_f1"])

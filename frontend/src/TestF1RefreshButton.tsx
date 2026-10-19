@@ -15,10 +15,11 @@ export function TestF1RefreshButton({ status, endpoint, label, onQueued }: {
   useEffect(() => { setQueued(false); }, [status]);
   if (status === "current") return null;
   const active = queued || status === "queued" || status === "running";
+  const canPromote = status === "queued" && !queued;
   return <span className="test-f1-refresh-control">
     <button className="secondary icon-button test-f1-refresh" type="button"
-      aria-label={`Пересчитать F1: ${label}`} title={active ? "Расчёт F1 уже в очереди или выполняется" : `Пересчитать F1: ${label}`}
-      disabled={busy || active} onClick={async (event) => {
+      aria-label={`Пересчитать F1: ${label}`} title={canPromote ? "Перевести ожидающий F1 в обычную ручную очередь без создания дубля" : active ? "Расчёт F1 уже в очереди или выполняется" : `Пересчитать F1: ${label}`}
+      disabled={busy || (active && !canPromote)} onClick={async (event) => {
         event.stopPropagation();
         setBusy(true); setError("");
         try {

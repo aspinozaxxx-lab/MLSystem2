@@ -436,8 +436,9 @@ def test_dataset_editor_save_checks_revision_geometry_and_publication(
             "geojson": out_of_bounds,
         },
     )
-    assert rejected.status_code == 400
-    assert "footprint" in rejected.json()["detail"]
+    assert rejected.status_code == 200
+    current = env.client.get(detail_url).json()
+    assert shape(current["valid_data_footprint"]).covers(shape(current["geojson"]["features"][0]["geometry"]))
 
     inside_nodata = current["geojson"]
     inside_nodata["features"][0]["geometry"] = {
@@ -451,8 +452,8 @@ def test_dataset_editor_save_checks_revision_geometry_and_publication(
             "geojson": inside_nodata,
         },
     )
-    assert rejected_nodata.status_code == 400
-    assert "footprint" in rejected_nodata.json()["detail"]
+    assert rejected_nodata.status_code == 200
+    assert len(env.client.get(detail_url).json()["geojson"]["features"]) == len(inside_nodata["features"]) - 1
 
     publishing = env.client.get(f"/api/v1/dataset-editor/publication/{commit}")
     assert publishing.json()["status"] == "publishing"
@@ -752,8 +753,8 @@ def test_dataset_editor_draft_clips_objects_to_valid_raster_footprint(
         assert footprint.covers(shape(saved_by_id[feature_id]["geometry"]))
     assert shape(saved_by_id[100]["geometry"]).bounds == pytest.approx((0, 3, 2, 5))
     assert shape(saved_by_id[101]["geometry"]).area < 4
-    original_zones = {item["id"]: item["geometry"] for item in payload["features"] if item["id"] in (103, 104)}
-    assert {key: saved_by_id[key]["geometry"] for key in original_zones} == original_zones
+    assert 104 not in saved_by_id
+    assert shape(saved_by_id[103]["geometry"]).equals(footprint)
     reopened = env.client.get(f"{scenes_url}/{annotation_path}").json()
     assert reopened["draft"]["geojson"] == saved_payload
     published = env.client.put(
@@ -762,9 +763,8 @@ def test_dataset_editor_draft_clips_objects_to_valid_raster_footprint(
     )
     assert published.status_code == 200, published.text
     reopened = env.client.get(f"{scenes_url}/{annotation_path}").json()
-    assert reopened["scene"]["annotation_zone_count"] == 2
-    assert {item["id"]: item["geometry"] for item in reopened["geojson"]["features"]
-            if item["id"] in original_zones} == original_zones
+    assert reopened["scene"]["annotation_zone_count"] == 1
+    assert shape(next(item for item in reopened["geojson"]["features"] if item["id"] == 103)["geometry"]).equals(footprint)
 
 
 def test_dataset_editor_repairs_stale_crs_and_companion_footprint(
@@ -914,8 +914,8 @@ def test_dataset_editor_publishes_multiple_scenes_atomically(
     invalid_first = deepcopy(current_first["geojson"])
     invalid_second = deepcopy(current_second["geojson"])
     invalid_second["features"][0]["geometry"] = {
-        "type": "Polygon",
-        "coordinates": [[[7, 7], [9, 7], [9, 9], [7, 9], [7, 7]]],
+        "type": "LineString",
+        "coordinates": [[7, 7], [9, 9]],
     }
     invalid = env.client.put(
         scenes_url,
@@ -2107,6 +2107,12 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     )
     assert detail_response.status_code == 200
     payload = detail_response.json()["geojson"]
+    polygon_history = env.client.get(
+        f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes/{quote(annotation_name, safe='')}/polygon-history",
+        params={"feature_id": str(payload["features"][0]["id"])},
+    )
+    assert polygon_history.status_code == 200, polygon_history.text
+    assert polygon_history.json()["entries"][0]["action"] == "baseline"
     lake_type = next(
         item
         for item in scenes_response.json()["dataset"]["object_types"]
@@ -2144,7 +2150,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     )
     assert any(feature.get("id") == "new-lake" for feature in saved["features"])
     saved_feature = next(feature for feature in saved["features"] if feature.get("id") == "new-lake")
-    assert shape(saved_feature["geometry"]).bounds == pytest.approx(new_geometry.bounds)
+    assert shape(saved_feature["geometry"]).equals(new_geometry.intersection(shape(detail_response.json()["valid_data_footprint"])))
     assert not (env.editor_root / "Реки и озера" / "main").exists()
 
     with session_factory() as session:
@@ -2157,7 +2163,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         ).json()
         rebuilt_zone = next(item for item in refreshed["geojson"]["features"]
                             if item["properties"]["_mlsystem2_role"] == "annotation_zone")
-        assert shape(rebuilt_zone["geometry"]).bounds == pytest.approx(new_geometry.bounds)
+        assert shape(rebuilt_zone["geometry"]).bounds == pytest.approx(new_geometry.intersection(shape(detail_response.json()["valid_data_footprint"])).bounds)
 
     added_image = env.editor_root.parent / "images" / "kanopus" / "batch" / "MANAGED04.tif"
     _write_raster(added_image, value=44)
@@ -2255,7 +2261,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     lake_features = json.loads(lake_target.read_text(encoding="utf-8"))["features"]
     for source_features in (river_features, lake_features):
         source_zone = next(item for item in source_features if item["properties"]["_mlsystem2_role"] == "annotation_zone")
-        assert shape(source_zone["geometry"]).bounds == pytest.approx((-2, -2, 12, 12))
+        assert shape(source_zone["geometry"]).bounds == pytest.approx((0, 0, 8, 8))
     assert {item["properties"]["_mlsystem2_role"] for item in river_features} == {"hard_negative", "annotation_zone"}
     assert {item["properties"]["_mlsystem2_role"] for item in lake_features} == {
         "positive",
@@ -2274,7 +2280,7 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     assert refreshed_added["scene"]["annotation_zone_count"] == 1
     common_zone = next(item for item in refreshed_added["geojson"]["features"] if item["properties"]["_mlsystem2_role"] == "annotation_zone")
     assert "_mlsystem2_class" not in common_zone["properties"]
-    assert shape(common_zone["geometry"]).bounds == pytest.approx((-2, -2, 12, 12))
+    assert shape(common_zone["geometry"]).bounds == pytest.approx((0, 0, 8, 8))
     assert refreshed_added["scene"]["positive_count"] == 1
     assert refreshed_added["scene"]["hard_negative_count"] == 2
     materialized_negatives = [
@@ -2794,7 +2800,7 @@ def test_import_geojson_batch_stays_private_until_publication(editor_environment
     written = json.loads((env.editor_dataset / "batch_SCN02.geojson").read_text(encoding="utf-8"))
     assert written["features"][0]["id"] == 10
     assert shape(written["features"][0]["geometry"]).equals(box(1, 1, 4, 4))
-    assert shape(written["features"][1]["geometry"]).bounds == (-2, -2, 10, 10)
+    assert shape(written["features"][1]["geometry"]).bounds == (0, 0, 8, 8)
 
 
 def test_import_geojson_validates_whole_batch_without_writes(editor_environment):
@@ -2931,7 +2937,7 @@ def test_import_geojson_offers_clipping_before_saving_whole_batch(editor_environ
     assert clipped.equals(shape(detail["valid_data_footprint"]))
     assert any(polygon.interiors for polygon in clipped.geoms)
     assert shape(by_id[2]["geometry"]).equals(box(1, 1, 2, 2))
-    assert shape(by_id[5]["geometry"]).equals(box(-10, -10, 10, 10))
+    assert shape(by_id[5]["geometry"]).equals(shape(detail["valid_data_footprint"]))
     assert _git(env.editor_root, "rev-parse", "HEAD").stdout.strip() == head
     with create_session_factory(get_config())() as session:
         assert len(session.scalars(select(DatasetEditorDraftRow)).all()) == 2

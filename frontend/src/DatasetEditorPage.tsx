@@ -52,6 +52,7 @@ import "ol/ol.css";
 import { ApiError, apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
+import { DatasetPolygonHistory, type PolygonHistoryPreview } from "./DatasetPolygonHistory";
 import { useRememberedClass } from "./ClassNavigation";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
 import { isCompactLayout, useCompactLayout } from "./utils/useCompactLayout";
@@ -60,6 +61,7 @@ import {
   appendHistory,
   BAND_CHANNELS,
   cloneSnapshot,
+  clipEditorGeometry,
   createEditorGestureGuard,
   deleteEditableVertices,
   datasetObjectTotals,
@@ -71,7 +73,6 @@ import {
   extendRasterResolutions,
   featureClassCounts,
   featureCounts,
-  geometryInsideFootprint,
   isCurrentDatasetScene,
   isDeleteShortcut,
   isUndoShortcut,
@@ -82,6 +83,7 @@ import {
   sceneCounts,
   selectedDeleteAction,
   snapshotsEqual,
+  synchronizeEditorSource,
   sortEditorScenes,
   undoDraft,
   updateEditorVertexSelection,
@@ -212,6 +214,7 @@ type SceneDraft = DraftState & {
   serverDraftStale: boolean;
   serverUpdatedAt: string | null;
   versionCatalog?: AnnotationVersionCatalog | null;
+  versionPayloads?: Map<string, JsonObject>;
 };
 type DraftMap = Record<string, SceneDraft>;
 type RasterFolder = { name: string; path: string };
@@ -315,6 +318,9 @@ export function DatasetEditorPage({
   const editModeRef = useRef(editMode);
   editModeRef.current = editMode;
   const [selectedFeatureCount, setSelectedFeatureCount] = useState(0);
+  const [selectedPolygon, setSelectedPolygon] = useState<{ id: string | null } | null>(null);
+  const [geometryNotice, setGeometryNotice] = useState("");
+  const [versionMenu, setVersionMenu] = useState<{ name: string; anchor: HTMLElement } | null>(null);
   const compact = useCompactLayout();
   const [scenesExpanded, setScenesExpanded] = useState(false);
   const viewModeRef = useRef(editMode === "view");
@@ -351,6 +357,7 @@ export function DatasetEditorPage({
   const mapRef = useRef<OLMap | null>(null);
   const { fullscreen, toggleFullscreen } = useMapFullscreen(workspaceRef, mapRef);
   const vectorSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
+  const historySourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
   const snapFeaturesRef = useRef<Collection<Feature<Geometry>> | null>(null);
   const vectorLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const pseudoSourceRef = useRef<VectorSource<Feature<Geometry>> | null>(null);
@@ -713,6 +720,11 @@ export function DatasetEditorPage({
             annotationVersions: payload.draft.annotation_versions || initialVersions,
           }
         : baseline;
+      const versionPayloads = new Map<string, JsonObject>(versionCatalog?.selected_id ? [[versionCatalog.selected_id, payload.geojson]] : []);
+      const draftVersions = draftSnapshot.annotationVersions;
+      if (draftVersions && !draftVersions.edits?.some((edit) => edit.id === draftVersions.selected_id)) {
+        versionPayloads.set(draftVersions.selected_id, draftSnapshot.geojson);
+      }
       const scene = {
         ...payload.scene,
         draft: payload.draft ? draftSummary(payload.draft) : payload.scene.draft || null,
@@ -732,6 +744,7 @@ export function DatasetEditorPage({
           history: [],
           normalized: Boolean(payload.draft),
           versionCatalog,
+          versionPayloads,
         },
       }));
       setEditMode(initialEditMode());
@@ -827,6 +840,19 @@ export function DatasetEditorPage({
           deleted: saved.deleted,
           annotationVersions: saved.annotation_versions || sent.annotationVersions,
         };
+        const source = vectorSourceRef.current;
+        if (!hasNewerChanges && name === activeAnnotationRef.current && source) {
+          const visible = { ...vectorSnapshot(source, geojsonCrs(sent.geojson), sent.geojson, newFeaturesRef.current),
+            deleted: sent.deleted, annotationVersions: sent.annotationVersions };
+          // Незавершённое перемещение вершин ещё не попало в current: его также нельзя перезаписать.
+          if (snapshotsEqual(visible, sent)) {
+            if (synchronizeEditorSource(source, savedSnapshot.geojson, geojsonCrs(savedSnapshot.geojson))) selectedVerticesRef.current = [];
+            const selection = selectRef.current?.getFeatures();
+            selection?.getArray().slice().forEach((feature) => { if (!source.hasFeature(feature)) selection.remove(feature); });
+            vectorLayerRef.current?.changed();
+            mapRef.current?.render();
+          }
+        }
         changeDrafts((current) => {
           const currentDraft = current[name];
           if (!currentDraft) return current;
@@ -1099,6 +1125,20 @@ export function DatasetEditorPage({
     mapRef.current?.render();
   }, []);
 
+  const showPolygonHistory = useCallback((preview: PolygonHistoryPreview) => {
+    const source = historySourceRef.current;
+    if (!source) return;
+    source.clear();
+    const crs = geojsonCrs(draftsRef.current[activeAnnotationRef.current]?.current.geojson || {});
+    for (const item of preview) {
+      const feature = new GeoJSON().readFeature(item.feature, { dataProjection: geojsonCrs({ crs: item.crs }), featureProjection: crs }) as Feature<Geometry>;
+      feature.setStyle(new Style({ stroke: new Stroke({ color: item.before ? "#06B6D4" : "#EC4899", width: 3, lineDash: item.before ? [7, 5] : undefined }), fill: new Fill({ color: item.before ? "#06B6D40D" : "#EC48991A" }) }));
+      // Исторические состояния могут иметь одинаковый ID; это отдельный слой просмотра.
+      feature.setId(undefined);
+      source.addFeature(feature);
+    }
+  }, []);
+
   useEffect(() => {
     const target = mapTargetRef.current;
     if (!target || !detail) return;
@@ -1117,6 +1157,10 @@ export function DatasetEditorPage({
       featureProjection: crs,
     }) as Feature<Geometry>[];
     const newFeatures = new WeakSet<Feature<Geometry>>();
+    setGeometryNotice(features.some((feature) => feature.get(ROLE_PROPERTY) === "annotation_zone" &&
+      !clipEditorGeometry(feature.getGeometry(), rasterFootprintRef.current))
+      ? "В прежней разметке есть зона целиком вне снимка. Перенесите её на изображение или удалите явно: автоматически убирать её небезопасно, это включило бы обучение на всём снимке."
+      : "");
     for (const [index, feature] of features.entries()) {
       if (!feature.get(ROLE_PROPERTY)) feature.set(ROLE_PROPERTY, "positive", true);
       if (draft.current.newFeatureIndexes.includes(index)) newFeatures.add(feature);
@@ -1324,6 +1368,8 @@ export function DatasetEditorPage({
     });
     select.getFeatures().on("change:length", () => {
       setSelectedFeatureCount(select.getFeatures().getLength());
+      const chosen = select.getFeatures().getLength() === 1 ? select.getFeatures().item(0) : null;
+      setSelectedPolygon(chosen ? { id: chosen.getId() === undefined ? null : String(chosen.getId()) } : null);
     });
     select.getFeatures().on("add", (event) => syncSnapFeature(event.element as Feature<Geometry>));
     select.getFeatures().on("remove", (event) => syncSnapFeature(event.element as Feature<Geometry>));
@@ -1388,10 +1434,12 @@ export function DatasetEditorPage({
       }
       if (event.feature.getId() === undefined) event.feature.setId(crypto.randomUUID());
       applyObjectSelection(event.feature, roleRef.current, selectedDataset);
-      if (!isEditorFeatureWithinBounds(event.feature, rasterFootprintRef.current)) {
-        window.alert("Полигон должен целиком находиться внутри снимка.");
-        return;
-      }
+      try {
+        const clipped = clipEditorGeometry(event.feature.getGeometry(), rasterFootprintRef.current);
+        if (!clipped) { setGeometryNotice("Полигон целиком вне снимка и не добавлен. Нарисуйте его на снимке."); return; }
+        event.feature.setGeometry(clipped);
+        setGeometryNotice("");
+      } catch { setGeometryNotice("Не удалось обрезать контур. Проверьте его пересечения и повторите рисование."); return; }
       newFeaturesRef.current.add(event.feature);
       vectorSource.addFeature(event.feature);
       if (before) recordCurrentChange(before);
@@ -1405,14 +1453,17 @@ export function DatasetEditorPage({
       });
     });
     modify.on("modifyend", (event) => {
-      const outside = event.features.getArray().some((feature) =>
-        !isEditorFeatureWithinBounds(feature, rasterFootprintRef.current),
-      );
-      if (outside) {
+      try {
+        const clipped = event.features.getArray().map((feature) => ({ feature,
+          geometry: clipEditorGeometry(feature.getGeometry(), rasterFootprintRef.current) }));
+        if (clipped.some((item) => !item.geometry)) throw new Error("Полигон оказался целиком вне снимка. Эта правка отменена; оставьте часть контура на изображении.");
+        clipped.forEach(({ feature, geometry }) => feature.setGeometry(geometry!));
+        setGeometryNotice("");
+      } catch (error) {
         for (const [feature, geometry] of geometryBackups) feature.setGeometry(geometry);
         modifyBefore = null;
         setSelectedVertices([]);
-        window.alert("Геометрия не может выходить за границы снимка.");
+        setGeometryNotice(error instanceof Error ? error.message : "Не удалось обрезать контур; правка отменена.");
         return;
       }
       const before = modifyBefore;
@@ -1421,10 +1472,13 @@ export function DatasetEditorPage({
       selectCurrentModifyVertex();
     });
 
+    const historySource = new VectorSource<Feature<Geometry>>();
+    const historyLayer = new VectorLayer({ source: historySource, zIndex: 100 });
+    historySourceRef.current = historySource;
     const map = new OLMap({
       target,
       controls: defaultControls({ zoom: false }),
-      layers: [rasterLayer, pseudoLayer, vectorLayer],
+      layers: [rasterLayer, pseudoLayer, vectorLayer, historyLayer],
       interactions: defaultInteractions({ dragPan: false, shiftDragZoom: false }),
       view: rasterViewWithOverzoom(rasterSource),
     });
@@ -1474,6 +1528,7 @@ export function DatasetEditorPage({
       pseudoLayerRef.current = null;
       pseudoSelectRef.current = null;
       vectorSourceRef.current = null;
+      historySourceRef.current = null;
       snapFeaturesRef.current = null;
       vectorLayerRef.current = null;
       rasterLayerRef.current = null;
@@ -1484,6 +1539,7 @@ export function DatasetEditorPage({
       rasterFootprintRef.current = null;
       selectedVerticesRef.current = [];
       setSelectedFeatureCount(0);
+      setSelectedPolygon(null);
       newFeaturesRef.current = new WeakSet();
       setDrawingState(false);
     };
@@ -1624,6 +1680,8 @@ export function DatasetEditorPage({
   };
 
   const selectScene = (name: string) => {
+    setGeometryNotice("");
+    if (name !== annotationName) setVersionMenu(null);
     if (name !== annotationName) {
       activeAnnotationRef.current = name;
       setAnnotationName(name);
@@ -2273,16 +2331,15 @@ export function DatasetEditorPage({
                     .join(", ")
                   : `positive: ${counts.positive}`;
                 return (
+                  <div className="dataset-editor-scene-entry" key={scene.annotation_name}>
                   <button
                     className={`${scene.annotation_name === annotationName ? "active" : ""}${deleted ? " pending-delete" : ""}`}
                     type="button"
-                    key={scene.annotation_name}
                     title={`Открыть снимок ${scene.image_name}. ${counts.total} объектов: ${countDescription}, hard negative: ${counts.hardNegative}${changed ? ". Есть неопубликованные изменения" : ""}`}
-                    onClick={() => { selectScene(scene.annotation_name); if (compact) setScenesExpanded(false); }}
+                    onClick={() => { setVersionMenu(null); selectScene(scene.annotation_name); if (compact) setScenesExpanded(false); }}
                   >
                     <span className="dataset-editor-scene-name">
                       <strong>{scene.image_name}</strong>
-                      {versionCount ? <small className="badge" title={scene.annotation_version_name || "Версии разметки снимка"}>Версий: {versionCount}</small> : null}
                       {scene.revision === NEW_SCENE_REVISION ? <span className="badge warning">новый · черновик</span> : null}
                       {deleted ? <span className="badge warning">к удалению</span> : null}
                       {changed ? <i className="dataset-editor-dirty-dot" aria-label="Есть неопубликованные изменения" /> : null}
@@ -2304,6 +2361,20 @@ export function DatasetEditorPage({
                       </i> : null}
                     </span>
                   </button>
+                  {versionCount ? <button type="button" className="badge annotation-version-count" aria-label={`Версии снимка ${scene.image_name}: ${versionCount}`}
+                    aria-expanded={versionMenu?.name === scene.annotation_name} disabled={busy || drawInProgress || deleted}
+                    title="Выбрать, создать или удалить версию разметки" onClick={(event) => {
+                      selectScene(scene.annotation_name);
+                      setVersionMenu(versionMenu?.name === scene.annotation_name ? null : { name: scene.annotation_name, anchor: event.currentTarget });
+                    }}>Версий: {versionCount}<ChevronDown size={12} /></button> : null}
+                  {versionMenu?.name === scene.annotation_name && draft?.versionCatalog && draft.current.annotationVersions ? (
+                    <DatasetAnnotationVersions key={`${datasetKey}:${scene.annotation_name}`} catalog={draft.versionCatalog}
+                      snapshot={draft.current} publishedGeojson={draft.baseline.geojson} publishedVersions={draft.versionPayloads}
+                      disabled={busy || drawInProgress || deleted || detail?.scene.annotation_name !== scene.annotation_name}
+                      anchor={versionMenu.anchor} onClose={() => setVersionMenu(null)}
+                      loadVersion={loadAnnotationVersion} onChange={changeAnnotationVersion} />
+                  ) : null}
+                  </div>
                 );
               })}
               {!scenes.length ? <p className="muted">Снимки ещё не добавлены.</p> : null}
@@ -2429,7 +2500,7 @@ export function DatasetEditorPage({
                     </div>
                     {!testSampleId ? <div className="dataset-editor-object-switch" role="group" aria-label="Объекты или зоны разметки" style={{ "--object-color": "#A855F7" } as CSSProperties}>
                       <button type="button" className={!zoneMode ? "active" : ""} aria-pressed={!zoneMode} onClick={() => switchAnnotationTool(false)}>Объекты</button>
-                      <button type="button" className={zoneMode ? "active" : ""} aria-pressed={zoneMode} onClick={() => switchAnnotationTool(true)} title="Нарисовать территорию с полной разметкой. Контур может выходить за край снимка: используется только пересечение со снимком">Размеченная зона</button>
+                      <button type="button" className={zoneMode ? "active" : ""} aria-pressed={zoneMode} onClick={() => switchAnnotationTool(true)} title="Нарисовать территорию с полной разметкой. Контур автоматически обрезается по снимку">Размеченная зона</button>
                     </div> : null}
                     {zoneMode ? (
                       selectedDataset?.managed ? <select className="dataset-editor-zone-target" aria-label="Классы размеченной зоны" value={role} onChange={(event) => changeRole(event.target.value)}>
@@ -2541,6 +2612,7 @@ export function DatasetEditorPage({
                     : editMode === "draw" ? "Ставьте вершины кликами; двойной клик — завершить контур. Для изменения вершин готового контура переключитесь на выбор и правку."
                     : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон. Отверстие удаляется целиком, если остаётся меньше трёх вершин; вынесенная отдельная часть удаляется так же, если остаются другие части объекта. Клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}
                 </div>
+                {geometryNotice ? <p className="muted" role="status">{geometryNotice}</p> : null}
                 {!testSampleId ? <div className="dataset-editor-legend dataset-editor-zone-legend" role="group" aria-label="Размеченные зоны">
                   <button type="button" className={`dataset-editor-class-chip${hiddenClasses.has("annotation_zone") ? " is-hidden" : ""}`}
                     style={{ "--object-color": "#A855F7" } as CSSProperties}
@@ -2575,13 +2647,11 @@ export function DatasetEditorPage({
                     ))}
                   </div>
                 ) : null}
-                {!testSampleId && activeDraft.versionCatalog && activeDraft.current.annotationVersions ? (
-                  <DatasetAnnotationVersions key={`${datasetKey}:${activeDraft.scene.annotation_name}`}
-                    catalog={activeDraft.versionCatalog} snapshot={activeDraft.current}
-                    publishedGeojson={activeDraft.baseline.geojson}
-                    disabled={busy || drawInProgress || Boolean(activeDraft.current.deleted)}
-                    loadVersion={loadAnnotationVersion} onChange={changeAnnotationVersion} />
-                ) : null}
+                {!testSampleId && selectedPolygon ? <DatasetPolygonHistory
+                  path={selectedPolygon.id !== null && activeDraft.baseRevision !== NEW_SCENE_REVISION && (
+                    selectedDataset?.managed || activeDraft.versionCatalog?.versions.some((version) => version.id === activeDraft.current.annotationVersions?.selected_id))
+                    ? `${editorPath(datasetKey)}/scenes/${encodeURIComponent(annotationName)}/polygon-history?feature_id=${encodeURIComponent(selectedPolygon.id)}${activeDraft.current.annotationVersions?.selected_id ? `&version_id=${encodeURIComponent(activeDraft.current.annotationVersions.selected_id)}` : ""}` : null}
+                  onPreview={showPolygonHistory} /> : null}
                 <div className="dataset-editor-map-shell">
                   <div
                     className="dataset-editor-map"
@@ -3133,11 +3203,6 @@ function isZoneSelection(selection: string): boolean {
   return selection === "annotation_zone" || selection.startsWith("annotation_zone:");
 }
 
-export function isEditorFeatureWithinBounds(feature: Feature<Geometry>, footprint: Geometry | null): boolean {
-  const geometry = feature.getGeometry();
-  return Boolean(geometry) && (feature.get(ROLE_PROPERTY) === "annotation_zone"
-    || geometryInsideFootprint(geometry, footprint));
-}
 
 function hardNegativeSelection(classSlug: string): ObjectSelection {
   return `hard_negative:${classSlug}`;

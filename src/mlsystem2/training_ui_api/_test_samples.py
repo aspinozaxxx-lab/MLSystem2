@@ -3021,7 +3021,7 @@ def reconcile_test_sample_evaluations(
             session, result.dataset_key or result.class_key, profile, training_result=result,
         )
         active = row.evaluation_job
-        if active is not None and active.status in {"queued", "running"} and _test_sample_evaluation_job_matches(
+        if active is not None and active.status in {"queued", "running", "paused"} and _test_sample_evaluation_job_matches(
             active, row, result, template, config_hash,
             sorted(tile.tile_index for tile in row.tiles if tile.enabled),
         ):
@@ -3106,8 +3106,10 @@ def queue_test_sample_evaluation(
             enabled_indices,
         )
     ):
-        if active_job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
-            sample.metric_status = active_job.status
+        if active_job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
+            if source == JobSource.MANUAL:
+                _set_test_f1_job_priority(session, active_job, result, manual=True)
+            sample.metric_status = "running" if active_job.status == JobStatus.PAUSED.value else active_job.status
             return False
         if active_job.status == JobStatus.FAILED.value and sample.metric_status == "error":
             return False
@@ -3152,6 +3154,8 @@ def queue_test_sample_evaluation(
             "mlflow_run_id": result.mlflow_run_id,
         },
     )
+    if source == JobSource.MANUAL:
+        _set_test_f1_job_priority(session, job, result, manual=True)
     session.add(job)
     session.flush()
     sample.metric_status = "queued"
@@ -3544,12 +3548,12 @@ def _cancel_test_sample_evaluation_job(
         (job.config or {}).get("operation") == TEST_SAMPLE_F1_OPERATION
         and (job.config or {}).get("metric_target") == TEST_SAMPLE_EVALUATION_TARGET
     ):
-        if job.status == JobStatus.RUNNING.value:
+        if job.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
             terminate_job_process(job)
             if job.tmp_path:
                 shutil.rmtree(job.tmp_path, ignore_errors=True)
                 job.tmp_path = None
-        if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+        if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
             job.status = JobStatus.CANCELLED.value
             job.finished_at = _utc_now()
             job.process_pid = None
@@ -3679,7 +3683,7 @@ def _set_test_f1_job_priority(
         "manual" if manual else "background" if background else "primary"
     )
     state[SECONDARY_PRIORITY_CONFIG_KEY] = background
-    if background:
+    if background or manual:
         state.pop(URGENT_PRIORITY_CONFIG_KEY, None)
     else:
         state[URGENT_PRIORITY_CONFIG_KEY] = URGENT_PRIORITY_VALUE
@@ -4279,7 +4283,9 @@ def _metric_job_is_active(
     if metric.job_id is None:
         return False
     job = session.get(JobRow, metric.job_id)
-    return bool(job and job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value})
+    return bool(job and job.status in {
+        JobStatus.QUEUED.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value,
+    })
 
 
 def _cancel_test_metric_job(
@@ -4291,12 +4297,12 @@ def _cancel_test_metric_job(
     job = session.get(JobRow, metric.job_id)
     if job is None or (job.config or {}).get("operation") != TEST_SAMPLE_F1_OPERATION:
         return
-    if job.status == JobStatus.RUNNING.value:
+    if job.status in {JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
         terminate_job_process(job)
         if job.tmp_path:
             shutil.rmtree(job.tmp_path, ignore_errors=True)
             job.tmp_path = None
-    if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+    if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value}:
         job.status = JobStatus.CANCELLED.value
         job.finished_at = _utc_now()
         job.process_pid = None
@@ -4567,7 +4573,9 @@ def _evaluation_info(
         status = "stale"
     job = row.evaluation_job
     if status in {"queued", "running"} and (
-        job is None or job.status not in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+        job is None or job.status not in {
+            JobStatus.QUEUED.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value,
+        }
     ):
         status = "stale" if _has_metrics(row) else "error"
     saved_result = (

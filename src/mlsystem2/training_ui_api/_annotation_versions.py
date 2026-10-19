@@ -142,7 +142,8 @@ class AnnotationCatalog:
             changed_at = row.updated_at
             if changed_at.tzinfo is None:
                 changed_at = changed_at.replace(tzinfo=timezone.utc)
-            versions.append(AnnotationVersionInfo(id=row.id, name=row.name, revision=row.revision, updated_at=changed_at,
+            created_at = row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at
+            versions.append(AnnotationVersionInfo(id=row.id, name=row.name, revision=row.revision, updated_at=changed_at, created_at=created_at,
                 usages=sorted(usages.values(), key=lambda usage: usage.dataset_name.casefold())))
         binding = self.bindings.get(self.dataset_row.id)
         revision = payload_hash({

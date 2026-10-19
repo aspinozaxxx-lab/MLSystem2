@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="620" viewBox="0 0 1120 620">
+<rect width="1120" height="620" rx="24" fill="#eef4f7"/>
+<g font-family="Arial,sans-serif" fill="#153348">
+<text x="36" y="48" font-size="25" font-weight="bold">Редактор разметки: версии и история полигона</text>
+<text x="36" y="76" font-size="15" fill="#526875">Условная схема интерфейса · все данные вымышлены</text>
+<rect x="28" y="102" width="330" height="480" rx="14" fill="white" stroke="#c4d5df"/>
+<text x="48" y="136" font-size="20" font-weight="bold">Снимки</text>
+<rect x="44" y="154" width="298" height="71" rx="8" fill="#eaf7fc" stroke="#0284c7"/>
+<text x="58" y="180" font-size="17">Учебный снимок</text>
+<rect x="206" y="189" width="120" height="27" rx="13" fill="#d0edf8"/>
+<text x="220" y="208" font-size="14">Версий: 2 ▾</text>
+<rect x="56" y="235" width="282" height="302" rx="10" fill="#fff" stroke="#9fbbc9"/>
+<text x="73" y="262" font-size="16" font-weight="bold">Версии разметки</text>
+<rect x="69" y="278" width="256" height="91" rx="7" fill="#eaf7fc" stroke="#0284c7"/>
+<text x="81" y="303" font-size="17" font-weight="bold">✓ Уточнённая</text>
+<text x="81" y="327" font-size="13">Создана: 19 октября, 10:30</text>
+<text x="81" y="349" font-size="13">Используется: основной набор</text>
+<path d="M301 294v12h10v-12m-12-3h14m-10-3h6" fill="none" stroke="#657c89" stroke-width="2"/>
+<rect x="69" y="381" width="256" height="87" rx="7" fill="#f6f9fa" stroke="#c4d5df"/>
+<text x="81" y="406" font-size="17" font-weight="bold">Исходная</text>
+<text x="81" y="429" font-size="13">Создана: 18 октября, 09:00</text>
+<text x="81" y="451" font-size="13">Используется: контрольный набор</text>
+<rect x="69" y="481" width="256" height="40" rx="7" fill="#153348"/>
+<text x="125" y="507" font-size="16" fill="white">+ Создать версию</text>
+<rect x="378" y="102" width="714" height="290" rx="14" fill="#dce8dc" stroke="#b8cdbb"/>
+<path d="M410 130L1080 345M400 340L1000 115" stroke="#c2d3c0" stroke-width="28"/>
+<path d="M560 170L813 162L856 302L553 321Z" fill="#06b6d40d" stroke="#0891b2" stroke-width="4" stroke-dasharray="10 7"/>
+<path d="M575 153L824 177L833 319L564 303Z" fill="#ec489922" stroke="#ec4899" stroke-width="4"/>
+<text x="400" y="365" font-size="15">Голубой пунктир — до правки · розовый — после</text>
+<rect x="378" y="408" width="714" height="174" rx="14" fill="white" stroke="#c4d5df"/>
+<text x="400" y="440" font-size="21" font-weight="bold">История выбранного полигона</text>
+<text x="400" y="469" font-size="15">Добавлен в версию: участник команды · 18 октября, 09:00</text>
+<rect x="400" y="486" width="260" height="67" rx="7" fill="#f3f7fa" stroke="#c4d5df"/>
+<text x="414" y="511" font-size="16">Исходный контур</text><text x="414" y="535" font-size="14">Подтверждённая публикация</text>
+<rect x="674" y="486" width="390" height="67" rx="7" fill="#eaf7fc" stroke="#0284c7"/>
+<text x="688" y="511" font-size="16" font-weight="bold">Изменён · 19 октября, 10:30</text><text x="688" y="535" font-size="14">Просмотр контуров не меняет черновик</text>
+</g></svg>

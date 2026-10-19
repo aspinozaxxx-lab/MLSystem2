@@ -85,6 +85,7 @@ class AnnotationVersionInfo(BaseModel):
     name: str
     revision: int
     updated_at: datetime
+    created_at: datetime
     usages: list[AnnotationVersionUsage] = Field(default_factory=list)
 
 
@@ -117,6 +118,24 @@ class AnnotationVersionDetail(BaseModel):
     catalog: AnnotationVersionCatalog
     version_id: UUID
     geojson: dict[str, Any]
+
+
+class AnnotationFeatureHistoryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    action: Literal["baseline", "created", "updated", "deleted"]
+    username: str | None = None
+    published_at: datetime | None = None
+    commit: str | None = None
+    feature: dict[str, Any] | None = None
+    crs: dict[str, Any] | None = None
+
+
+class AnnotationFeatureHistory(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version_id: UUID
+    feature_id: str
+    entries: list[AnnotationFeatureHistoryEntry]
 
 
 class DatasetEditorDraftSummary(BaseModel):
@@ -380,6 +399,8 @@ class DatasetEditorRebuildResult(DatasetEditorMutationResult):
 
 
 __all__ = [
+    "AnnotationFeatureHistory",
+    "AnnotationFeatureHistoryEntry",
     "AnnotationVersionUsage",
     "AnnotationVersionInfo",
     "AnnotationVersionEdit",

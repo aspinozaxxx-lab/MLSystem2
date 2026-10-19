@@ -1887,9 +1887,11 @@ def test_paused_training_resumes_before_paused_background_f1(
         assert background.status == JobStatus.PAUSED.value
 
 
-def test_manually_promoted_paused_f1_preempts_training_without_restarting(
+@pytest.mark.parametrize("training_secondary", [False, True])
+def test_manually_promoted_paused_f1_has_regular_priority_without_restarting(
     tmp_path: Path,
     monkeypatch,
+    training_secondary: bool,
 ) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -1902,6 +1904,7 @@ def test_manually_promoted_paused_f1_preempts_training_without_restarting(
     with session_factory() as session:
         training = _queue_test_job(JobType.TRAINING, JobSource.MANUAL, 20_001, created_at)
         training.status = JobStatus.RUNNING.value
+        training.config = {"ui.secondary_priority": training_secondary}
         training.process_pid = 4321
         training.tmp_path = str(tmp_path / "training")
         f1 = _queue_test_job(JobType.INFERENCE, JobSource.MANUAL, 10_001, created_at)
@@ -1921,6 +1924,13 @@ def test_manually_promoted_paused_f1_preempts_training_without_restarting(
 
         dispatch_queue_once(session, config)
         training_control = Path(training.tmp_path) / "control"
+        assert not _queueing.is_urgent_job(f1)
+        assert not _queueing.is_secondary_job(f1)
+        if not training_secondary:
+            assert not (training_control / "pause.request").exists()
+            assert training.status == JobStatus.RUNNING.value
+            assert f1.status == JobStatus.PAUSED.value
+            return
         assert (training_control / "pause.request").is_file()
         assert (control / "pause.request").is_file()
         (training_control / "paused").write_text(

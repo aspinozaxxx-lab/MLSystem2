@@ -2573,11 +2573,78 @@ def test_only_completed_network_is_queued_automatically_and_manual_recalculation
         assert queue_dataset_test_f1_all(session, "Вырубки\\main", config) == 4
         jobs = session.scalars(select(JobRow)).all()
         assert len(jobs) == 5
-        assert all(is_urgent_job(job) and not is_secondary_job(job) for job in jobs)
+        assert all(not is_urgent_job(job) and not is_secondary_job(job) for job in jobs)
+        assert all(job.config["ui.test_f1_priority"] == "manual" and "priority" not in job.config for job in jobs)
         assert all(job.source == "manual" for job in jobs)
         assert any(job.id == original_job_id for job in jobs)
         assert reconcile_training_result_test_f1(session, config) == 0
         assert len(session.scalars(select(JobRow)).all()) == 5
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "paused"])
+@pytest.mark.parametrize("target", ["training_result", "test_sample"])
+def test_manual_f1_promotes_existing_job_with_regular_priority_without_duplicates(
+    tmp_path: Path, monkeypatch, status: str, target: str,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    with session_factory() as session:
+        sample = create_test_sample(session, _TestSampleCreate(
+            dataset_key="Вырубки\\main", tile_width=16, tile_height=16, image_count=1, object_count=1,
+        ), config)
+        update_test_sample_primary(session, sample.id, _TestSamplePrimaryUpdate(is_primary=True), config)
+        result = TrainingResultRow(source="manual", dataset_key="Вырубки\\main", class_key="Вырубки\\main",
+            class_display_name="Вырубки\\main", architecture="segformer_b2", model_name="Проверочная сеть",
+            mlflow_run_id="проверочный-запуск", status="ok", trained_at=datetime(2026, 10, 19, tzinfo=timezone.utc))
+        session.add(result)
+        session.flush()
+        sample_row = session.get(_TestSampleRow, sample.id)
+        if target == "test_sample":
+            assert queue_test_sample_evaluation(session, sample_row, config, source=JobSource.AUTOMATION)
+            job_id = sample_row.evaluation_job_id
+        else:
+            assert queue_training_result_test_f1(session, result, config, source=JobSource.AUTOMATION)
+            metric = session.get(TrainingResultTestMetricRow, result.id)
+            job_id = metric.job_id
+            metric.status = "queued" if status == "queued" else "running"
+        job = session.get(JobRow, job_id)
+        job.status = status
+        job.process_pid = 1234 if status != "queued" else None
+        session.flush()
+        assert reconcile_training_result_test_f1(session, config) == 0
+        assert reconcile_test_sample_evaluations(session, config) == 0
+        assert job.status == status
+        if target == "test_sample":
+            evaluated = evaluate_test_sample_by_id(session, sample.id, config)
+            assert evaluated.evaluation.job_id == job_id
+            assert evaluated.evaluation.status == ("queued" if status == "queued" else "running")
+        else:
+            assert not queue_training_result_test_f1(session, result, config, manual=True, force=True)
+            assert not queue_training_result_test_f1(session, result, config, source=JobSource.AUTOMATION)
+            assert metric.job_id == job_id
+            info = training_result_test_f1_info(session, result, config)
+            assert info.status == ("queued" if status == "queued" else "running")
+        session.flush()
+        assert len(session.scalars(select(JobRow)).all()) == 1
+        assert job.source == "manual" and job.status == status
+        assert job.config["ui.test_f1_priority"] == "manual"
+        assert "priority" not in job.config
+        assert not is_secondary_job(job) and not is_urgent_job(job)
+        assert job.process_pid == (1234 if status != "queued" else None)
+        if status == "paused":
+            stopped = []
+            monkeypatch.setattr(_test_samples, "terminate_job_process", lambda row: stopped.append(row.id))
+            if target == "test_sample":
+                _test_samples._cancel_test_sample_evaluation_job(session, sample_row)
+                assert sample_row.evaluation_job_id is None
+            else:
+                _test_samples._cancel_test_metric_job(session, metric)
+                assert metric.job_id is None
+            assert stopped == [job_id]
+            assert job.status == "cancelled" and job.process_pid is None
 
 
 def test_persistent_test_sample_metrics_and_stale_revision(
@@ -2941,7 +3008,8 @@ def test_saved_test_samples_are_evaluated_by_current_primary_network(
         ]
         assert len(direct_jobs) == 2
         assert all(job.source == "manual" for job in direct_jobs)
-        assert all(job.config["priority"] == "urgent" for job in direct_jobs)
+        assert all(not is_urgent_job(job) and not is_secondary_job(job) for job in direct_jobs)
+        assert all(job.config["ui.test_f1_priority"] == "manual" and "priority" not in job.config for job in direct_jobs)
         assert {job.dataset_key for job in direct_jobs} == {
             "Вырубки\\main",
             "Вырубки\\strict",

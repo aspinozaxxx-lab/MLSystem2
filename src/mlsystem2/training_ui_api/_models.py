@@ -267,6 +267,26 @@ class AnnotationPublicationRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AnnotationFeatureEventRow(Base):
+    """Неизменяемые опубликованные состояния полигона в конкретной версии разметки."""
+
+    __tablename__ = "annotation_feature_events"
+    __table_args__ = (
+        UniqueConstraint("publication_id", "version_id", "feature_id", "action", name="uq_annotation_feature_event"),
+        Index("ix_annotation_feature_history", "version_id", "feature_id", "recorded_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    publication_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("annotation_publications.id", ondelete="RESTRICT"))
+    version_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("annotation_versions.id", ondelete="RESTRICT"))
+    feature_id: Mapped[str] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(String(32))
+    username: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    feature: Mapped[dict[str, Any] | None] = mapped_column(_json_type(), nullable=True)
+    crs: Mapped[dict[str, Any] | None] = mapped_column(_json_type(), nullable=True)
+
+
 class TrainingTemplateRow(Base):
     __tablename__ = "training_templates"
     __table_args__ = (

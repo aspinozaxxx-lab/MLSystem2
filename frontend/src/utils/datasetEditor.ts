@@ -1,7 +1,11 @@
 import { containsCoordinate, type Extent } from "ol/extent";
 import type Geometry from "ol/geom/Geometry";
+import type Feature from "ol/Feature";
+import GeoJSON from "ol/format/GeoJSON";
+import type VectorSource from "ol/source/Vector";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import Polygon from "ol/geom/Polygon";
+import polygonClipping, { type MultiPolygon as ClipMultiPolygon } from "polygon-clipping";
 import type { AnnotationVersionDraft } from "../api/types";
 
 export type JsonObject = Record<string, unknown>;
@@ -174,6 +178,30 @@ export function snapshotsEqual(left: DraftSnapshot, right: DraftSnapshot): boole
   );
 }
 
+/** Применить серверную нормализацию, не заменяя сами выбранные объекты OpenLayers. */
+export function synchronizeEditorSource(source: VectorSource<Feature<Geometry>>, payload: JsonObject, crs: string): boolean {
+  const format = new GeoJSON();
+  const saved = format.readFeatures(payload, { dataProjection: crs, featureProjection: crs }) as Feature<Geometry>[];
+  const keep = new Set(saved.map((feature) => String(feature.getId())));
+  let geometryChanged = false;
+  for (const feature of source.getFeatures()) {
+    if (!keep.has(String(feature.getId()))) { source.removeFeature(feature); geometryChanged = true; }
+  }
+  for (const incoming of saved) {
+    const feature = source.getFeatureById(incoming.getId()!);
+    if (!feature || Array.isArray(feature)) { source.addFeature(incoming); geometryChanged = true; continue; }
+    const properties = incoming.getProperties();
+    delete properties[incoming.getGeometryName()];
+    for (const name of feature.getKeys()) if (name !== feature.getGeometryName() && !(name in properties)) feature.unset(name);
+    feature.setProperties(properties);
+    const geometry = feature.getGeometry(), nextGeometry = incoming.getGeometry();
+    if (geometry && nextGeometry && JSON.stringify(format.writeGeometryObject(geometry)) !== JSON.stringify(format.writeGeometryObject(nextGeometry))) {
+      feature.setGeometry(nextGeometry); geometryChanged = true;
+    }
+  }
+  return geometryChanged;
+}
+
 export function extendRasterResolutions(
   viewResolutions: number[],
   nativeResolution: number,
@@ -246,6 +274,22 @@ export function editableVertexCoordinates(
   geometry: Geometry | null | undefined,
 ): number[][] {
   return editableVertices(geometry).map((vertex) => vertex.coordinate);
+}
+
+/** Пересечение с полезным контуром TIFF, включая отверстия и раздельные части. */
+export function clipEditorGeometry(geometry: Geometry | null | undefined, footprint: Geometry | null): Geometry | null {
+  if (!geometry) return null;
+  if (!footprint) return geometry.clone();
+  const coordinates = (value: Geometry): ClipMultiPolygon => {
+    if (value.getType() === "Polygon") return [(value as Polygon).getCoordinates()] as ClipMultiPolygon;
+    if (value.getType() === "MultiPolygon") return (value as MultiPolygon).getCoordinates() as ClipMultiPolygon;
+    throw new Error("Обрезка доступна только для полигонов.");
+  };
+  const input = coordinates(geometry), boundary = coordinates(footprint);
+  if (!polygonClipping.difference(input, boundary).length) return geometry.clone();
+  const result = polygonClipping.intersection(input, boundary);
+  if (!result.length) return null;
+  return result.length === 1 ? new Polygon(result[0]) : new MultiPolygon(result);
 }
 
 export function editableVertices(

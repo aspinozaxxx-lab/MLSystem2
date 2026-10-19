@@ -12,6 +12,7 @@ import subprocess
 import time
 import uuid
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from tempfile import SpooledTemporaryFile
@@ -39,6 +40,7 @@ from mlsystem2.dataset_preparing.api import (
 
 from ._config import TrainingUIAPIConfig
 from ._annotation_versions import AnnotationCatalog, apply_plan, merge_plans, source_path
+from ._polygon_history import identified_payload, polygon_history, record_polygon_history
 from ._markup_lock import markup_read_lock, markup_write_lock
 from ._combined_dataset import (
     build_combined_dataset,
@@ -56,6 +58,7 @@ from ._datasets import RASTER_SUFFIXES, build_image_index, build_per_image_index
 from ._external_models import external_model_payload
 from ._models import (
     AnnotationPublicationRow,
+    AnnotationVersionRow,
     DatasetAnnotationRow,
     DatasetClassRow,
     DatasetEditorDraftRow,
@@ -79,6 +82,8 @@ from ._queueing import DATASET_EDITOR_PSEUDO_OPERATION, next_queue_position
 from .contracts import (
     AnnotationVersionDetail,
     AnnotationVersionDraft,
+    AnnotationVersionEdit,
+    AnnotationFeatureHistory,
     DatasetEditorDatasetInfo,
     DatasetEditorDatasetListResponse,
     DatasetEditorCopyResult,
@@ -387,7 +392,7 @@ def editor_scene_detail(
             scene = _versioned_scene(scene, catalog)
         return DatasetEditorSceneDetail(
             scene=scene,
-            geojson=_clip_geojson_to_footprint(published_geojson, footprint),
+            geojson=_clip_geojson_to_footprint(identified_payload(published_geojson), footprint, keep_external_zones=True),
             valid_data_footprint=dict(mapping(footprint)),
             annotation_versions=catalog.catalog() if catalog else None,
             draft=(
@@ -460,6 +465,20 @@ def import_editor_drafts(
                 # Сначала проверяем исходную схему и геометрию: импорт не должен молча исправлять чужой формат.
                 _validate_editor_geojson(candidate, image_path, dataset, check_footprint=False)
                 footprint = valid_data_footprint(image_path)
+                zone_features = [feature for feature in candidate["features"] if feature["properties"][_ROLE_PROPERTY] == "annotation_zone"]
+                if zone_features:
+                    clipped_features = []
+                    kept_zones = 0
+                    for feature in candidate["features"]:
+                        if feature["properties"][_ROLE_PROPERTY] == "annotation_zone":
+                            parts = _clip_geojson_to_footprint({**candidate, "features": [feature]}, footprint)["features"]
+                            kept_zones += len(parts)
+                            clipped_features.extend(parts)
+                        else:
+                            clipped_features.append(feature)
+                    if not kept_zones:
+                        raise TrainingUIAPIError("Размеченные зоны целиком вне снимка. Перенесите их на изображение.")
+                    candidate["features"] = clipped_features
                 outside_count = 0
                 removed_count = 0
                 for feature in candidate["features"]:
@@ -489,7 +508,7 @@ def import_editor_drafts(
                 + " ".join(clipping_messages)
                 + " Можно обрезать выходящие полигоны по этому контуру и загрузить весь пакет в черновики. "
                 "Объекты полностью вне валидных данных будут исключены. "
-                "Размеченные зоны сохранят полный контур."
+                "Размеченные зоны также будут обрезаны по снимку."
             )
         now = datetime.now(timezone.utc)
         for annotation_name, payload in prepared.items():
@@ -573,8 +592,14 @@ def _normalize_version_payload(geojson: dict[str, Any], previous_payload: dict[s
                                dataset: DatasetInfo, image_path: Path, *, clip: bool = True) -> dict[str, Any]:
     normalized_geojson = _normalize_editor_geojson(geojson, previous_payload, dataset, image_path=image_path)
     if clip:
+        _validate_editor_geojson(normalized_geojson, image_path, dataset, check_footprint=False, allow_repair=True)
+        had_zones = any((feature.get("properties") or {}).get(_ROLE_PROPERTY) == "annotation_zone"
+                        for feature in normalized_geojson["features"])
         normalized_geojson = _clip_geojson_to_footprint(normalized_geojson, valid_data_footprint(image_path))
-    _validate_editor_geojson(normalized_geojson, image_path, dataset)
+        if had_zones and not any((feature.get("properties") or {}).get(_ROLE_PROPERTY) == "annotation_zone"
+                                 for feature in normalized_geojson["features"]):
+            raise TrainingUIAPIError("Размеченная зона целиком вне снимка. Перенесите её на снимок: пустая зона не должна включать обучение на всём изображении.")
+    _validate_editor_geojson(normalized_geojson, image_path, dataset, allow_external_zones=not clip)
     _validate_preserved_properties(previous_payload, normalized_geojson)
     return normalized_geojson
 
@@ -594,7 +619,7 @@ def _annotation_catalog(session: Session, config: TrainingUIAPIConfig, dataset: 
 
 
 def _display_version_payload(payload: dict[str, Any], image_path: Path) -> dict[str, Any]:
-    return _clip_geojson_to_footprint(_reproject_editor_geojson(payload, image_path), valid_data_footprint(image_path))
+    return _clip_geojson_to_footprint(identified_payload(_reproject_editor_geojson(payload, image_path)), valid_data_footprint(image_path), keep_external_zones=True)
 
 
 def _versioned_scene(scene: DatasetEditorSceneInfo, catalog: AnnotationCatalog) -> DatasetEditorSceneInfo:
@@ -621,6 +646,48 @@ def editor_annotation_version(session: Session, config: TrainingUIAPIConfig, dat
         geojson=_display_version_payload(version.geojson, image_path))
 
 
+def editor_polygon_history(session: Session, config: TrainingUIAPIConfig, dataset_key: str,
+                           annotation_name: str, feature_id: str, version_id: uuid.UUID | None = None) -> AnnotationFeatureHistory:
+    dataset, source_dir = _editor_dataset_context(session, config, dataset_key)
+    annotation_name = _safe_annotation_name(annotation_name)
+    if dataset.managed:
+        payload = _read_geojson(_annotation_path(source_dir, annotation_name))
+        feature = next((item for item in payload["features"] if str(item.get("id")) == feature_id), None)
+        if feature is None:
+            raise TrainingUIAPIError("Опубликованный полигон не найден в снимке")
+        properties = feature.get("properties") or {}
+        dataset_row = session.scalar(select(DatasetRow).where(DatasetRow.key == dataset.key))
+        for source in managed_sources(session, dataset_row.id):
+            source_key = properties.get("_mlsystem2_source_dataset_key")
+            if source_key and source.dataset.key != source_key:
+                continue
+            source_dataset = _managed_editor_dataset(session, config, source.dataset.key)
+            source_annotation = _safe_annotation_name(properties.get("_mlsystem2_source_annotation") or annotation_name)
+            path = _editor_source_dir(config, source_dataset) / source_annotation
+            if not path.is_file():
+                continue
+            catalog = _annotation_catalog(session, config, source_dataset, source_annotation)
+            selected = catalog.catalog().selected_id
+            version = catalog.versions.get(str(selected))
+            origin = properties.get("_mlsystem2_source_origin_key") or properties.get("_mlsystem2_origin_key")
+            original = None
+            if version:
+                identified = identified_payload(version.geojson)["features"]
+                for index, item in enumerate(version.geojson["features"], start=1):
+                    identity = _managed_source_identity(item, item.get("properties") or {}, index)
+                    if (origin and origin in {identity, (item.get("properties") or {}).get("_mlsystem2_origin_key")}) or identity == properties.get("_mlsystem2_source_identity") or str(item.get("id")) == feature_id:
+                        original = identified[index - 1]
+                        break
+            if original is not None:
+                return polygon_history(session, version, str(original.get("id")))
+        raise TrainingUIAPIError("Не удалось найти исходную опубликованную разметку полигона")
+    catalog = _annotation_catalog(session, config, dataset, annotation_name)
+    version = catalog.versions.get(str(version_id or catalog.catalog().selected_id))
+    if version is None:
+        raise TrainingUIAPIError("Версия не найдена в этом снимке и классе")
+    return polygon_history(session, version, feature_id)
+
+
 def _prepare_annotation_publication(session: Session, plan: dict[str, Any], username: str) -> AnnotationPublicationRow | None:
     if not plan["versions"] and not plan["bindings"]:
         return None
@@ -633,9 +700,12 @@ def _prepare_annotation_publication(session: Session, plan: dict[str, Any], user
 
 def _complete_annotation_publication(session: Session, publication: AnnotationPublicationRow | None, commit: str,
                                      *, config: TrainingUIAPIConfig | None = None) -> None:
-    if publication is None:
+    if publication is None or publication.completed:
         return
+    previous = {item["id"]: deepcopy(row.geojson) for item in publication.payload["versions"]
+                if (row := session.get(AnnotationVersionRow, uuid.UUID(item["id"]))) is not None}
     apply_plan(session, publication.payload)
+    record_polygon_history(session, publication, previous)
     if publication.payload.get("operation") == "deduplicate_annotation_versions_v1":
         from ._annotation_deduplication import complete_maintenance
         if config is None:
@@ -1301,12 +1371,18 @@ def publish_editor_scenes(
                 previous_payload = _reproject_editor_geojson(_read_geojson(annotation_path), image_path)
             state = version_states.get(annotation_name)
             catalog = catalogs.get(annotation_name)
+            if revision == _NEW_SCENE_REVISION:
+                catalog = _annotation_catalog(session, config, dataset, annotation_name)
+                new_id = uuid.uuid4()
+                state = AnnotationVersionDraft(catalog_revision=catalog.catalog().revision, selected_id=new_id,
+                    edits=[AnnotationVersionEdit(id=new_id, name=f"Разметка «{dataset.dataset_name or dataset.name}»"[:240], geojson=geojson)])
             selected_without_edit = False
             if catalog is not None:
                 state = state or catalog.initial_draft()
                 if state is not None:
                     state = catalog.prepare(state, geojson,
-                        lambda payload, previous: _normalize_version_payload(payload, previous, dataset, image_path, clip=False),
+                        lambda payload, previous: _normalize_version_payload(payload,
+                            previous_payload if revision == _NEW_SCENE_REVISION else previous, dataset, image_path),
                         display=(lambda payload: _display_version_payload(payload, image_path)) if annotation_name in version_states else None)
                     version_plans.append(catalog.plan(state))
                     selected_edit = next((edit for edit in state.edits if edit.id == state.selected_id), None)
@@ -1316,11 +1392,7 @@ def publish_editor_scenes(
             if selected_without_edit:
                 normalized_geojson = geojson
             else:
-                normalized_geojson = _normalize_editor_geojson(
-                    geojson, previous_payload, dataset, image_path=image_path,
-                )
-                _validate_editor_geojson(normalized_geojson, image_path, dataset)
-                _validate_preserved_properties(previous_payload, normalized_geojson)
+                normalized_geojson = _normalize_version_payload(geojson, previous_payload, dataset, image_path)
             prepared.append(
                 (
                     annotation_name,
@@ -2988,14 +3060,7 @@ def _publish_managed_editor_scenes(
             image_path = _matched_image_path(dataset, materialized_dir, safe_name)
             previous = _reproject_editor_geojson(_read_geojson(current_path), image_path)
             imported = previous
-        candidate = _normalize_editor_geojson(
-            geojson,
-            imported,
-            dataset,
-            image_path=image_path,
-        )
-        _validate_editor_geojson(candidate, image_path, dataset)
-        _validate_preserved_properties(imported, candidate)
+        candidate = _normalize_version_payload(geojson, imported, dataset, image_path)
         normalized.append((safe_name, previous, candidate))
     for annotation_name, revision in deletions:
         safe_name = _safe_annotation_name(annotation_name)
@@ -3159,15 +3224,18 @@ def _publish_managed_editor_scenes(
 
     version_plans = []
     for (source_key, annotation_name), (_path, payload, revision) in mutations.items():
-        if revision is None:
-            continue
         source_dataset = _managed_editor_dataset(session, config, source_key)
         catalog = _annotation_catalog(session, config, source_dataset, annotation_name)
         version_state = catalog.initial_draft()
+        if version_state is None:
+            new_id = uuid.uuid4()
+            version_state = AnnotationVersionDraft(catalog_revision=catalog.catalog().revision, selected_id=new_id,
+                edits=[AnnotationVersionEdit(id=new_id, name=f"Разметка «{source_dataset.dataset_name or source_dataset.name}»"[:240], geojson=payload)])
         if version_state is not None:
             image_path = _image_path_for_annotation(source_dataset, annotation_name)
             version_state = catalog.prepare(version_state, payload,
-                lambda candidate, previous: _normalize_version_payload(candidate, previous, source_dataset, image_path, clip=False))
+                # Атрибуты уже проверены на уровне управляемого черновика; payload собран сервером.
+                lambda candidate, previous: _normalize_version_payload(candidate, payload, source_dataset, image_path))
             version_plans.append(catalog.plan(version_state))
     for source in source_specs:
         source_dataset = _managed_editor_dataset(session, config, source.dataset.key)
@@ -3718,6 +3786,8 @@ def _reproject_editor_geojson(
     features = payload.get("features")
     if payload.get("type") != "FeatureCollection" or not isinstance(features, list):
         raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features")
+    payload = identified_payload(payload)
+    features = payload["features"]
     source_crs = _geojson_crs(payload)
     raster_crs = _editor_raster_crs(image_path)
     if source_crs == raster_crs:
@@ -3749,6 +3819,8 @@ def _validate_editor_geojson(
     dataset: DatasetInfo,
     *,
     check_footprint: bool = True,
+    allow_repair: bool = False,
+    allow_external_zones: bool = False,
 ) -> None:
     if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
         raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features")
@@ -3775,9 +3847,15 @@ def _validate_editor_geojson(
                 f"Допустимые типы объектов в поле {_CLASS_PROPERTY}: {allowed_classes}. "
                 "Используйте схему из GeoJSON этого датасета."
             )
+    identifiers: set[str] = set()
     for index, feature in enumerate(payload["features"], start=1):
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             raise TrainingUIAPIError(f"Объект {index} не является GeoJSON Feature")
+        if feature.get("id") is not None:
+            identity = str(feature["id"])
+            if identity in identifiers:
+                raise TrainingUIAPIError("ID полигонов не должны повторяться: история требует отдельный ID каждого объекта")
+            identifiers.add(identity)
         properties = feature.get("properties")
         if not isinstance(properties, dict):
             raise TrainingUIAPIError(
@@ -3817,9 +3895,11 @@ def _validate_editor_geojson(
             raise TrainingUIAPIError(f"Некорректная геометрия объекта {index}: {exc}") from exc
         if not isinstance(geometry, (Polygon, MultiPolygon)):
             raise TrainingUIAPIError(f"Объект {index} должен быть Polygon или MultiPolygon")
+        if allow_repair and not geometry.is_valid:
+            geometry = _polygonal_geometry(geometry)
         if geometry.is_empty or not geometry.is_valid or geometry.area <= 0:
             raise TrainingUIAPIError(f"Геометрия объекта {index} пуста или невалидна")
-        if check_footprint and role != "annotation_zone" and not _footprint_covers_geometry(footprint, geometry):
+        if check_footprint and not (allow_external_zones and role == "annotation_zone") and not _footprint_covers_geometry(footprint, geometry):
             raise TrainingUIAPIError(
                 f"Геометрия объекта {index} выходит за реальный footprint TIFF"
             )
@@ -3846,6 +3926,8 @@ def _footprint_covers_geometry(
 def _clip_geojson_to_footprint(
     payload: dict[str, Any],
     footprint: BaseGeometry,
+    *,
+    keep_external_zones: bool = False,
 ) -> dict[str, Any]:
     features = payload.get("features")
     if payload.get("type") != "FeatureCollection" or not isinstance(features, list):
@@ -3854,20 +3936,23 @@ def _clip_geojson_to_footprint(
     for index, feature in enumerate(features, start=1):
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
             raise TrainingUIAPIError(f"Объект {index} не является GeoJSON Feature")
-        if (feature.get("properties") or {}).get(_ROLE_PROPERTY) == "annotation_zone":
-            # Полный контур нужен редактору; пересечение с TIFF строится при подготовке обучения.
-            clipped_features.append(feature)
-            continue
         try:
             geometry = shape(feature.get("geometry"))
-            if isinstance(geometry, (Polygon, MultiPolygon)):
-                geometry = _polygonal_geometry(geometry)
+            if not isinstance(geometry, (Polygon, MultiPolygon)):
+                raise TrainingUIAPIError(f"Объект {index} должен быть Polygon или MultiPolygon")
+            if geometry.is_valid and footprint.covers(geometry):
+                clipped_features.append(feature)
+                continue
+            geometry = _polygonal_geometry(geometry)
             geometry = _polygonal_geometry(geometry.intersection(footprint))
         except Exception as exc:  # noqa: BLE001
             raise TrainingUIAPIError(
                 f"Не удалось обрезать геометрию объекта {index}: {exc}"
             ) from exc
         if geometry.is_empty:
+            if keep_external_zones and (feature.get("properties") or {}).get(_ROLE_PROPERTY) == "annotation_zone":
+                # Старую внешнюю зону нужно исправить или удалить явно, а не потерять при чтении.
+                clipped_features.append(feature)
             continue
         clipped_features.append({**feature, "geometry": dict(mapping(geometry))})
     return {**payload, "features": clipped_features}
@@ -3895,7 +3980,7 @@ def _validate_preserved_properties(
 ) -> None:
     previous_by_id = {
         json.dumps(feature.get("id"), ensure_ascii=False, sort_keys=True): feature
-        for feature in previous.get("features", [])
+        for feature in identified_payload(previous).get("features", [])
         if isinstance(feature, dict) and "id" in feature
     }
     previous_property_sets = {
@@ -4035,7 +4120,7 @@ def _normalize_editor_geojson(
         ]
     previous_by_id = {
         str(feature.get("id")): feature
-        for feature in previous.get("features", [])
+        for feature in identified_payload(previous).get("features", [])
         if isinstance(feature, dict) and feature.get("id") is not None
     }
     features: list[dict[str, Any]] = []

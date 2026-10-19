@@ -11,6 +11,19 @@ def test_annotation_version_exposes_last_published_change_date():
     field = AnnotationVersionInfo.model_fields["updated_at"]
     assert field.annotation is datetime
     assert field.is_required()
+    assert AnnotationVersionInfo.model_fields["created_at"].annotation is datetime
+
+
+def test_polygon_history_contract(monkeypatch):
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import AnnotationFeatureHistory, AnnotationFeatureHistoryEntry
+
+    assert set(AnnotationFeatureHistory.model_fields) == {"version_id", "feature_id", "entries"}
+    assert set(AnnotationFeatureHistoryEntry.model_fields) == {"id", "action", "username", "published_at", "commit", "feature", "crs"}
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    path = "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/polygon-history"
+    assert get_openapi_schema()["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/AnnotationFeatureHistory")
 
 
 EXPECTED_API = {

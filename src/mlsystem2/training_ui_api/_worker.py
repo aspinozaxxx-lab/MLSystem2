@@ -368,7 +368,9 @@ def _preempting_job(session: Session, running: JobRow) -> JobRow | None:
 
 
 def _next_preferred_job(session: Session, current: JobRow) -> JobRow | None:
-    rows = session.scalars(select(JobRow).where(JobRow.status == JobStatus.QUEUED.value)).all()
+    rows = session.scalars(select(JobRow).where(
+        JobRow.status.in_({JobStatus.QUEUED.value, JobStatus.PAUSED.value}),
+    )).all()
     automation_enabled = _automation_enabled(session)
     candidates = [
         row

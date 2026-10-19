@@ -14,8 +14,13 @@ describe("ручной пересчёт тестового F1", () => {
     expect(html).toContain("test-f1-refresh");
     expect(html).not.toContain("disabled");
   });
-  it.each(["queued", "running"])("не допускает повторное нажатие при %s", (status) => {
-    const html = renderToStaticMarkup(<TestF1RefreshButton status={status} endpoint="/проверка" label="Сеть" />);
+  it("позволяет повысить приоритет уже ожидающей фоновой оценки", () => {
+    const html = renderToStaticMarkup(<TestF1RefreshButton status="queued" endpoint="/проверка" label="Сеть" />);
+    expect(html).not.toContain("disabled");
+    expect(html).toContain("обычную ручную очередь без создания дубля");
+  });
+  it("не допускает повторное нажатие при выполняющемся расчёте", () => {
+    const html = renderToStaticMarkup(<TestF1RefreshButton status="running" endpoint="/проверка" label="Сеть" />);
     expect(html).toContain("disabled");
     expect(html).toContain("Расчёт F1 уже в очереди");
   });

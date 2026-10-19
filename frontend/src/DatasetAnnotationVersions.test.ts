@@ -8,7 +8,7 @@ import { appendHistory, cloneSnapshot, draftChanged, snapshotsEqual, undoDraft, 
 
 const catalog: AnnotationVersionCatalog = {
   image_id: "снимок", revision: "ревизия", selected_id: "первая",
-  versions: [{ id: "первая", name: "Основная", revision: 1, updated_at: "2026-10-17T08:00:00Z", usages: [] }, { id: "вторая", name: "Уточнённая", revision: 1, updated_at: "2026-10-18T08:00:00Z", usages: [] }],
+  versions: [{ id: "первая", name: "Основная", revision: 1, created_at: "2026-10-17T07:00:00Z", updated_at: "2026-10-17T08:00:00Z", usages: [] }, { id: "вторая", name: "Уточнённая", revision: 1, created_at: "2026-10-18T07:00:00Z", updated_at: "2026-10-18T08:00:00Z", usages: [] }],
 };
 const baseline: DraftSnapshot = {
   geojson: { type: "FeatureCollection", features: [] }, newFeatureIndexes: [],
@@ -22,8 +22,10 @@ describe("выбор версии входит в черновик и истор
       loadVersion: async () => undefined, onChange: () => {},
     }));
     for (const version of catalog.versions) expect(html).toContain(formatDateTime(version.updated_at));
-    expect(html).toContain("Последнее изменение версии:");
-    expect(html).toContain(catalog.versions[0].updated_at);
+    expect(html).toContain("Создана:");
+    expect(html).toContain(formatDateTime(catalog.versions[0].created_at));
+    expect(html).toContain("Удалить версию «Основная»");
+    expect(html).toContain("Создать версию");
   });
 
   it("не приписывает дату публикации новой версии в черновике", () => {
@@ -35,7 +37,7 @@ describe("выбор версии входит в черновик и истор
       loadVersion: async () => undefined, onChange: () => {},
     }));
     expect(html).toContain("ещё не опубликована");
-    expect(html).not.toContain("Последнее изменение версии:");
+    expect(html).toContain("Выбрана: Независимая");
   });
 
   it("считает переключение изменением даже при одинаковых полигонах и отменяет его одним действием", () => {

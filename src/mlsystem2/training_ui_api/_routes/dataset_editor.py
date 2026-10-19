@@ -12,6 +12,7 @@ from starlette.background import BackgroundTask
 
 from mlsystem2.training_ui_api._dataset_editor import (
     editor_annotation_version,
+    editor_polygon_history,
     recover_annotation_publications,
     DatasetEditorConflict,
     DatasetEditorGitError,
@@ -41,6 +42,7 @@ from mlsystem2.training_ui_api._dataset_editor import (
 )
 from mlsystem2.training_ui_api.contracts import (
     AnnotationVersionDetail,
+    AnnotationFeatureHistory,
     DatasetEditorAddScenesRequest,
     DatasetEditorCopyRequest,
     DatasetEditorCopyResult,
@@ -202,6 +204,16 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
     def annotation_version(dataset_key: str, annotation_name: str, version_id: UUID,
                            db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)) -> AnnotationVersionDetail:
         return _git_call(editor_annotation_version, db, ctx.config, dataset_key, annotation_name, version_id, catalog=True)
+
+    @app.get(
+        "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/polygon-history",
+        response_model=AnnotationFeatureHistory,
+        summary="История подтверждённых публикаций выбранного полигона",
+    )
+    def polygon_history(dataset_key: str, annotation_name: str, feature_id: str = Query(min_length=1),
+                        version_id: UUID | None = None, db: Session = Depends(ctx.get_db),
+                        _: str = Depends(ctx.authenticated)) -> AnnotationFeatureHistory:
+        return _git_call(editor_polygon_history, db, ctx.config, dataset_key, annotation_name, feature_id, version_id, catalog=True)
 
     @app.post(
         "/api/v1/dataset-editor/datasets/{dataset_key}/drafts/import",
