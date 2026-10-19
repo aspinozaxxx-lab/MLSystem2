@@ -14,6 +14,13 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "hide-empty-custom-results",
+  date: "2026-10-19",
+  title: "Убрана пустая служебная категория результатов",
+  updates: [
+    "Пустая карточка Custom больше не появляется в результатах после удаления старых ручных обучений. Разовые прогнозы рабочих классов сохраняются в своих классах; возможность ручной загрузки данных не меняется.",
+  ],
+}, {
   slug: "annotation-history-and-version-menu",
   date: "2026-10-19",
   title: "История полигонов и версии разметки рядом со снимком",

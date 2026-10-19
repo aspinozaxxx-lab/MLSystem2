@@ -300,6 +300,7 @@ Next-gen4 — отдельный выбор с автоматическим фо
 - `PATCH /api/v1/test-samples/{sample_id}/tiles/{tile_index}` - включает или выключает тайл.
 - `POST /api/v1/test-samples/reconcile` и `POST /api/v1/test-samples/classes/{class_key}/reconcile` - идемпотентно сверяют актуальность прямых оценок, не создавая заданий инференса.
 - `POST /api/v1/test-samples/{sample_id}/evaluate` - принудительно ставит прямой пересчёт pixel/object F1 текущей основной сетью класса.
+- `GET /api/v1/results/classes` - классы и датасеты результатов; пустой служебный `Custom` без собственных видимых результатов не показывается. Разовые прогнозы других классов с `dataset_key=custom` не создают его карточку.
 - `POST /api/v1/results/training/{result_id}/test-f1` - ручной полный пересчёт выбранной успешной сети на основных тестовых разметках; response `TrainingResultTestF1Info|null`, повтор активного задания идемпотентен, строка сети блокируется на время постановки. `ResultDatasetInfo.test_f1_status` также допускает `queued|running|error|unavailable`.
 - `GET /api/v1/test-samples/{sample_id}/editor`, `GET .../editor/scenes`, `GET .../editor/scenes/{name}` - существующие `DatasetEditorDatasetListResponse`, `DatasetEditorSceneListResponse`, `DatasetEditorSceneDetail` для общего редактора тестовой разметки.
 - `GET .../editor/rasters?folder=...`, `GET .../editor/rasters/{name}` - существующий `DatasetEditorRasterBrowserResponse` и TIFF Range с авторизацией, принадлежностью набору или личному черновику и optional `v` (412 при изменении).

@@ -319,6 +319,19 @@ def result_classes(
     config: TrainingUIAPIConfig,
 ) -> ResultClassListResponse:
     catalog = list_managed_classes(session, config)
+    if any(item.is_custom for item in catalog):
+        custom_training = select(TrainingResultRow.id).where(
+            TrainingResultRow.class_key == CUSTOM_KEY,
+            TrainingResultRow.archived_at.is_(None),
+            TrainingResultRow.status != ResultStatus.CANCELLED.value,
+        ).exists()
+        custom_pseudo = select(PseudoMarkupResultRow.id).where(
+            PseudoMarkupResultRow.class_key == CUSTOM_KEY,
+            PseudoMarkupResultRow.status != ResultStatus.CANCELLED.value,
+            ~PseudoMarkupResultRow.training_result.has(TrainingResultRow.archived_at.is_not(None)),
+        ).exists()
+        if not session.scalar(select(custom_training | custom_pseudo)):
+            catalog = [item for item in catalog if not item.is_custom]
     selected_by_class = {
         item.key: _result_card_training_results(session, item.key, [dataset.key for dataset in item.datasets])
         for item in catalog

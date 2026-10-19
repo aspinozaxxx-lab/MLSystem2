@@ -631,6 +631,50 @@ def test_result_classes_sort_by_last_successful_training(tmp_path: Path, monkeyp
         assert response.classes[1].datasets == []
 
 
+@pytest.mark.parametrize(("training_status", "archived", "pseudo_class", "expected"), [
+    (None, False, None, False),
+    ("ok", False, None, True),
+    ("running", False, None, True),
+    ("error", False, None, True),
+    ("cancelled", False, None, False),
+    ("ok", True, None, False),
+    ("ok", True, "custom", False),
+    (None, False, "custom", True),
+    (None, False, "working", False),
+    ("ok", True, "working", False),
+])
+def test_results_hide_only_empty_custom_category(
+    tmp_path: Path, monkeypatch, training_status: str | None, archived: bool,
+    pseudo_class: str | None, expected: bool,
+) -> None:
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    config = get_config()
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    catalog = [SimpleNamespace(key=key, name=name, updated_at=None, datasets=[],
+        is_custom=key == "custom", quality_metric="pixel")
+        for key, name in [("working", "Рабочий класс"), ("custom", "Custom")]]
+    monkeypatch.setattr(_service, "list_managed_classes", lambda *_args: catalog)
+    with session_factory() as session:
+        training = None
+        if training_status is not None:
+            training = TrainingResultRow(source="manual", class_key="custom", dataset_key="custom",
+                class_display_name="Custom", architecture="smp_segformer_b0", model_name="Проверочная сеть",
+                status=training_status, archived_at=datetime.now(timezone.utc) if archived else None)
+            session.add(training)
+            session.flush()
+        if pseudo_class is not None:
+            session.add(PseudoMarkupResultRow(source="manual", dataset_key="custom", class_key=pseudo_class,
+                source_dataset_name="Разовый прогноз", image_count=1, status="ok",
+                training_result_id=training.id if training is not None and pseudo_class == "custom" else None))
+            session.flush()
+        response = _service.result_classes(session, config)
+        assert [row.key for row in response.classes] == (["working", "custom"] if expected else ["working"])
+        assert len(catalog) == 2
+
+
 def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
