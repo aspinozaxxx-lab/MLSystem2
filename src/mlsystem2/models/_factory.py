@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from .contracts import ModelHandle, ModelSpec, ModelsError
 
 try:
@@ -165,6 +167,22 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
         raise ModelsError("object f1 поддерживает SegFormer B0/B1/B2/B3")
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
+    if spec.parameters.get("pipeline_variant") == "next_gen4_global_norm":
+        preprocessing = spec.parameters.get("preprocessing", {})
+        if (not isinstance(preprocessing, dict)
+                or spec.name not in {_SEGFORMER_B0, *_SMP_ENCODERS} or spec.input_channels not in (3, 4)
+                or preprocessing.get("mode") != "global_minmax"
+                or preprocessing.get("mask_output_nodata") is not True
+                or preprocessing.get("mask_nodata", True) is not True
+                or preprocessing.get("nodata") != 0.0 or preprocessing.get("epsilon") != 1e-6
+                or preprocessing.get("source") != "retained_train_windows"):
+            raise ModelsError("next-gen4-global-norm требует SegFormer RGB/RGB+NIR и сохранённые train-границы нормализации")
+        low, high = preprocessing.get("low"), preprocessing.get("high")
+        if (not isinstance(low, list) or not isinstance(high, list)
+                or len(low) != spec.input_channels or len(high) != spec.input_channels
+                or any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in low + high)
+                or any(not 0 <= left <= right <= 255 for left, right in zip(low, high))):
+            raise ModelsError("Некорректные поканальные границы глобальной нормализации checkpoint")
     if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"} and (
         spec.name not in {_SEGFORMER_B0, *_SMP_ENCODERS}
         or spec.input_channels not in (3, 4)
@@ -184,7 +202,7 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
                 "std": [0.229, 0.224, 0.225, 0.229][:spec.input_channels],
             }
             return ModelHandle(spec=spec, model=_InputPreprocessingWrapper(model, preprocessing))
-        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"} and spec.output_channels == 1:
+        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm"} and spec.output_channels == 1:
             parameters = {**spec.parameters, "binary_output": "foreground_logit_minus_background_logit"}
             if spec.pretrained:
                 parameters["pretrained_source"] = f"smp-hub/{_SMP_ENCODERS[spec.name]}.imagenet"
@@ -221,7 +239,7 @@ def _ensure_torch_for_smp() -> None:
 def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True):
     smp = _import_smp()
     _ensure_torch_for_smp()
-    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"}
+    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm"}
     if spec.pretrained and spec.input_channels not in (3, 4):
         raise ModelsError("Предобученная SegFormer поддерживает RGB или RGB+NIR (3 или 4 канала).")
     pretrained = spec.pretrained and initialize_pretrained
@@ -285,7 +303,7 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
 
     model_config = _SEGFORMER_CONFIGS[spec.name]
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
-    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4"}
+    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm"}
     if is_next_gen2:
         head_channels = 2 if spec.output_channels == 1 else spec.output_channels
         if not initialize_pretrained:
@@ -435,7 +453,7 @@ def _set_first_patch_projection(model, projection) -> None:
 
 
 def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
+    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"}:
         return ModelHandle(spec=spec, model=model)
     preprocessing = spec.parameters.get("preprocessing")
     if not isinstance(preprocessing, dict):
@@ -475,7 +493,7 @@ if torch is not None:
                 normalized = torch.where(
                     span > 1e-6, (raw - low) / span.clamp_min(1e-6), torch.zeros_like(raw)
                 )
-            elif self.mode == "robust_percentile":
+            elif self.mode in {"robust_percentile", "global_minmax"}:
                 denominator = (self.preprocess_high - self.preprocess_low).clamp_min(1.0)
                 normalized = ((raw - self.preprocess_low) / denominator).clamp(0.0, 1.0)
             else:
@@ -496,7 +514,7 @@ if torch is not None:
                     mode="bilinear",
                     align_corners=False,
                 )
-            if self.mode == "window_minmax":
+            if self.mode in {"window_minmax", "global_minmax"}:
                 if self.mask_output_nodata:
                     valid = torch.any(raw != self.nodata, dim=1, keepdim=True)
                     background = torch.where(valid, logits[:, :1], torch.zeros_like(logits[:, :1]))

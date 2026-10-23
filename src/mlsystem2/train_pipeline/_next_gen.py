@@ -9,6 +9,28 @@ IMAGENET_MEAN_RGB_RED_NIR = [0.485, 0.456, 0.406, 0.485]
 IMAGENET_STD_RGB_RED_NIR = [0.229, 0.224, 0.225, 0.229]
 
 
+def global_minmax_parameters(histogram: dict[str, object] | None, channels: int) -> dict[str, object]:
+    """Зафиксировать общие границы только по допустимым train-окнам."""
+    if not isinstance(histogram, dict) or histogram.get("source") != "retained_train_windows":
+        raise ValueError("Глобальная нормализация требует статистику только train-тайлов")
+    counts = histogram.get("counts")
+    if not isinstance(counts, list) or len(counts) != channels:
+        raise ValueError("Число каналов статистики глобальной нормализации не совпадает с моделью")
+    low, high = [], []
+    for channel in counts:
+        if not isinstance(channel, list) or len(channel) != 256 or any(value < 0 for value in channel):
+            raise ValueError("Некорректная статистика глобальной нормализации")
+        occupied = [index for index, value in enumerate(channel) if value > 0]
+        if not occupied:
+            raise ValueError("Train не содержит допустимых пикселей для глобальной нормализации")
+        low.append(float(occupied[0]))
+        high.append(float(occupied[-1]))
+    return {"mode": "global_minmax", "epsilon": 1e-6, "nodata": 0.0,
+            "mask_output_nodata": True, "low": low, "high": high,
+            "source": "retained_train_windows", "valid_pixel_count": int(histogram["valid_pixel_count"]),
+            "window_count": int(histogram["window_count"])}
+
+
 def preprocessing_parameters(
     mode: str,
     histogram: dict[str, object] | None,

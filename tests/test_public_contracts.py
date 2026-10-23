@@ -285,7 +285,7 @@ def test_next_gen2_uses_existing_public_contracts() -> None:
 
     for dto in (TrainSettings, TrainConfig, TileDataloaderRequest, JobDetail, JobSummary, TrainingResultInfo):
         assert dto.model_json_schema()["properties"]["pipeline_variant"]["enum"] == [
-            "legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2",
+            "legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2",
         ]
     assert TileSplitRequest.model_json_schema()["properties"]["strategy"]["enum"] == [
         "window_random", "scene_fold", "scene_groups",

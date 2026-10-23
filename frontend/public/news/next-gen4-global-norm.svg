@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">Общая нормализация только по обучающей части</title>
+  <desc id="desc">Поясняющая схема: валидные train-тайлы задают общие поканальные минимум и максимум. Эти границы сохраняются в checkpoint для обучения, проверки и инференса. Маска nodata независима от нормализованного нуля.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#77b9bc"/></marker>
+    <pattern id="invalid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M0 10L10 0" stroke="#86929f" stroke-width="2"/><rect width="10" height="10" fill="#263443" fill-opacity=".5"/></pattern>
+  </defs>
+  <rect width="1200" height="680" rx="24" fill="#102130"/>
+  <g font-family="Arial, sans-serif" fill="#edf6f7">
+    <text x="48" y="61" font-size="27" font-weight="700">Next-gen4-global-norm</text>
+    <text x="48" y="96" font-size="18" fill="#abc1cd">ПОЯСНЯЮЩАЯ СХЕМА · УСЛОВНЫЕ ДАННЫЕ</text>
+    <rect x="48" y="146" width="285" height="326" rx="18" fill="#1b3643" stroke="#41616f"/>
+    <text x="70" y="182" font-size="21" font-weight="700">Обучающие тайлы</text>
+    <g fill="#3c8278" stroke="#8abeb3" stroke-width="2">
+      <rect x="72" y="207" width="72" height="72" rx="6"/><rect x="154" y="207" width="72" height="72" rx="6"/>
+      <rect x="236" y="207" width="72" height="72" rx="6"/><rect x="72" y="289" width="72" height="72" rx="6"/>
+      <rect x="154" y="289" width="72" height="72" rx="6"/><rect x="236" y="289" width="72" height="72" rx="6"/>
+    </g>
+    <rect x="72" y="330" width="72" height="31" fill="url(#invalid)"/>
+    <text x="71" y="396" font-size="18">Только валидные пиксели</text>
+    <text x="71" y="425" font-size="18" fill="#abc1cd">До аугментаций</text>
+    <path d="M346 303H413" stroke="#77b9bc" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="434" y="203" width="307" height="211" rx="18" fill="#254a54" stroke="#77b9bc"/>
+    <text x="457" y="242" font-size="21" font-weight="700">Общие границы каналов</text>
+    <text x="457" y="279" font-size="18">Минимум и максимум train</text>
+    <text x="457" y="314" font-size="18">Один масштаб для всех окон</text>
+    <text x="457" y="369" font-size="18" fill="#a7e3d8">Сохранение в checkpoint</text>
+    <path d="M753 303H805" stroke="#77b9bc" stroke-width="3" marker-end="url(#arrow)"/>
+    <g fill="#1c3649" stroke="#577c94"><rect x="826" y="150" width="326" height="82" rx="14"/><rect x="826" y="266" width="326" height="82" rx="14"/><rect x="826" y="382" width="326" height="82" rx="14"/></g>
+    <text x="849" y="199" font-size="21">Обучение</text>
+    <text x="849" y="315" font-size="21">Validation и test</text>
+    <text x="849" y="431" font-size="21">Инференс · ONNX · Triton</text>
+    <path d="M805 191V423M805 191H820M805 423H820" fill="none" stroke="#77b9bc" stroke-width="2"/>
+    <rect x="48" y="513" width="1104" height="118" rx="16" fill="#193d3e"/>
+    <text x="73" y="550" font-size="21" font-weight="700">Нормализованный ноль ≠ nodata</text>
+    <text x="73" y="583" font-size="18" fill="#c2d8db">Маска берётся из исходного растра. Проверочные данные не задают границы нормализации.</text>
+    <text x="73" y="610" font-size="16" fill="#a3bbc3">Старые профили не меняются. Эффект нового обучения проверяется на независимой разметке.</text>
+  </g>
+</svg>

@@ -4408,7 +4408,7 @@ function queueModelCell(job: JobSummary): ReactNode {
 }
 
 function trainingModelLabel(name: string, variant: string): string {
-  return ["next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"].includes(variant) ? `${name.replace(" (next-gen)", "")} (${trainingPipelineLabel(variant)})` : name;
+  return ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"].includes(variant) ? `${name.replace(" (next-gen)", "")} (${trainingPipelineLabel(variant)})` : name;
 }
 
 function mergedQueueJobs(snapshot: QueueSnapshot): JobSummary[] {

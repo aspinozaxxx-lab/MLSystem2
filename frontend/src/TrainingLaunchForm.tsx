@@ -57,7 +57,7 @@ export function TrainingLaunchForm({
   const [openSection, setOpenSection] = useState<TrainingSection | null>("model");
   const variant = String(value["train.pipeline_variant"] || "legacy");
   const variantLabel = trainingPipelineLabel(variant);
-  const nextGen2 = ["next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"].includes(variant);
+  const nextGen2 = ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"].includes(variant);
   const objectF1 = ["object_f1", "object_f1_v2"].includes(variant);
   const modelName = models.find((model) => model.architecture === architecture)?.display_name.replace(" (next-gen)", "") || "Модель не выбрана";
   const dataset = datasets.find((item) => item.key === datasetKey);

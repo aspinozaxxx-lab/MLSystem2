@@ -25,6 +25,8 @@
 
 `next_gen4` сохраняет тот же ABI и требует `preprocessing.mask_output_nodata=true`: нулевые во всех входных каналах пиксели дают фон внутри обёртки PyTorch/ONNX. Флаг сохраняется в спецификации checkpoint; восстановление автономное. Исторические спецификации других вариантов не меняются.
 
+`next_gen4_global_norm` сохраняет этот ABI с `preprocessing.mode=global_minmax`: `low/high` по 3/4 каналам, `source=retained_train_windows`, `valid_pixel_count`, `window_count`, `epsilon=1e-6`, `nodata=0`, `mask_output_nodata=true`. Общая обёртка применяет сохранённые train-границы и в PyTorch, и в ONNX. Маска определяется до нормализации: нормализованный ноль валидного пикселя не подавляет прогноз. Конфигурация и границы проверяются при создании и автономной загрузке; старый оконный профиль не меняется.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.

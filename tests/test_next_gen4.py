@@ -28,7 +28,7 @@ def raster(path, *, width=130, height=105, invalid=True):
         target.write_mask(mask)
 
 
-def dataset(tmp_path, mode, *, zones=False):
+def dataset(tmp_path, mode, *, zones=False, variant="next_gen4"):
     image = tmp_path / "image.tif"
     annotation = tmp_path / "annotation.geojson"
     if not image.exists():
@@ -45,16 +45,17 @@ def dataset(tmp_path, mode, *, zones=False):
         tile_size=32, stride=32, context=0, mode=mode, seed=42, augmentation_level=0,
         positive_factor=0.5, hard_negative_factor=0, background_factor=0.5,
         tile_split=TileSplitRequest(val_fraction=0.2, test_fraction=0.2, seed=42, strategy="window_random"),
-        input_channels=4, pipeline_variant="next_gen4", statistics_workers=0)
+        input_channels=4, pipeline_variant=variant, statistics_workers=0)
 
 
 @pytest.mark.parametrize("zones", [False, True])
-def test_grid_disjoint_same_source_zones_edges_and_determinism(tmp_path, zones):
-    parts = {mode: dataset(tmp_path, mode, zones=zones) for mode in ("train", "val", "test")}
+@pytest.mark.parametrize("variant", ["next_gen4", "next_gen4_global_norm"])
+def test_grid_disjoint_same_source_zones_edges_and_determinism(tmp_path, zones, variant):
+    parts = {mode: dataset(tmp_path, mode, zones=zones, variant=variant) for mode in ("train", "val", "test")}
     keys = {mode: {(tile.window.x, tile.window.y) for tile in value._windows} for mode, value in parts.items()}
     assert not (keys["train"] & keys["val"] or keys["train"] & keys["test"] or keys["val"] & keys["test"])
     assert all(x % 32 == 0 and y % 32 == 0 for values in keys.values() for x, y in values)
-    assert dataset(tmp_path, "val", zones=zones).tile_split_manifest == parts["val"].tile_split_manifest
+    assert dataset(tmp_path, "val", zones=zones, variant=variant).tile_split_manifest == parts["val"].tile_split_manifest
     if not zones:
         assert set.union(*keys.values()) == {(x, y) for y in range(0, 105, 32) for x in range(0, 130, 32)}
     for value in parts.values():

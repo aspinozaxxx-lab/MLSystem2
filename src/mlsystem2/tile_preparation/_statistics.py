@@ -1,4 +1,4 @@
-"""Точная train-статистика объектных целей и автобаланса без передачи растров."""
+"""Точная train-статистика целей, автобаланса и нормализации без передачи растров."""
 
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
@@ -13,7 +13,7 @@ import numpy as np
 from rasterio.windows import Window
 
 from ._object_targets import boundary_targets_v2, rasterize_objects
-from .contracts import HARD_NEGATIVE_LABEL
+from .contracts import HARD_NEGATIVE_LABEL, TilePreparationError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ def _window_statistics(dataset, index):
         else dataset._read_invalid_data_pixels(source, window)
     )
     supervision = dataset._read_supervision_mask(item.scene_index, source, window, invalid)
-    if dataset._pipeline_variant in {"next_gen3", "next_gen4"}:
+    if dataset._pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm"}:
         semantic = supervision if dataset.uses_multiclass_masks else supervision[0]
         negatives = (dataset._read_class_hard_negative_masks(item.scene_index, source, window, invalid, supervision)
                      if dataset._has_class_specific_hard_negatives else None)
@@ -48,12 +48,18 @@ def _window_statistics(dataset, index):
         counts = np.bincount(np.maximum(semantic[usable], 0).astype(np.int64), minlength=_class_count(dataset))
         hard = bool(np.any(semantic == HARD_NEGATIVE_LABEL))
         ratio = float(np.count_nonzero((semantic > 0) & valid) / max(1, np.count_nonzero(valid)))
+        histogram = None
+        if dataset._pipeline_variant == "next_gen4_global_norm" and dataset._collect_band_histogram_enabled:
+            image = dataset._read_image_raw(source, window, dataset._scene_nodata[item.scene_index])
+            if image.dtype != np.uint8:
+                raise TilePreparationError("Глобальная нормализация ожидает исходные каналы uint8")
+            histogram = np.stack([np.bincount(channel[valid], minlength=256) for channel in image]).astype(np.uint64)
         return ratio, hard or bool(negatives is not None and negatives.any()), counts, {
             "positive": positive, "valid_pixels": int(valid.sum()), "hard_negative": hard,
             "partial_negative": bool(negatives is not None and negatives.any()),
             "scene_id": item.scene_id,
             "group": f"{item.scene_id}:{item.window.x // (4 * size)}:{item.window.y // (4 * size)}",
-        }
+        }, histogram
     mask = supervision[0]
     instances, _ = rasterize_objects(dataset._positive_index(item.scene_index), source,
         window, size, invalid | (mask < 0), collect_overlaps=False)
@@ -62,7 +68,7 @@ def _window_statistics(dataset, index):
     labels[boundary > 0] = 2
     counts = np.bincount(labels[usable], minlength=3)
     ratio = float(np.count_nonzero((mask > 0) & ~invalid) / max(1, np.count_nonzero(~invalid)))
-    return ratio, bool(np.any(mask == HARD_NEGATIVE_LABEL)), counts, None
+    return ratio, bool(np.any(mask == HARD_NEGATIVE_LABEL)), counts, None, None
 
 
 def _class_count(dataset):
@@ -75,13 +81,16 @@ def _statistics_block(bounds):
     start, end = bounds
     ratios, negatives, tiles = [], [], []
     counts = np.zeros(_class_count(_WORKER_DATASET), dtype=np.int64)
+    histogram = np.zeros((_WORKER_DATASET.channel_count, 256), dtype=np.uint64)
     for index in range(start, end):
-        ratio, negative, current, tile = _window_statistics(_WORKER_DATASET, index)
+        ratio, negative, current, tile, bands = _window_statistics(_WORKER_DATASET, index)
         ratios.append(ratio)
         negatives.append(negative)
         counts += current
         tiles.append(tile)
-    return start, ratios, negatives, counts, tiles
+        if bands is not None:
+            histogram += bands
+    return start, ratios, negatives, counts, tiles, histogram
 
 
 def training_statistics(dataset, requested_workers):
@@ -92,7 +101,8 @@ def training_statistics(dataset, requested_workers):
     negatives = np.empty(length, dtype=bool)
     counts = np.zeros(_class_count(dataset), dtype=np.int64)
     tiles = [None] * length
-    profile = dataset._pipeline_variant.replace("_", "-") if dataset._pipeline_variant in {"next_gen3", "next_gen4"} else "object f1 v2"
+    histogram = np.zeros((dataset.channel_count, 256), dtype=np.uint64)
+    profile = dataset._pipeline_variant.replace("_", "-") if dataset._pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm"} else "object f1 v2"
     started = last_report = time.monotonic()
     completed = 0
     LOGGER.info("%s: начало точной статистики train, окон=%s, процессов=%s", profile, length, workers)
@@ -107,8 +117,10 @@ def training_statistics(dataset, requested_workers):
 
     if workers == 1:
         for index in range(length):
-            ratios[index], negatives[index], current, tiles[index] = _window_statistics(dataset, index)
+            ratios[index], negatives[index], current, tiles[index], bands = _window_statistics(dataset, index)
             counts += current
+            if bands is not None:
+                histogram += bands
             completed += 1
             progress()
     else:
@@ -129,12 +141,13 @@ def training_statistics(dataset, requested_workers):
                     done, _ = wait(pending, timeout=15, return_when=FIRST_COMPLETED)
                     for future in done:
                         pending.remove(future)
-                        start, block_ratios, block_negatives, current, block_tiles = future.result()
+                        start, block_ratios, block_negatives, current, block_tiles, bands = future.result()
                         end = start + len(block_ratios)
                         ratios[start:end] = block_ratios
                         negatives[start:end] = block_negatives
                         tiles[start:end] = block_tiles
                         counts += current
+                        histogram += bands
                         completed += len(block_ratios)
                         bounds = next(blocks, None)
                         if bounds is not None:
@@ -145,4 +158,8 @@ def training_statistics(dataset, requested_workers):
                     future.cancel()
     LOGGER.info("%s: статистика train готова за %.1f с, пикселей по классам=%s",
                 profile, time.monotonic() - started, counts.tolist())
+    if dataset._pipeline_variant == "next_gen4_global_norm" and dataset._collect_band_histogram_enabled:
+        dataset._band_histogram = {"counts": histogram.tolist(), "bins": list(range(256)),
+            "source": "retained_train_windows", "valid_pixel_count": int(histogram[0].sum()),
+            "window_count": length, "scene_ids": sorted({item.scene_id for item in dataset._windows})}
     return ratios, negatives, counts, tiles

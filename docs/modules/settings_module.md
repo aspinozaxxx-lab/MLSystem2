@@ -17,13 +17,15 @@
 - `DatasetClassSettings` — `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `DatasetSettings` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, `classes`, `val_fraction`; свойство `is_multiclass`.
 - `TilePreparationSettings` — `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, три sampling factor, `val_positive_factor`, `class_balance`.
-- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2|next_gen3|next_gen4|object_f1|object_f1_v2`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits. Next-gen3 наследует ограничения архитектур/тайлов next-gen2; автоматическая политика фона версионируется в сэмплере, новых ручных коэффициентов нет.
+- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|object_f1|object_f1_v2`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits. Next-gen3 наследует ограничения архитектур/тайлов next-gen2; автоматическая политика фона версионируется в сэмплере, новых ручных коэффициентов нет.
 - `NextGenSettings` — validation fold, normalization, validation interval, threshold mode и optional Gaussian A/B.
 - `InferenceSettings` — `checkpoint_uri`, `threshold`, `batch_size`, `device`.
 - `MLflowSettings` — `enabled`, `tracking_uri`, `experiment_name`.
 - `SystemSettings` — `runtime`, `dataset`, `tile_preparation`, `train`, `next_gen`, `inference`, `mlflow`.
 
 Next-gen4 наследует фиксированный профиль и автоматический фон next-gen3, но требует stride=tile_size, context=0. Размер 512/768/1024/1536 выбирается пользователем; ненулевые лимиты train/validation batch не допускаются. Старые варианты сохраняют собственные ограничения.
+
+`next_gen4_global_norm` имеет те же ограничения и отдельное имя варианта. Способ нормализации фиксирован профилем: границы по train вычисляет `train_pipeline`, сохраняет модель; поля ручных границ в settings не добавляются.
 
 ## Список используемых данным модулем модулей и с какой целью
 

@@ -88,11 +88,12 @@ export function trainingSummary({
   return `${modelName.replace(" (next-gen)", "")} на «${datasetName}», ${trainingPipelineLabel(variant)}. `
     + (modelName.toLowerCase().includes("segformer") ? `${value["train.pretrained"] ? "Предобученные веса ImageNet" : "Случайная инициализация весов"}. ` : "")
     + `Тайлы ${trainingNumber(tile.size)} × ${trainingNumber(tile.size)} px, центр ${trainingNumber(tile.core)} × ${trainingNumber(tile.core)} px; `
-    + (["next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"].includes(variant) ? `шаг ${trainingNumber(variant === "next_gen4" ? tile.size : tile.size / 2)} px, train/validation/test 60/20/20${variant === "next_gen4" ? " по неперекрывающимся тайлам" : objectF1 ? " по независимым снимкам; " + (variant === "object_f1_v2" ? "фон, внутренность и широкая граница" : "область и границы") : ""}. ` : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
+    + (["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"].includes(variant) ? `шаг ${trainingNumber(["next_gen4", "next_gen4_global_norm"].includes(variant) ? tile.size : tile.size / 2)} px, train/validation/test 60/20/20${["next_gen4", "next_gen4_global_norm"].includes(variant) ? " по неперекрывающимся тайлам" : objectF1 ? " по независимым снимкам; " + (variant === "object_f1_v2" ? "фон, внутренность и широкая граница" : "область и границы") : ""}. ` : `валидация ${trainingNumber(value["dataset.val_fraction"] == null ? null : Number(value["dataset.val_fraction"]) * 100)}%. `)
     + `Batch size ${trainingNumber(value["train.batch_size"])}, LR ${value["train.learning_rate"] ?? "—"}. `
     + `Максимум ${trainingNumber(value["train.epochs"])} эпох${time == null || time === "" ? "" : `, лимит ${trainingNumber(Number(time) / 60)} мин`}; `
-    + `ранняя остановка после ${trainingNumber(value["train.early_stopping_patience"])} ${patienceUnit} без улучшения${["next_gen2", "next_gen3", "next_gen4"].includes(variant) ? " validation loss" : objectF1 ? " object F1 после выделения объектов" : ""}. `
-    + (["next_gen3", "next_gen4"].includes(variant) ? "Фон подбирается автоматически по ошибкам полной валидации; число шагов эпохи ограничено и постоянно. " : "")
+    + `ранняя остановка после ${trainingNumber(value["train.early_stopping_patience"])} ${patienceUnit} без улучшения${["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm"].includes(variant) ? " validation loss" : objectF1 ? " object F1 после выделения объектов" : ""}. `
+    + (["next_gen3", "next_gen4", "next_gen4_global_norm"].includes(variant) ? "Фон подбирается автоматически по ошибкам полной валидации; число шагов эпохи ограничено и постоянно. " : "")
+    + (variant === "next_gen4_global_norm" ? "Общая поканальная нормализация рассчитывается только на train и сохраняется в модели для инференса. " : "")
     + `${secondaryPriority ? "Второстепенный" : "Обычный"} приоритет.`
     + (runInferenceAfterTraining ? " После успешного обучения — псевдоразметка всех снимков датасета." : "");
 }

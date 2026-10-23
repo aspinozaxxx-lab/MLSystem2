@@ -71,9 +71,9 @@ def create_tile_dataloader(
     except Exception as exc:
         raise TilePreparationError("Не удалось подготовить Dataset тайлов") from exc
 
-    if request.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
+    if request.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"}:
         # Сохраняем порядок и потребление генератора случайных чисел исходных DataLoader.
-        if request.pipeline_variant in {"next_gen3", "next_gen4"} and request.mode == "train":
+        if request.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm"} and request.mode == "train":
             from ._adaptive_sampling import AdaptiveBackgroundSampler
 
             sampler = AdaptiveBackgroundSampler(dataset.adaptive_sampling_tiles(), seed=tile_settings.seed)
@@ -98,7 +98,7 @@ def create_tile_dataloader(
             # Workers пересоздаются, чтобы RNG основной программы потреблялся как при workers=0.
             kwargs["prefetch_factor"] = 2
         loader = DataLoader(**kwargs)
-        if request.pipeline_variant in {"next_gen3", "next_gen4"}:
+        if request.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm"}:
             loader.selected_tiles = len(sampler) if request.mode == "train" else len(dataset)
             loader.selected_batches = len(loader)
         LOGGER.info(
@@ -673,7 +673,7 @@ def _seed_tile_worker(worker_id: int) -> None:
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None and hasattr(worker_info.dataset, "close"):
         worker_info.dataset.close()
-    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) in {"next_gen2", "next_gen3", "next_gen4", "object_f1", "object_f1_v2"}:
+    if worker_info is not None and getattr(worker_info.dataset, "pipeline_variant", None) in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"}:
         import cv2
 
         cv2.setNumThreads(1)

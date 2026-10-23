@@ -22,6 +22,8 @@ Next-gen3 использует те же публичные запросы: тр
 
 Next-gen4 наследует эту оркестрацию, передавая stride=tile_size и точное имя варианта всем loaders, модели, train и MLflow. ModelSpec дополнительно фиксирует `mask_output_nodata=true`; split manifest содержит общую неперекрывающуюся сетку зон исходного TIFF. Размер тайла выбирается в конфигурации, а не закрепляется оркестратором.
 
+`next_gen4_global_norm` наследует next-gen4, но запрашивает histogram только train-окон и формирует поканальные `low/high` в `ModelSpec.parameters.preprocessing` до создания модели. Validation/test статистику не собирают. Происхождение и объём входят в диагностику MLflow; resume требует совпадения варианта и preprocessing checkpoint. Нормализация выполняется моделью, не копируется в loaders или отдельный predictor.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `settings.api` — текущие настройки и путь YAML.

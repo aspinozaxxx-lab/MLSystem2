@@ -20,7 +20,7 @@
 - `TrainRequest` - поля `model`, `train_loader`, `val_loader`, optional `test_loader`, `config`, `checkpoint_dir`, `sample_size`, `run_metadata`.
 - `TrainResult` - история/checkpoint/порог/остановка и `diagnostics`.
 
-`TrainConfig.pipeline_variant=next_gen3|next_gen4`: прежний loss и критерий next-gen2, обязательная valid-mask и адаптивный train-сэмплер. `EpochMetrics.adaptive_sampling` по умолчанию пуст: next-gen3/4 сохраняют квоты, нормированные ошибки полной validation, сглаживание и причину следующего решения. После test контроллер не вызывается. Checkpoint и итоговая диагностика сохраняют полное состояние и историю; продолжение от весов начинает новый контроллер. Различие сетки принадлежит tile_preparation, не train. Правила — в `docs/architecture.md`.
+`TrainConfig.pipeline_variant=next_gen3|next_gen4|next_gen4_global_norm`: прежний loss и критерий next-gen2, обязательная valid-mask и адаптивный train-сэмплер. `EpochMetrics.adaptive_sampling` по умолчанию пуст: профили сохраняют квоты, нормированные ошибки полной validation, сглаживание и причину следующего решения. После test контроллер не вызывается. Checkpoint и итоговая диагностика сохраняют полное состояние и историю; продолжение от весов начинает новый контроллер. Различие сетки принадлежит tile_preparation, глобальная нормализация встроена в переданную модель, не реализуется в train. Правила — в `docs/architecture.md`.
 
 ## Список используемых данным модулем модулей и с какой целью
 
