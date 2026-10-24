@@ -144,10 +144,12 @@ def test_registered_profile_preserves_base_defaults_and_optional_slices(architec
     assert "KL" in template["config_schema"]["pipeline_descriptions"][VARIANT]
 
 
-def model_spec():
+def model_spec(variant=VARIANT):
     from mlsystem2.models.contracts import ModelSpec
     return ModelSpec(name="smp_segformer_b0", input_channels=4, output_channels=1, parameters={
-        "pipeline_variant": VARIANT, "context_consistency": POLICY,
+        "pipeline_variant": variant, "context_consistency": POLICY,
+        **({"decoder_normalization": {"version": "per_pixel_channel_layer_norm_v1", "epsilon": 1e-5, "affine": True}}
+           if variant == "next_gen4_consistency_v2" else {}),
         "augmentation_policy": "validity_guard_v4_context_crop_v1",
         "context_crop": {"area_scale": [0.25, 1.0], "ratio": [1.0, 1.0], "probability": 0.5,
             "output_size": 512, "source": "within_retained_train_window"},
@@ -188,7 +190,8 @@ def test_continuation_rejects_different_consistency_policy(monkeypatch):
         _runner._load_or_create_model(settings, deps)
 
 
-def test_periodic_current_snapshots_preserve_one_training_loop_and_best_selection(tmp_path, monkeypatch):
+@pytest.mark.parametrize("variant", [VARIANT, "next_gen4_consistency_v2"])
+def test_periodic_current_snapshots_preserve_one_training_loop_and_best_selection(tmp_path, monkeypatch, variant):
     from mlsystem2.models import _factory
     from mlsystem2.models.api import create_model
     from mlsystem2.tile_preparation._adaptive_sampling import AdaptiveBackgroundSampler
@@ -197,7 +200,7 @@ def test_periodic_current_snapshots_preserve_one_training_loop_and_best_selectio
     from mlsystem2.train.contracts import TrainRequest, TrainConfig
     torch.set_num_threads(2)
     monkeypatch.setattr(_factory, "_create_smp_segformer", lambda spec, **kwargs: torch.nn.Conv2d(4, 2, 1))
-    model = create_model(model_spec())
+    model = create_model(model_spec(variant))
     class Samples(torch.utils.data.Dataset):
         def __len__(self):
             return 4
@@ -211,7 +214,7 @@ def test_periodic_current_snapshots_preserve_one_training_loop_and_best_selectio
     loader.adaptive_sampling_controller = sampler
     ticks = iter(index / 4 for index in range(10000))
     monkeypatch.setattr(_trainer, "perf_counter", lambda: next(ticks))
-    config = TrainConfig(pipeline_variant=VARIANT, class_weights=[1., 1.], epochs=2, batch_size=1,
+    config = TrainConfig(pipeline_variant=variant, class_weights=[1., 1.], epochs=2, batch_size=1,
         device="cpu", learning_rate=1e-4, weight_decay=.01, loss="cross_entropy_tversky", threshold_mode="fixed",
         early_stopping_patience=10, diagnostic_checkpoint_interval_sec=1)
     result = _trainer.train_model(TrainRequest(model=model, train_loader=loader, val_loader=loader,

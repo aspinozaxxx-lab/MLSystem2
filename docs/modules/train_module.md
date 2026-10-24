@@ -24,8 +24,6 @@
 
 `TrainConfig.pipeline_variant` также принимает `next_gen4_augmentation_v4` с тем же loss/выбором. `EpochMetrics.val_dense_window_metrics` (по умолчанию `{}`) содержит только для v4 группы плотности 0,9/0,99 при допустимой площади ≥0,99: число окон и TP/FP/FN, precision/recall/F1 при 0,5/0,9. Multiclass оценивается как объединение объектов с суммой их вероятностей; неоднозначные отрицательные области исключены. Пустые группы имеют `null` метрик. После выбора best отдельные eval-аудиты train и test сохраняются в `TrainResult.diagnostics.dense_train_windows/test_dense_windows`, без влияния на веса, scheduler, early stopping и пороги.
 
-## Список используемых данным модулем модулей и с какой целью
-
 `TrainConfig` также принимает `pipeline_variant=next_gen4_consistency_v1` и optional
 `diagnostic_checkpoint_interval_sec` (положительные секунды либо `None`). Новый профиль
 наследует v4; дополнительный KL с весом 0,25 сравнивает eval-прогноз полного train-окна
@@ -35,6 +33,11 @@
 `EpochMetrics.train_context_consistency` содержит счётчики и средний KL полной истории.
 Периодические текущие срезы и атомарный индекс фиксируют фактическое время и эпоху;
 они не меняют best, test или состояние непрерывного обучения. Подробности в архитектуре.
+
+`next_gen4_consistency_v2` полностью наследует этот цикл, диагностику и тот же KL.
+Замена нормализации декодера принадлежит models: train не преобразует слои или веса.
+
+## Список используемых данным модулем модулей и с какой целью
 
 - `models.contracts` - публичный контракт модели, которую нужно обучить.
 - `tile_preparation.contracts` — метка отрицательных примеров, `SamplingFeedback` и протокол `AdaptiveSamplingController`; частные реализации загрузчиков не импортируются.

@@ -23,7 +23,7 @@ def test_v2_catalog_profile_is_independent_and_validated(architecture, imagery_t
     templates = {item["architecture"]: item for item in initial_templates()}
     template = templates[architecture]
     schema = template["config_schema"]
-    assert schema["fields"][0]["options"] == ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1", "object_f1_v2"]
+    assert schema["fields"][0]["options"] == ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "object_f1", "object_f1_v2"]
     assert template["default_config"]["train.pipeline_variant"] == "legacy"
     assert "три взаимоисключающих класса" in schema["pipeline_descriptions"]["object_f1_v2"]
     assert "минимум три группы" in schema["pipeline_descriptions"]["object_f1_v2"]

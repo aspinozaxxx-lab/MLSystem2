@@ -30,11 +30,14 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 
 `TileDataloaderRequest.pipeline_variant` также принимает `next_gen4_augmentation_v4`: до прежней геометрии добавлена квадратная вырезка 25–100% площади с вероятностью 0,5 только внутри train-тайла, с возвратом к выбранному размеру и общей геометрией масок. Защита v3 сохраняется. Train manifest содержит `dense_windows` с числом исходных окон ≥90%/99% объекта при valid ≥99%. Только v4 возвращаемый train-loader имеет `dense_window_loader` (либо `None`, если подходящих окон нет): последовательный неповторяющийся аудит плотных train-окон на копии Dataset без аугментаций, с теми же train-индексами и общей функцией сборки batch. Рабочий Dataset не изменяется. Validation/test и train-histogram не аугментируются.
 
-## Список используемых данным модулем модулей и с какой целью
-
 `TileDataloaderRequest.pipeline_variant=next_gen4_consistency_v1` полностью наследует v4:
 тот же split, статистика, protected crop и dense-loader. Согласованную пару формирует train
 только из готового batch; tile_preparation не читает для неё соседние val/test-пиксели.
+
+`next_gen4_consistency_v2` наследует ту же подготовку без изменения сетки, данных,
+масок, статистики, аугментаций или сэмплера; нормализатор декодера здесь не создаётся.
+
+## Список используемых данным модулем модулей и с какой целью
 
 - `inference.api` — единая сетка окон полного покрытия для object_f1.
 - `settings.api` — параметры сетки, workers, sampling, augmentation и val-cache.

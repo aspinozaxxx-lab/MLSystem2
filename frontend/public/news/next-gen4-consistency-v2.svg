@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">Поясняющая схема нормализации декодера</title>
+  <desc id="desc">Слева BatchNorm зависит от статистики всех пикселей пакета и использует разные режимы обучения и проверки. Справа LayerNorm независимо обрабатывает каналы одного пикселя, с одинаковой формулой в обоих режимах. Качество требуется проверить новым обучением.</desc>
+  <rect width="1200" height="620" rx="24" fill="#f2f6fb"/>
+  <g font-family="Arial, sans-serif" fill="#172b46">
+    <text x="56" y="60" font-size="29" font-weight="700">Согласованность v2: замена одного нормализатора</text>
+    <text x="56" y="96" font-size="20" fill="#52677f">Поясняющая схема — не результат инференса</text>
+    <rect x="50" y="125" width="510" height="335" rx="20" fill="white" stroke="#b4c4d6"/>
+    <rect x="640" y="125" width="510" height="335" rx="20" fill="white" stroke="#419c91"/>
+    <text x="80" y="168" font-size="26" font-weight="700">Прежний BatchNorm</text>
+    <text x="670" y="168" font-size="26" font-weight="700">Попиксельная LayerNorm</text>
+    <g fill="#b8d6ef" stroke="#548bb8" stroke-width="2">
+      <rect x="85" y="200" width="90" height="70" rx="8"/><rect x="195" y="200" width="90" height="70" rx="8"/><rect x="305" y="200" width="90" height="70" rx="8"/>
+    </g>
+    <text x="88" y="294" font-size="18">Все окна и пиксели пакета</text>
+    <path d="M130 310 L130 335 L415 335 L415 350" fill="none" stroke="#548bb8" stroke-width="3"/>
+    <text x="80" y="386" font-size="20">Обучение: текущая статистика</text>
+    <text x="80" y="420" font-size="20">Проверка: накопленная статистика</text>
+    <g fill="#a5dfd3" stroke="#2e857a" stroke-width="2">
+      <rect x="690" y="205" width="70" height="70" rx="8"/><rect x="790" y="205" width="70" height="70" rx="8"/><rect x="890" y="205" width="70" height="70" rx="8"/>
+    </g>
+    <text x="694" y="248" font-size="19">К₁</text><text x="794" y="248" font-size="19">К₂</text><text x="894" y="248" font-size="19">Кₙ</text>
+    <text x="670" y="310" font-size="20">Каналы только одного пикселя</text>
+    <text x="670" y="356" font-size="20">Без соседних окон и пикселей</text>
+    <text x="670" y="397" font-size="20" font-weight="700">Одна формула в обоих режимах</text>
+    <path d="M578 285 H620 M608 273 L620 285 L608 297" stroke="#2e857a" stroke-width="4" fill="none"/>
+    <text x="56" y="506" font-size="21">Данные, входная нормализация, KL, порог и Gaussian — прежние.</text>
+    <text x="56" y="546" font-size="21">Старые веса не меняются. Для v2 требуется новое обучение.</text>
+    <text x="56" y="584" font-size="19" fill="#52677f">Устранение кругов проверяется на новых весах, а не следует из этой схемы.</text>
+  </g>
+</svg>

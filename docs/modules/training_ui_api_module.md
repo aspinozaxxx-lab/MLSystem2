@@ -539,6 +539,10 @@ v4 со штрафом согласованности, без изменения
 параметр `train.diagnostic_checkpoint_interval_sec` сохраняет текущие временные срезы;
 экспорт переносит `context_consistency` в metadata, не добавляя вычислений при инференсе.
 
+`next_gen4_consistency_v2` доступен отдельно только для SMP SegFormer B0/B1/B2/B3;
+старые шаблоны не переключаются. Экспорт дополнительно сохраняет точный маркер
+`decoder_normalization`; нативная и ONNX-модель используют одну попиксельную LayerNorm.
+
 `TrainingJobCreate.auto_test_f1_after_training: bool = True` позволяет отключить для
 одного задания автоматический внешний F1 и оценки тестовых разметок по завершении;
 `ui.auto_test_f1_after_training=false` наследуется продолжением в исходной конфигурации.

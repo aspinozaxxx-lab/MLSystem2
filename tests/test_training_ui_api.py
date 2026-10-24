@@ -109,7 +109,7 @@ def test_segformer_templates_offer_supported_pipelines() -> None:
         schema = template["config_schema"]
         expected = ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"] if "segformer" in name else ["legacy"]
         if "segformer" in name:
-            expected.extend(["object_f1", "object_f1_v2"])
+            expected.extend(["next_gen4_consistency_v2", "object_f1", "object_f1_v2"])
             assert schema["pipeline_defaults"]["object_f1"]["train.batch_size"] == next_gen2_train_batch_size(512, name)
         assert schema["fields"][0]["options"] == expected
         assert not any(field["key"].startswith("next_gen.") for field in schema["fields"])
@@ -3911,7 +3911,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][1]["start_new_session"] is True
 
 
-@pytest.mark.parametrize("variant", ["legacy", "next_gen4_consistency_v1"])
+@pytest.mark.parametrize("variant", ["legacy", "next_gen4_consistency_v1", "next_gen4_consistency_v2"])
 @pytest.mark.parametrize("interval", [None, 900])
 def test_training_worker_forwards_diagnostic_interval_to_runtime_settings(tmp_path, monkeypatch, variant, interval):
     from mlsystem2.settings.contracts import TrainSettings

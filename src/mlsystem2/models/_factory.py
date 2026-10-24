@@ -167,17 +167,24 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
         raise ModelsError("object f1 поддерживает SegFormer B0/B1/B2/B3")
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
-    if spec.parameters.get("pipeline_variant") == "next_gen4_consistency_v1" and spec.parameters.get("context_consistency") != {
+    if spec.parameters.get("pipeline_variant") in {"next_gen4_consistency_v1", "next_gen4_consistency_v2"} and spec.parameters.get("context_consistency") != {
         "version": "confident_teacher_kl_v1", "weight": 0.25, "probability": 0.5,
         "crop_side_fractions": [0.5, 0.75], "teacher_confidence": 0.9,
         "source": "within_retained_train_window", "evaluation_mode": True, "class_balance": True,
     }:
-        raise ModelsError("next-gen4-consistency-v1 требует сохранённую политику согласованности")
-    if spec.parameters.get("pipeline_variant") in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"}:
+        raise ModelsError("Профиль согласованности требует сохранённую политику согласованности")
+    if spec.parameters.get("pipeline_variant") == "next_gen4_consistency_v2" and (
+        spec.name not in _SMP_ENCODERS
+        or spec.parameters.get("decoder_normalization") != {
+            "version": "per_pixel_channel_layer_norm_v1", "epsilon": 1e-5, "affine": True,
+        }
+    ):
+        raise ModelsError("next-gen4-consistency-v2 требует SMP SegFormer и сохранённую попиксельную нормализацию декодера")
+    if spec.parameters.get("pipeline_variant") in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"}:
         if (spec.parameters.get("pipeline_variant") == "next_gen4_augmentation_v3"
                 and spec.parameters.get("augmentation_policy") != "validity_guard_v3"):
             raise ModelsError("next-gen4-augmentation-v3 требует сохранённую политику защищённых аугментаций")
-        if spec.parameters.get("pipeline_variant") in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1"}:
+        if spec.parameters.get("pipeline_variant") in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"}:
             crop = spec.parameters.get("context_crop", {})
             if (spec.parameters.get("augmentation_policy") != "validity_guard_v4_context_crop_v1"
                     or not isinstance(crop, dict)
@@ -219,7 +226,7 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
                 "std": [0.229, 0.224, 0.225, 0.229][:spec.input_channels],
             }
             return ModelHandle(spec=spec, model=_InputPreprocessingWrapper(model, preprocessing))
-        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"} and spec.output_channels == 1:
+        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"} and spec.output_channels == 1:
             parameters = {**spec.parameters, "binary_output": "foreground_logit_minus_background_logit"}
             if spec.pretrained:
                 parameters["pretrained_source"] = f"smp-hub/{_SMP_ENCODERS[spec.name]}.imagenet"
@@ -256,7 +263,7 @@ def _ensure_torch_for_smp() -> None:
 def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True):
     smp = _import_smp()
     _ensure_torch_for_smp()
-    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"}
+    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"}
     if spec.pretrained and spec.input_channels not in (3, 4):
         raise ModelsError("Предобученная SegFormer поддерживает RGB или RGB+NIR (3 или 4 канала).")
     pretrained = spec.pretrained and initialize_pretrained
@@ -273,6 +280,15 @@ def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True
         with torch.no_grad():
             model.encoder.patch_embed1.proj.weight[:, :3].copy_(rgb_weights)
             model.encoder.patch_embed1.proj.weight[:, 3].copy_(rgb_weights[:, 0])
+    if spec.parameters.get("pipeline_variant") == "next_gen4_consistency_v2":
+        batch_norms = [(name, module) for name, module in model.named_modules()
+                       if isinstance(module, torch.nn.modules.batchnorm._BatchNorm)]
+        if [name for name, _ in batch_norms] != ["decoder.fuse_stage.1"]:
+            raise ModelsError("Неожиданная структура нормализации SMP SegFormer для профиля согласованности v2")
+        batch_norm = batch_norms[0][1]
+        model.decoder.fuse_stage[1] = _PerPixelChannelLayerNorm(
+            batch_norm.num_features, eps=1e-5, elementwise_affine=True,
+        )
     return model
 
 
@@ -320,7 +336,7 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
 
     model_config = _SEGFORMER_CONFIGS[spec.name]
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
-    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"}
+    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"}
     if is_next_gen2:
         head_channels = 2 if spec.output_channels == 1 else spec.output_channels
         if not initialize_pretrained:
@@ -470,7 +486,7 @@ def _set_first_patch_projection(model, projection) -> None:
 
 
 def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1", "object_f1_v2"}:
+    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "object_f1", "object_f1_v2"}:
         return ModelHandle(spec=spec, model=model)
     preprocessing = spec.parameters.get("preprocessing")
     if not isinstance(preprocessing, dict):
@@ -482,6 +498,12 @@ def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
 
 
 if torch is not None:
+
+    class _PerPixelChannelLayerNorm(torch.nn.LayerNorm):
+        """Нормализация каналов NCHW без статистики batch или пространства."""
+
+        def forward(self, x):
+            return super().forward(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
     class _InputPreprocessingWrapper(torch.nn.Module):
         def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False, multiclass_output: bool = False) -> None:

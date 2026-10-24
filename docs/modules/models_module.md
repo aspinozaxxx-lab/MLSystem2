@@ -31,12 +31,18 @@
 
 `next_gen4_augmentation_v4` сохраняет тот же ABI и требует `augmentation_policy=validity_guard_v4_context_crop_v1` и точный `context_crop` из `docs/architecture.md`: площадь 0,25–1,0, квадрат, вероятность 0,5, размер 512/768/1024/1536, источник внутри train-окна. Загрузка и продолжение не подменяют эту политику; forward и нормализация не меняются.
 
-## Список используемых данным модулем модулей и с какой целью
-
 `next_gen4_consistency_v1` наследует ABI, `preprocessing`, `augmentation_policy` и
 `context_crop` v4. Обязательный `parameters.context_consistency` строго фиксирует
 политику `confident_teacher_kl_v1` из архитектуры. Создание и загрузка отвергают другую
 политику; она сохраняется как происхождение обучения и не меняет forward инференса.
+
+`next_gen4_consistency_v2` наследует эту политику, но только для SMP B0/B1/B2/B3 заменяет
+единственный `decoder.fuse_stage.1` на попиксельную LayerNorm по каналам, без batch/пространственной
+статистики. Обязательный `decoder_normalization={version:per_pixel_channel_layer_norm_v1,
+epsilon:1e-5,affine:true}` проверяется до создания/загрузки. Исторические веса не преобразуются;
+при неожиданной структуре декодера создание завершается ошибкой. ABI и raw-нормализация прежние.
+
+## Список используемых данным модулем модулей и с какой целью
 
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.
 
