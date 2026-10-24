@@ -71,7 +71,8 @@ def describe_metric(name: str, context: dict[str, str]) -> dict[str, str]:
         return _entry(meaning, purpose, "доля 0–1" if "fraction" in field else "количество", "справочное значение, не качество")
     if name in {"train/loss", "val/loss", "test/loss"}:
         split = {"train": "обучающей", "val": "проверочной", "test": "итоговой тестовой"}[name.split("/")[0]]
-        return _entry(f"Средняя функция потерь на {split} выборке по настроенному loss и весам.",
+        extra = " Включает дополнительный KL-штраф согласованности; validation/test его не включают." if name == "train/loss" and variant == "next_gen4_consistency_v1" else ""
+        return _entry(f"Средняя функция потерь на {split} выборке по настроенному loss и весам." + extra,
                       "Контроль сходимости. Сравнивать только при одинаковых loss, весах и выборке; это не процент ошибок и не F1.",
                       "безразмерная величина", "меньше — лучше")
     if name in {"train/region_loss", "val/region_loss", "train/boundary_loss", "val/boundary_loss"}:

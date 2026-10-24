@@ -3527,6 +3527,11 @@ export interface components {
              */
             run_inference_after_training: boolean;
             /**
+             * Auto Test F1 After Training
+             * @default true
+             */
+            auto_test_f1_after_training: boolean;
+            /**
              * Secondary Priority
              * @default false
              */
@@ -5486,6 +5491,11 @@ export interface components {
              * @default false
              */
             run_inference_after_training: boolean;
+            /**
+             * Auto Test F1 After Training
+             * @default true
+             */
+            auto_test_f1_after_training: boolean;
             /**
              * Secondary Priority
              * @default false

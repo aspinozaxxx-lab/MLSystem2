@@ -96,6 +96,7 @@ from ._processes import terminate_job_process
 from ._result_metadata import next_result_number
 from ._pseudo_viewer import pseudo_checkpoint_details
 from ._queueing import (
+    AUTO_TEST_F1_AFTER_TRAINING_CONFIG_KEY,
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     SECONDARY_PRIORITY_CONFIG_KEY,
@@ -947,6 +948,8 @@ def create_training_job(
     if dataset.images_dir is not None:
         job_config["dataset.images_dir"] = dataset.images_dir
     job_config[POST_TRAINING_INFERENCE_CONFIG_KEY] = request.run_inference_after_training
+    if not request.auto_test_f1_after_training:
+        job_config[AUTO_TEST_F1_AFTER_TRAINING_CONFIG_KEY] = False
     job_config[SECONDARY_PRIORITY_CONFIG_KEY] = request.secondary_priority
     if started_by:
         job_config[TRAINING_STARTED_BY_CONFIG_KEY] = started_by
@@ -2803,6 +2806,7 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
             not in {
                 POST_TRAINING_INFERENCE_CONFIG_KEY,
                 POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
+                AUTO_TEST_F1_AFTER_TRAINING_CONFIG_KEY,
                 SECONDARY_PRIORITY_CONFIG_KEY,
                 TEST_F1_PRIORITY_CONFIG_KEY,
                 STOP_AND_SAVE_BEST_CONFIG_KEY,
@@ -2811,6 +2815,9 @@ def _job_detail(session: Session, row: JobRow) -> JobDetail:
         },
         run_inference_after_training=bool(
             (row.config or {}).get(POST_TRAINING_INFERENCE_CONFIG_KEY, False)
+        ),
+        auto_test_f1_after_training=bool(
+            (row.config or {}).get(AUTO_TEST_F1_AFTER_TRAINING_CONFIG_KEY, True)
         ),
         secondary_priority=is_secondary_job(row),
         best_checkpoint_available=_best_training_checkpoint_available(row),

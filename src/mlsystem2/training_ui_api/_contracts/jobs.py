@@ -22,6 +22,7 @@ class TrainingJobCreate(BaseModel):
     architecture: str
     config: dict[str, Any]
     run_inference_after_training: bool = False
+    auto_test_f1_after_training: bool = True
     secondary_priority: bool = False
 
 
@@ -139,6 +140,7 @@ class JobDetail(BaseModel):
     mlflow_run_url: str | None = None
     config: dict[str, Any]
     run_inference_after_training: bool = False
+    auto_test_f1_after_training: bool = True
     secondary_priority: bool = False
     best_checkpoint_available: bool = False
     stop_and_save_best_requested: bool = False

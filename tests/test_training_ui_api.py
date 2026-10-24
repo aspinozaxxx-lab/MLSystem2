@@ -107,7 +107,7 @@ def test_segformer_templates_offer_supported_pipelines() -> None:
     assert "segformer_b0" not in templates
     for name, template in templates.items():
         schema = template["config_schema"]
-        expected = ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"] if "segformer" in name else ["legacy"]
+        expected = ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"] if "segformer" in name else ["legacy"]
         if "segformer" in name:
             expected.extend(["object_f1", "object_f1_v2"])
             assert schema["pipeline_defaults"]["object_f1"]["train.batch_size"] == next_gen2_train_batch_size(512, name)
@@ -858,9 +858,13 @@ def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeyp
         ]
 
 
+@pytest.mark.parametrize("auto_test_f1", [None, True, False])
+@pytest.mark.parametrize("run_inference", [False, True])
 def test_successful_training_does_not_assign_primary_star(
     tmp_path: Path,
     monkeypatch,
+    auto_test_f1: bool | None,
+    run_inference: bool,
 ) -> None:
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", f"sqlite:///{tmp_path / 'ui.db'}")
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
@@ -912,12 +916,14 @@ def test_successful_training_does_not_assign_primary_star(
             model_name="segformer b2",
             architecture="smp_segformer_b2",
             config={
-                "ui.run_inference_after_training": True,
+                "ui.run_inference_after_training": run_inference,
                 "ui.started_by": "Alex",
                 "ui.secondary_priority": True,
             },
         )
         session.add_all([dataset, job])
+        if auto_test_f1 is not None:
+            job.config = {**job.config, "ui.auto_test_f1_after_training": auto_test_f1}
         session.flush()
         result = TrainingResultRow(
             source=JobSource.MANUAL.value,
@@ -935,10 +941,14 @@ def test_successful_training_does_not_assign_primary_star(
         _worker._finish_training_job(session, job, config, succeeded=True)
 
         assert result.status == ResultStatus.OK.value
-        assert evaluated_result_ids == [result.id]
+        assert evaluated_result_ids == ([] if auto_test_f1 is False else [result.id])
         assert class_row.primary_training_result_id is None
         assert _service.primary_training_result(session, class_row.key).id == result.id
-        assert reconciled_class_keys == [{class_row.key}]
+        assert reconciled_class_keys == ([] if auto_test_f1 is False else [{class_row.key}])
+        if not run_inference:
+            assert not post_training_inference_calls
+            assert "ui.post_training_inference_job_ids" not in job.config
+            return
         assert len(post_training_inference_calls) == 1
         assert post_training_inference_calls[0]["dataset_key"] == dataset.key
         assert post_training_inference_calls[0]["training_result_id"] == result.id
@@ -3531,6 +3541,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
                 "architecture": "smp_segformer_b2",
                 "config": reset["default_config"],
                 "run_inference_after_training": True,
+                "auto_test_f1_after_training": False,
                 "secondary_priority": True,
             },
         ).json()
@@ -3541,8 +3552,10 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert "train.device" not in job["config"]
         assert "dataset.split_granularity" not in job["config"]
         assert job["run_inference_after_training"] is True
+        assert job["auto_test_f1_after_training"] is False
         assert job["secondary_priority"] is True
         assert "ui.run_inference_after_training" not in job["config"]
+        assert "ui.auto_test_f1_after_training" not in job["config"]
         assert "ui.secondary_priority" not in job["config"]
 
         queues = client.get("/api/v1/queues").json()
@@ -3555,6 +3568,7 @@ def test_training_ui_api_contract_flow(tmp_path: Path, monkeypatch) -> None:
         assert detail["readonly"] is True
         assert detail["mlflow_run_url"] is None
         assert detail["run_inference_after_training"] is True
+        assert detail["auto_test_f1_after_training"] is False
         assert detail["secondary_priority"] is True
 
         custom_results = client.get("/api/v1/results/datasets/Вырубки\\main").json()

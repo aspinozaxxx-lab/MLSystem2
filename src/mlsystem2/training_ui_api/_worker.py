@@ -81,6 +81,7 @@ from ._models import (
 from ._processes import job_process_is_alive, terminate_job_process
 from ._pseudolabel import PSEUDOLABEL_AOI_OPERATION
 from ._queueing import (
+    AUTO_TEST_F1_AFTER_TRAINING_CONFIG_KEY,
     DATASET_EDITOR_PSEUDO_OPERATION,
     POST_TRAINING_INFERENCE_CONFIG_KEY,
     TRAINING_STARTED_BY_CONFIG_KEY,
@@ -1693,8 +1694,11 @@ def _finish_training_job(
         result.updated_at = _now()
     session.flush()
     if succeeded:
+        auto_test_f1 = bool((row.config or {}).get(AUTO_TEST_F1_AFTER_TRAINING_CONFIG_KEY, True))
         affected_class_keys: set[str] = set()
         for result in training_results:
+            if not auto_test_f1:
+                continue
             class_row = dataset_class_row(session, result.dataset_key or result.class_key)
             if class_row is not None:
                 affected_class_keys.add(class_row.key)
