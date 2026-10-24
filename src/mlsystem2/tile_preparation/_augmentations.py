@@ -215,23 +215,80 @@ def _mask_rotation_axes(mask: np.ndarray) -> tuple[int, int]:
     return (0, 1) if mask.ndim == 2 else (1, 2)
 
 
-def build_notebook_augmentations(seed: int, *, object_instances: bool = False, masked: bool = False):
+class _ValidityPreservingAugmentations:
+    """Сохранить valid-mask геометрии, отменяя только небезопасный блок преобразований."""
+
+    def __init__(self, geometry, photometry, seed: int) -> None:
+        self.geometry = geometry
+        self.photometry = photometry
+        self.set_random_seed(seed)
+
+    def set_random_seed(self, seed: int) -> None:
+        self.geometry.set_random_seed(seed)
+        self.photometry.set_random_seed(seed)
+
+    @staticmethod
+    def _validity_matches(image: np.ndarray, valid: np.ndarray) -> bool:
+        return bool(np.all(np.isfinite(image[valid])) and np.all(np.any(image[valid] != 0, axis=-1)))
+
+    def __call__(self, **sample):
+        from .contracts import TilePreparationError
+
+        original = sample["image"]
+        if original.dtype != np.uint8 or "valid" not in sample:
+            raise TilePreparationError("Защищённые аугментации требуют uint8 и исходную valid-mask")
+        if not self._validity_matches(original, sample["valid"].astype(bool)):
+            raise TilePreparationError("Исходная valid-mask содержит невалидные пиксели изображения")
+        geometric = self.geometry(**sample)
+        valid = geometric["valid"].astype(bool)
+        geometry_reverted = not self._validity_matches(geometric["image"], valid)
+        if geometry_reverted:
+            geometric = {**sample, "applied_transforms": []}
+            valid = sample["valid"].astype(bool)
+        baseline = geometric["image"].copy()
+        baseline[~valid] = 0
+        photometric = self.photometry(image=baseline.copy())
+        photometry_reverted = not self._validity_matches(photometric["image"], valid)
+        result = baseline if photometry_reverted else photometric["image"]
+        result[~valid] = 0
+        return {
+            **geometric,
+            "image": np.ascontiguousarray(result),
+            "applied_transforms": [
+                *geometric["applied_transforms"],
+                *(photometric["applied_transforms"] if not photometry_reverted else []),
+            ],
+            "augmentation_guard": {"geometry_reverted": geometry_reverted, "photometry_reverted": photometry_reverted},
+        }
+
+
+def build_notebook_augmentations(
+    seed: int, *, object_instances: bool = False, masked: bool = False, preserve_validity: bool = False,
+):
     """Преобразования uint8 до min-max, с общей геометрией изображения и маски."""
     import math
     import albumentations as A
     import cv2
 
-    return A.Compose([
+    geometry = [
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
         A.RandomRotate90(p=0.5),
         A.Affine(scale=(0.9, 1.1), translate_px=(-32, 32), rotate=(-15, 15),
                  border_mode=cv2.BORDER_CONSTANT if object_instances or masked else cv2.BORDER_REFLECT_101, p=0.4),
+    ]
+    photometry = [
         A.OneOf([
             # Albumentations 2 принимает долю стандартного отклонения вместо var_limit.
             A.GaussNoise(std_range=(math.sqrt(5) / 255, math.sqrt(30) / 255), p=1.0),
             A.GaussianBlur(blur_limit=(3, 5), p=1.0),
         ], p=0.3),
         A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.15, p=0.3),
-    ], seed=seed, strict=True, save_applied_params=True,
-       additional_targets={"instances": "mask", "valid": "mask", "ambiguous": "mask"} if object_instances else {"valid": "mask"} if masked else None)
+    ]
+    targets = {"instances": "mask", "valid": "mask", "ambiguous": "mask"} if object_instances else {"valid": "mask"} if masked or preserve_validity else None
+    if preserve_validity:
+        return _ValidityPreservingAugmentations(
+            A.Compose(geometry, seed=seed, strict=True, save_applied_params=True, additional_targets=targets),
+            A.Compose(photometry, seed=seed, strict=True, save_applied_params=True), seed,
+        )
+    return A.Compose(geometry + photometry, seed=seed, strict=True, save_applied_params=True, additional_targets=targets)

@@ -1,6 +1,7 @@
 """Общая train-нормализация, отсутствие утечки и сохранение маски исходных данных."""
 from types import SimpleNamespace
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -20,6 +21,11 @@ from mlsystem2.training_ui_api import _model_export, _service
 from mlsystem2.training_ui_api._templates import initial_templates, sanitize_template_config
 
 VARIANT = "next_gen4_global_norm"
+
+
+@pytest.fixture(autouse=True, params=["next_gen4_global_norm", "next_gen4_augmentation_v3"])
+def normalization_profile(request, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "VARIANT", request.param)
 
 
 def dataset(tmp_path, mode="train", *, channels=4, workers=0, collect=True):
@@ -179,12 +185,15 @@ def test_checkpoint_restores_global_bounds_and_onnx_matches_pytorch(tmp_path, mo
     monkeypatch.setattr(_factory, "_create_smp_segformer", local_model)
     preprocessing = parameters(channels)
     spec = ModelSpec(name="smp_segformer_b0", input_channels=channels, output_channels=1,
-        parameters={"pipeline_variant": VARIANT, "preprocessing": preprocessing})
+        parameters={"pipeline_variant": VARIANT, "preprocessing": preprocessing,
+            **({"augmentation_policy": "validity_guard_v3"} if VARIANT == "next_gen4_augmentation_v3" else {})})
     model = create_model(spec)
     path = tmp_path / "best.pt"
     save_checkpoint(SaveCheckpointRequest(model=model, checkpoint_uri=str(path)))
     loaded = load_checkpoint(LoadCheckpointRequest(checkpoint_uri=str(path), map_location="cpu"))
     assert loaded.model.spec.parameters["preprocessing"] == preprocessing
+    if VARIANT == "next_gen4_augmentation_v3":
+        assert loaded.model.spec.parameters["augmentation_policy"] == "validity_guard_v3"
     image = torch.randint(1, 255, (1, channels, 32, 32)).float()
     image[..., :4, :] = 0
     expected = loaded.model.model(image).sigmoid().detach().numpy()
@@ -199,7 +208,7 @@ def test_checkpoint_restores_global_bounds_and_onnx_matches_pytorch(tmp_path, mo
     np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-6)
     assert not actual[..., :4, :].any()
     with pytest.raises(ModelsError, match="train-границы"):
-        create_model(spec.model_copy(update={"parameters": {"pipeline_variant": VARIANT, "preprocessing": {"mode": "window_minmax"}}}))
+        create_model(spec.model_copy(update={"parameters": {**spec.parameters, "preprocessing": {"mode": "window_minmax"}}}))
 
 
 @pytest.mark.parametrize("size", [512, 768, 1024, 1536])
@@ -220,6 +229,8 @@ def test_model_spec_reads_train_histogram_and_val_cannot_collect_it(tmp_path):
         output_channels=1, pretrained=False, model_name="smp_segformer_b0"))
     result = _runner._model_spec(settings, SimpleNamespace(dataset=train))
     assert result.parameters["preprocessing"] == global_minmax_parameters(train.band_histogram, 4)
+    if VARIANT == "next_gen4_augmentation_v3":
+        assert result.parameters["augmentation_policy"] == "validity_guard_v3"
     with pytest.raises(ValueError, match="только на train"):
         TileDataloaderRequest(scenes=[TileSceneSource(scene_id="снимок", image_path="image.tif", annotation_file="truth.geojson")],
             batch_size=1, mode="val", pipeline_variant=VARIANT, collect_band_histogram=True)

@@ -700,7 +700,7 @@ def apply_training_template_field_to_all(
         current = dict(template.default_config)
         if request.key == "train.pipeline_variant":
             preset = template.config_schema.get("pipeline_defaults", {}).get(str(request.value))
-            if request.value in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"} and preset is None:
+            if request.value in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"} and preset is None:
                 continue
             if preset is not None:
                 pretrained = current.get("train.pretrained", False)
@@ -998,14 +998,14 @@ def _validate_training_pipeline_variant(
     job_config: dict[str, Any], architecture: str
 ) -> None:
     variant = str(job_config.get("train.pipeline_variant") or "legacy")
-    if variant not in {"legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"}:
+    if variant not in {"legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"}:
         raise TrainingUIAPIError(f"Неизвестный вариант конвейера обучения: {variant}")
     if variant == "legacy":
         return
     if variant in {"object_f1", "object_f1_v2"} and architecture not in OBJECT_F1_MODEL_NAMES:
         label = "object f1 v2" if variant == "object_f1_v2" else "object f1"
         raise TrainingUIAPIError(f"{label} доступен для SegFormer B0/B1/B2/B3")
-    if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"}:
+    if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"}:
         if architecture not in NEXT_GEN2_MODEL_BATCH_SIZES:
             raise TrainingUIAPIError("next-gen2 поддерживает только архитектуры SegFormer.")
         tile_size = job_config.get("tile_preparation.tile_size")
@@ -1017,7 +1017,7 @@ def _validate_training_pipeline_variant(
         required = {
             "train.input_channels": 3 if imagery_type == "ortho" else 4,
             **{key: value for key, value in fixed_pipeline_defaults(variant).items() if key not in NEXT_GEN2_EDITABLE_KEYS},
-            "tile_preparation.stride": tile_size if variant in {"next_gen4", "next_gen4_global_norm"} else tile_size // 2,
+            "tile_preparation.stride": tile_size if variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"} else tile_size // 2,
             "train.batch_size": next_gen2_train_batch_size(tile_size, architecture),
         }
         if job_config.get("dataset.task") not in {"binary", "multiclass"} or (variant in {"object_f1", "object_f1_v2"} and job_config.get("dataset.task") != "binary"):
@@ -2763,7 +2763,7 @@ def _job_input_channels(job: JobRow | None) -> int:
 
 def _job_pipeline_variant(job: JobRow | None) -> str:
     value = (job.config or {}).get("train.pipeline_variant") if job is not None else None
-    return str(value) if value in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"} else "legacy"
+    return str(value) if value in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"} else "legacy"
 
 
 def _job_validation_fold(job: JobRow | None) -> int:

@@ -112,7 +112,7 @@ def test_editor_revision_preserves_previous_payload_and_invalidates_v2_dedup() -
     )
 
 
-@pytest.mark.parametrize("variant", [None, "legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "object_f1", "object_f1_v2"])
+@pytest.mark.parametrize("variant", [None, "legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"])
 def test_editor_scene_job_uses_source_variant_and_records_only_v2_revision(
     tmp_path, monkeypatch, variant,
 ) -> None:
@@ -163,7 +163,7 @@ def test_editor_scene_job_uses_source_variant_and_records_only_v2_revision(
     if variant == "object_f1_v2":
         assert snapshot["inference_profile"] == _V2_PROFILE
         expected_hash = _digest({**previous_payload, "inference_profile": _V2_PROFILE})
-    elif variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm"}:
+    elif variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}:
         assert snapshot["inference_profile"] == "notebook_valid_data_v2"
         expected_hash = _digest({**previous_payload, "inference_profile": "notebook_valid_data_v2"})
     else:

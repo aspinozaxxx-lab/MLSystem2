@@ -24,6 +24,8 @@ Next-gen4 наследует эту оркестрацию, передавая s
 
 `next_gen4_global_norm` наследует next-gen4, но запрашивает histogram только train-окон и формирует поканальные `low/high` в `ModelSpec.parameters.preprocessing` до создания модели. Validation/test статистику не собирают. Происхождение и объём входят в диагностику MLflow; resume требует совпадения варианта и preprocessing checkpoint. Нормализация выполняется моделью, не копируется в loaders или отдельный predictor.
 
+`next_gen4_augmentation_v3` наследует эту оркестрацию и добавляет `ModelSpec.parameters.augmentation_policy=validity_guard_v3`. Защиту выполняет tile_preparation, статистика по-прежнему собирается до аугментаций только по train. Точное имя профиля передаётся всем loaders, train и MLflow; смешивание со старыми вариантами при продолжении не допускается.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `settings.api` — текущие настройки и путь YAML.

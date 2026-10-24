@@ -49,7 +49,7 @@ def dataset(tmp_path, mode, *, zones=False, variant="next_gen4"):
 
 
 @pytest.mark.parametrize("zones", [False, True])
-@pytest.mark.parametrize("variant", ["next_gen4", "next_gen4_global_norm"])
+@pytest.mark.parametrize("variant", ["next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"])
 def test_grid_disjoint_same_source_zones_edges_and_determinism(tmp_path, zones, variant):
     parts = {mode: dataset(tmp_path, mode, zones=zones, variant=variant) for mode in ("train", "val", "test")}
     keys = {mode: {(tile.window.x, tile.window.y) for tile in value._windows} for mode, value in parts.items()}

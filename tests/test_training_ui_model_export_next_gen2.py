@@ -34,7 +34,7 @@ def test_onnx_preserves_probabilities_instead_of_thresholding(tmp_path):
 
 @pytest.mark.parametrize("override", [None, 0.8])
 @pytest.mark.parametrize("tile_size,channels", [(512, 4), (768, 3), (1024, 4), (1536, 3)])
-@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm"])
+@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"])
 def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, override, tile_size, channels, variant):
     metadata = {"pipeline_variant": variant, "sample_size": tile_size,
                 "inference_context": 0, "confidence_threshold": 0.5}
@@ -42,9 +42,11 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         artifact=SimpleNamespace(metadata=metadata),
         model=SimpleNamespace(model=object(), spec=SimpleNamespace(
             input_channels=channels, output_channels=1, parameters={"task": "binary"})))
-    if variant == "next_gen4_global_norm":
+    if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3"}:
         loaded.model.spec.parameters["preprocessing"] = {"mode": "global_minmax", "low": [10] * channels,
             "high": [200] * channels, "source": "retained_train_windows"}
+    if variant == "next_gen4_augmentation_v3":
+        loaded.model.spec.parameters["augmentation_policy"] = "validity_guard_v3"
     monkeypatch.setattr(_model_export, "_load_binary_checkpoint", lambda _: loaded)
     monkeypatch.setattr(_model_export, "_checkpoint_task_schema", lambda _: ("binary", []))
     calls = []
@@ -64,8 +66,10 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         expected_threshold = 0.9 if override is None else override
         assert info["threshold"] == expected_threshold
         assert info["pipeline_variant"] == variant
-        if variant == "next_gen4_global_norm":
+        if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3"}:
             assert info["preprocessing"] == loaded.model.spec.parameters["preprocessing"]
+        if variant == "next_gen4_augmentation_v3":
+            assert info["augmentation_policy"] == "validity_guard_v3"
         assert info["threshold_source"] == ("next_gen2_eval_notebook" if override is None else "request")
         assert info["inference_stride"] == tile_size // 2
         assert calls[0]["input_channels"] == channels
@@ -78,7 +82,7 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         assert segmentation["_class"] == "SlidingWindowSegmentation"
         assert segmentation["window_size"] == tile_size and segmentation["stride"] == tile_size // 2
         assert segmentation["adapter"]["output_dtype"] == "float32"
-        assert segmentation["pad_edges"] is (variant in {"next_gen4", "next_gen4_global_norm"})
+        assert segmentation["pad_edges"] is (variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"})
         assert threshold["_class"] == "MultiThresholding"
         assert threshold["thresholds"] == [expected_threshold] and threshold["strict_more"]
         assert vectorize["value_property_name"] == "class_id"

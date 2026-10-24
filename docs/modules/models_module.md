@@ -27,6 +27,8 @@
 
 `next_gen4_global_norm` сохраняет этот ABI с `preprocessing.mode=global_minmax`: `low/high` по 3/4 каналам, `source=retained_train_windows`, `valid_pixel_count`, `window_count`, `epsilon=1e-6`, `nodata=0`, `mask_output_nodata=true`. Общая обёртка применяет сохранённые train-границы и в PyTorch, и в ONNX. Маска определяется до нормализации: нормализованный ноль валидного пикселя не подавляет прогноз. Конфигурация и границы проверяются при создании и автономной загрузке; старый оконный профиль не меняется.
 
+`next_gen4_augmentation_v3` наследует этот ABI и нормализацию, требует `parameters.augmentation_policy=validity_guard_v3` при создании и автономной загрузке. Маркер не меняет forward инференса, а фиксирует защищённую подготовку train-примеров; исторические спецификации не дополняются автоматически.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.
