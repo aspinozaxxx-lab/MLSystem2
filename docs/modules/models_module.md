@@ -29,6 +29,8 @@
 
 `next_gen4_augmentation_v3` наследует этот ABI и нормализацию, требует `parameters.augmentation_policy=validity_guard_v3` при создании и автономной загрузке. Маркер не меняет forward инференса, а фиксирует защищённую подготовку train-примеров; исторические спецификации не дополняются автоматически.
 
+`next_gen4_augmentation_v4` сохраняет тот же ABI и требует `augmentation_policy=validity_guard_v4_context_crop_v1` и точный `context_crop` из `docs/architecture.md`: площадь 0,25–1,0, квадрат, вероятность 0,5, размер 512/768/1024/1536, источник внутри train-окна. Загрузка и продолжение не подменяют эту политику; forward и нормализация не меняются.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.

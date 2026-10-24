@@ -35,7 +35,7 @@ export function ConfigEditor({
         trainingConfigFieldVisible(field.key, pipelineVariant, architecture),
       ).map((field) => {
         const current = value[field.key] ?? "";
-        const nextGen2Tile = ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"].includes(pipelineVariant) && field.key === "tile_preparation.tile_size";
+        const nextGen2Tile = ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"].includes(pipelineVariant) && field.key === "tile_preparation.tile_size";
         const options = nextGen2Tile ? ["512", "768", "1024", "1536"] : field.options;
         const display = presentation[field.key];
         const labelText = display?.label || field.label;
@@ -49,12 +49,12 @@ export function ConfigEditor({
         }) + (display?.unit ? ` ${display.unit}` : "");
         const fixedPipelineVariant = field.key === "train.pipeline_variant" && options?.length === 1;
         const tooltip = nextGen2Tile
-          ? `Размер квадратного тайла в пикселях. По умолчанию 512. ${["next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"].includes(pipelineVariant) ? "Шаг равен размеру тайла, без пересечений; края дополняются nodata." : "Шаг равен половине размера; контекст отсутствует."} Batch size автоматически учитывает архитектуру сети и размер тайла.`
-          : ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"].includes(pipelineVariant) && field.key === "train.epochs"
+          ? `Размер квадратного тайла в пикселях. По умолчанию 512. ${["next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"].includes(pipelineVariant) ? "Шаг равен размеру тайла, без пересечений; края дополняются nodata." : "Шаг равен половине размера; контекст отсутствует."} Batch size автоматически учитывает архитектуру сети и размер тайла.`
+          : ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"].includes(pipelineVariant) && field.key === "train.epochs"
           ? "Максимальное число эпох. По умолчанию 20; обучение может завершиться раньше по early stopping или лимиту времени."
-          : ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"].includes(pipelineVariant) && field.key === "train.early_stopping_patience"
+          : ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"].includes(pipelineVariant) && field.key === "train.early_stopping_patience"
           ? (["object_f1", "object_f1_v2"].includes(pipelineVariant) ? "Число эпох без роста object F1 после выделения объектов. По умолчанию 10." : "Число полных эпох без уменьшения validation loss. По умолчанию 10.")
-          : ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"].includes(pipelineVariant) && field.key === "train.weight_decay"
+          : ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"].includes(pipelineVariant) && field.key === "train.weight_decay"
             ? "Регуляризация AdamW. Исходный ноутбук использует значение по умолчанию 0.01."
             : fieldTooltip;
         const label = (
@@ -114,7 +114,7 @@ export function ConfigEditor({
           </label>
         );
       })}
-      {showPipelineNote && ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"].includes(pipelineVariant) ? (
+      {showPipelineNote && ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"].includes(pipelineVariant) ? (
         <div className="training-pipeline-description">
           {(schema.pipeline_descriptions?.[pipelineVariant] || "").split("\n\n").map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
         </div>

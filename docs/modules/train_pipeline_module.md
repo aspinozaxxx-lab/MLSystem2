@@ -26,6 +26,8 @@ Next-gen4 наследует эту оркестрацию, передавая s
 
 `next_gen4_augmentation_v3` наследует эту оркестрацию и добавляет `ModelSpec.parameters.augmentation_policy=validity_guard_v3`. Защиту выполняет tile_preparation, статистика по-прежнему собирается до аугментаций только по train. Точное имя профиля передаётся всем loaders, train и MLflow; смешивание со старыми вариантами при продолжении не допускается.
 
+`next_gen4_augmentation_v4` дополнительно сохраняет `augmentation_policy=validity_guard_v4_context_crop_v1` и точный `context_crop` из архитектуры. Существующий train-loader предоставляет отдельный `dense_window_loader`, который передаётся в `TrainRequest.dense_train_loader` сквозь счётчик без учёта аудита в обучающих показах. Исходная статистика и индексы train сохраняются; train/test-аудит лучших весов не управляет обучением.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `settings.api` — текущие настройки и путь YAML.

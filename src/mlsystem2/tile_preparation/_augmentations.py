@@ -218,9 +218,10 @@ def _mask_rotation_axes(mask: np.ndarray) -> tuple[int, int]:
 class _ValidityPreservingAugmentations:
     """Сохранить valid-mask геометрии, отменяя только небезопасный блок преобразований."""
 
-    def __init__(self, geometry, photometry, seed: int) -> None:
+    def __init__(self, geometry, photometry, seed: int, *, reject_empty_geometry: bool = False) -> None:
         self.geometry = geometry
         self.photometry = photometry
+        self.reject_empty_geometry = reject_empty_geometry
         self.set_random_seed(seed)
 
     def set_random_seed(self, seed: int) -> None:
@@ -242,6 +243,8 @@ class _ValidityPreservingAugmentations:
         geometric = self.geometry(**sample)
         valid = geometric["valid"].astype(bool)
         geometry_reverted = not self._validity_matches(geometric["image"], valid)
+        if self.reject_empty_geometry and np.any(sample["valid"]) and not np.any(valid):
+            geometry_reverted = True
         if geometry_reverted:
             geometric = {**sample, "applied_transforms": []}
             valid = sample["valid"].astype(bool)
@@ -264,6 +267,7 @@ class _ValidityPreservingAugmentations:
 
 def build_notebook_augmentations(
     seed: int, *, object_instances: bool = False, masked: bool = False, preserve_validity: bool = False,
+    context_crop_size: int | None = None,
 ):
     """Преобразования uint8 до min-max, с общей геометрией изображения и маски."""
     import math
@@ -277,6 +281,17 @@ def build_notebook_augmentations(
         A.Affine(scale=(0.9, 1.1), translate_px=(-32, 32), rotate=(-15, 15),
                  border_mode=cv2.BORDER_CONSTANT if object_instances or masked else cv2.BORDER_REFLECT_101, p=0.4),
     ]
+    if context_crop_size is not None:
+        if not preserve_validity or context_crop_size <= 0:
+            from .contracts import TilePreparationError
+
+            raise TilePreparationError("Случайные вырезки требуют защиты valid-mask и положительного размера")
+        # Только пиксели уже выбранного train-окна; соседние окна не читаются.
+        geometry.insert(0, A.RandomResizedCrop(
+            size=(context_crop_size, context_crop_size), scale=(0.25, 1.0),
+            ratio=(1.0, 1.0), interpolation=cv2.INTER_LINEAR,
+            mask_interpolation=cv2.INTER_NEAREST, p=0.5,
+        ))
     photometry = [
         A.OneOf([
             # Albumentations 2 принимает долю стандартного отклонения вместо var_limit.
@@ -290,5 +305,6 @@ def build_notebook_augmentations(
         return _ValidityPreservingAugmentations(
             A.Compose(geometry, seed=seed, strict=True, save_applied_params=True, additional_targets=targets),
             A.Compose(photometry, seed=seed, strict=True, save_applied_params=True), seed,
+            reject_empty_geometry=context_crop_size is not None,
         )
     return A.Compose(geometry + photometry, seed=seed, strict=True, save_applied_params=True, additional_targets=targets)

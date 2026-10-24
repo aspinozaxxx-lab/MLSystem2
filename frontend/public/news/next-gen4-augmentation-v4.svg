@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="580" viewBox="0 0 1200 580" role="img" aria-labelledby="title desc">
+  <title id="title">Контексты внутри обучающего окна</title>
+  <desc id="desc">Условная схема вырезки только внутри train и отдельной оценки плотных окон, без изменения инференса.</desc>
+  <rect width="1200" height="580" rx="24" fill="#101d2f"/>
+  <defs><clipPath id="source-window"><rect x="48" y="133" width="320" height="288" rx="10"/></clipPath></defs>
+  <g font-family="Arial, sans-serif" fill="#ecf3ff">
+    <text x="48" y="57" font-size="28" font-weight="bold">Больше контекстов — только из train</text>
+    <text x="48" y="91" font-size="17" fill="#a9bfdc">Условная схема · не снимок и не результат распознавания</text>
+    <rect x="48" y="133" width="320" height="288" rx="10" fill="#23455d" stroke="#69d3c0" stroke-width="3"/>
+    <path d="M90 133 Q330 230 120 421 L300 421 Q480 240 230 133Z" fill="#369bcc" clip-path="url(#source-window)"/>
+    <rect x="163" y="230" width="140" height="140" fill="#67ead0" fill-opacity=".12" stroke="#a0ffcf" stroke-width="3" stroke-dasharray="8 5"/>
+    <text x="66" y="163" font-size="21" font-weight="bold">Исходный train-тайл</text>
+    <text x="166" y="393" font-size="16" fill="#bfffe4">Вырезка 25–100%</text>
+    <path d="M389 278 H463 M447 264 L463 278 L447 292" fill="none" stroke="#bfffe4" stroke-width="4"/>
+    <rect x="490" y="163" width="240" height="240" rx="8" fill="#369bcc" stroke="#a0ffcf" stroke-width="3"/>
+    <path d="M490 163 Q540 220 490 270Z" fill="#23455d"/>
+    <text x="493" y="442" font-size="20">Снова полный размер</text>
+    <rect x="782" y="133" width="370" height="310" rx="12" fill="#1c3049"/>
+    <text x="806" y="173" font-size="21" font-weight="bold">Что сохраняется</text>
+    <text x="806" y="215" font-size="18">Одна геометрия всех масок</text>
+    <text x="806" y="248" font-size="18">Защита допустимых пикселей</text>
+    <text x="806" y="281" font-size="18">Глобальная нормализация</text>
+    <path d="M805 306 H1126" stroke="#45627f"/>
+    <text x="806" y="340" font-size="18" fill="#a0ffcf">Отдельный аудит окон:</text>
+    <text x="806" y="373" font-size="18">объект ≥90% и ≥99%</text>
+    <text x="806" y="406" font-size="18">число окон · полнота · F1</text>
+    <rect x="48" y="483" width="1104" height="55" rx="10" fill="#27384e"/>
+    <text x="70" y="517" font-size="19">Validation/test за границей не читаются · Пороги и Gaussian-инференс прежние</text>
+  </g>
+</svg>

@@ -16,7 +16,7 @@ from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError, MLflowRunRef
 from mlsystem2.train.contracts import EpochMetrics, TrainResult
 
 
-@pytest.mark.parametrize("variant", ["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"])
+@pytest.mark.parametrize("variant", ["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"])
 @pytest.mark.parametrize("task", ["binary", "multiclass"])
 def test_every_emitted_metric_has_a_description(monkeypatch, variant, task):
     logged = {}
@@ -26,7 +26,7 @@ def test_every_emitted_metric_has_a_description(monkeypatch, variant, task):
     monkeypatch.setattr(_client, "_try_log_metric_descriptions", lambda run: None)
     run = MLflowRunRef(run_id="проверка", experiment_name="проверка", tracking_uri="http://localhost", active=True)
     values = {field: 0.4 for field in EpochMetrics.model_fields if field.startswith("val_") and
-              not any(word in field for word in ("per_class", "per_scene", "warnings", "sweep", "separation"))}
+              not any(word in field for word in ("per_class", "per_scene", "warnings", "sweep", "separation", "dense_window"))}
     rates = {"empty_pixel_fpr": 0.001, "empty_tile_fpr": 0.1, "foreground_recall": 0.8}
     metrics = EpochMetrics(
         epoch=1, train_loss=0.5, train_region_loss=0.4, train_boundary_loss=0.1,

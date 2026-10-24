@@ -1,6 +1,7 @@
 """Защита валидности только нового профиля без изменения прежних аугментаций."""
 
 import pickle
+import sys
 
 import numpy as np
 import pytest
@@ -12,6 +13,13 @@ from mlsystem2.training_ui_api import _service
 
 
 VARIANT = "next_gen4_augmentation_v3"
+POLICY = "validity_guard_v3"
+
+
+@pytest.fixture(autouse=True, params=["next_gen4_augmentation_v3", "next_gen4_augmentation_v4"])
+def protected_profile(request, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "VARIANT", request.param)
+    monkeypatch.setattr(sys.modules[__name__], "POLICY", "validity_guard_v3" if request.param.endswith("v3") else "validity_guard_v4_context_crop_v1")
 
 
 def sample(channels=4):
@@ -140,7 +148,9 @@ def test_checkpoint_preserves_policy_and_global_normalization(tmp_path, architec
     from mlsystem2.models.api import create_model, load_checkpoint, save_checkpoint
     from mlsystem2.models.contracts import ModelSpec, LoadCheckpointRequest, SaveCheckpointRequest, ModelsError
     torch.set_num_threads(2)
-    parameters = {"pipeline_variant": VARIANT, "augmentation_policy": "validity_guard_v3",
+    parameters = {"pipeline_variant": VARIANT, "augmentation_policy": POLICY,
+        **({"context_crop": {"area_scale": [0.25, 1.0], "ratio": [1.0, 1.0], "probability": 0.5,
+            "output_size": 512, "source": "within_retained_train_window"}} if VARIANT.endswith("v4") else {}),
         "preprocessing": {"mode": "global_minmax", "low": [0.0] * 4, "high": [255.0] * 4,
             "epsilon": 1e-6, "nodata": 0.0, "mask_output_nodata": True,
             "source": "retained_train_windows", "valid_pixel_count": 100, "window_count": 4}}
@@ -149,7 +159,7 @@ def test_checkpoint_preserves_policy_and_global_normalization(tmp_path, architec
     path = str(tmp_path / "best.pt")
     save_checkpoint(SaveCheckpointRequest(model=model, checkpoint_uri=path))
     loaded = load_checkpoint(LoadCheckpointRequest(checkpoint_uri=path, map_location="cpu"))
-    assert loaded.model.spec.parameters["augmentation_policy"] == "validity_guard_v3"
+    assert loaded.model.spec.parameters["augmentation_policy"] == POLICY
     assert loaded.model.spec.parameters["preprocessing"] == parameters["preprocessing"]
     model.model.eval()
     loaded.model.model.eval()

@@ -148,7 +148,7 @@ Frontend показывает ошибку внутри окна импорта 
 `ConfigSchema.pipeline_descriptions` содержит подробные описания профилей.
 `ConfigSchema.pipeline_defaults` содержит серверные наборы параметров при переключении конвейера;
 по умолчанию это пустой словарь. `JobSummary`, `JobDetail` и `TrainingResultInfo.pipeline_variant`
-принимают `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|object_f1|object_f1_v2`. Новая таблица БД не требуется.
+принимают `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|object_f1|object_f1_v2`. Новая таблица БД не требуется.
 
 Next-gen3 доступен в том же выборе для поддерживаемых SegFormer в шаблонах и ручном запуске, binary/multiclass, Канопус/RGB. Его defaults отдельные, прежние сохранённые шаблоны не переключаются. Фиксированный профиль наследует next-gen2, заменяя сэмплер автоматической политикой без новых полей. Описание объясняет квоты, ошибки фона, защиту полноты и ограничение территориальной независимости. Нативный инференс, F1 и ZIP наследуют Gaussian/вероятности/порог 0,9 next-gen2, сохраняя точное имя `next_gen3` в metadata. Публикуется статья `#/news/next-gen3-adaptive-background` с явно обозначенной схемой. HTTP endpoints, таблицы и автоматические правила не добавляются.
 
@@ -157,6 +157,8 @@ Next-gen4 — отдельный выбор с автоматическим фо
 Next-gen4-global-norm — отдельный выбор `next_gen4_global_norm` в тех же шаблонах SegFormer и ручном запуске, binary/multiclass, RGB/RGB+NIR. Общие train-границы хранятся внутри checkpoint; UI и runners их не пересчитывают и не нормализуют вход повторно. Worker сохраняет точный вариант и stride=tile_size, инференс/экспорт наследуют Gaussian и padding next-gen4. Старые шаблоны не переключаются. Новость `#/news/next-gen4-global-norm` содержит описание, порядок запуска, ограничения и поясняющую SVG-схему. Новых HTTP endpoints и таблиц нет.
 
 Next-gen4-augmentation-v3 — отдельный выбор `next_gen4_augmentation_v3` в тех же формах с прежними ограничениями, нормализацией, Gaussian, padding и порогами. Описание объясняет попиксельную защиту valid-mask, отмену небезопасного блока и отсутствие гарантий роста F1. Worker передаёт профиль без подмены; checkpoint и ZIP сохраняют `augmentation_policy=validity_guard_v3` и train-границы. Старые шаблоны не переключаются, новых HTTP endpoints и таблиц нет. Статья `#/news/next-gen4-augmentation-v3` публикуется вместе с поясняющей SVG-схемой.
+
+Next-gen4-augmentation-v4 — дополнительное значение `pipeline_variant` контрактов задач и результатов и отдельный выбор в тех же формах SegFormer. Наследует ограничения v3, добавляет защищённые вырезки внутри train и отчёты плотных окон. ZIP сохраняет `augmentation_policy=validity_guard_v4_context_crop_v1`, `context_crop` и общую нормализацию. Worker, псевдоразметка и test F1 сохраняют прежний Gaussian, padding и пороги. Профиль не назначается старым шаблонам автоматически; статья `#/news/next-gen4-augmentation-v4` с поясняющей SVG объясняет применение, отчёты и ограничения.
 
 `object_f1_v2` показывается как «object f1 v2» отдельным выбором для SMP SegFormer B0/B1/B2/B3
 в шаблонах и ручном запуске. Он доступен только бинарным датасетам Канопуса и ортофото;

@@ -944,6 +944,7 @@ def test_training_artifacts_upload_checkpoints_with_parenthesized_scene_name(
             best_checkpoint_path=str(best), final_checkpoint_path=str(final),
             diagnostics={
                 "pipeline_variant": "next_gen2", "split_manifest": split,
+                "dense_train_windows": {"groups": {}}, "test_dense_windows": {"groups": {}},
                 "flattened_params": {f"model.split.purged_windows_by_scene.{scene}": 149},
             },
         ),
@@ -951,5 +952,7 @@ def test_training_artifacts_upload_checkpoints_with_parenthesized_scene_name(
 
     assert list(params.values()) == [149]
     assert reports["reports/split_manifest.json"] == split
+    assert reports["reports/dense_train_windows.json"] == {"groups": {}}
+    assert reports["reports/test_dense_windows.json"] == {"groups": {}}
     assert uploaded == [("best.pt", "checkpoints"), ("final.pt", "checkpoints")]
     assert set(reports["reports/checkpoint_hashes.json"]) == {"best.pt", "final.pt"}

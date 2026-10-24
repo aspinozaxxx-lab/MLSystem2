@@ -17,7 +17,7 @@
 - `DatasetClassSettings` — `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `DatasetSettings` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, `classes`, `val_fraction`; свойство `is_multiclass`.
 - `TilePreparationSettings` — `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, три sampling factor, `val_positive_factor`, `class_balance`.
-- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|object_f1|object_f1_v2`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits. Next-gen3 наследует ограничения архитектур/тайлов next-gen2; автоматическая политика фона версионируется в сэмплере, новых ручных коэффициентов нет.
+- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|object_f1|object_f1_v2`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits. Next-gen3 наследует ограничения архитектур/тайлов next-gen2; автоматическая политика фона версионируется в сэмплере, новых ручных коэффициентов нет.
 - `NextGenSettings` — validation fold, normalization, validation interval, threshold mode и optional Gaussian A/B.
 - `InferenceSettings` — `checkpoint_uri`, `threshold`, `batch_size`, `device`.
 - `MLflowSettings` — `enabled`, `tracking_uri`, `experiment_name`.
@@ -28,6 +28,8 @@ Next-gen4 наследует фиксированный профиль и авт
 `next_gen4_global_norm` имеет те же ограничения и отдельное имя варианта. Способ нормализации фиксирован профилем: границы по train вычисляет `train_pipeline`, сохраняет модель; поля ручных границ в settings не добавляются.
 
 `next_gen4_augmentation_v3` наследует эти ограничения и общую train-нормализацию; защита valid-mask аугментаций фиксирована профилем и не добавляет ручных параметров. Старые варианты не переключаются.
+
+`next_gen4_augmentation_v4` — дополнительное значение `TrainSettings.pipeline_variant` с теми же ограничениями. Защищённые квадратные вырезки внутри train-окна фиксированы профилем; отдельных пользовательских коэффициентов нет.
 
 ## Список используемых данным модулем модулей и с какой целью
 

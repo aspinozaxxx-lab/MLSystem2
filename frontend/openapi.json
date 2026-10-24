@@ -9950,6 +9950,7 @@
               "next_gen4",
               "next_gen4_global_norm",
               "next_gen4_augmentation_v3",
+              "next_gen4_augmentation_v4",
               "object_f1",
               "object_f1_v2"
             ],
@@ -10254,6 +10255,7 @@
               "next_gen4",
               "next_gen4_global_norm",
               "next_gen4_augmentation_v3",
+              "next_gen4_augmentation_v4",
               "object_f1",
               "object_f1_v2"
             ],
@@ -15446,6 +15448,7 @@
               "next_gen4",
               "next_gen4_global_norm",
               "next_gen4_augmentation_v3",
+              "next_gen4_augmentation_v4",
               "object_f1",
               "object_f1_v2"
             ],

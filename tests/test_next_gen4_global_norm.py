@@ -23,7 +23,7 @@ from mlsystem2.training_ui_api._templates import initial_templates, sanitize_tem
 VARIANT = "next_gen4_global_norm"
 
 
-@pytest.fixture(autouse=True, params=["next_gen4_global_norm", "next_gen4_augmentation_v3"])
+@pytest.fixture(autouse=True, params=["next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"])
 def normalization_profile(request, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "VARIANT", request.param)
 
@@ -186,7 +186,11 @@ def test_checkpoint_restores_global_bounds_and_onnx_matches_pytorch(tmp_path, mo
     preprocessing = parameters(channels)
     spec = ModelSpec(name="smp_segformer_b0", input_channels=channels, output_channels=1,
         parameters={"pipeline_variant": VARIANT, "preprocessing": preprocessing,
-            **({"augmentation_policy": "validity_guard_v3"} if VARIANT == "next_gen4_augmentation_v3" else {})})
+            **({"augmentation_policy": "validity_guard_v3"} if VARIANT == "next_gen4_augmentation_v3" else {}),
+            **({"augmentation_policy": "validity_guard_v4_context_crop_v1", "context_crop": {
+                "area_scale": [0.25, 1.0], "ratio": [1.0, 1.0], "probability": 0.5,
+                "output_size": 512, "source": "within_retained_train_window"}}
+               if VARIANT == "next_gen4_augmentation_v4" else {})})
     model = create_model(spec)
     path = tmp_path / "best.pt"
     save_checkpoint(SaveCheckpointRequest(model=model, checkpoint_uri=str(path)))
@@ -225,12 +229,15 @@ def test_profile_available_without_switching_old_templates(size):
 
 def test_model_spec_reads_train_histogram_and_val_cannot_collect_it(tmp_path):
     train = dataset(tmp_path)
-    settings = SimpleNamespace(train=SimpleNamespace(pipeline_variant=VARIANT, input_channels=4,
+    settings = SimpleNamespace(tile_preparation=SimpleNamespace(tile_size=512), train=SimpleNamespace(pipeline_variant=VARIANT, input_channels=4,
         output_channels=1, pretrained=False, model_name="smp_segformer_b0"))
     result = _runner._model_spec(settings, SimpleNamespace(dataset=train))
     assert result.parameters["preprocessing"] == global_minmax_parameters(train.band_histogram, 4)
     if VARIANT == "next_gen4_augmentation_v3":
         assert result.parameters["augmentation_policy"] == "validity_guard_v3"
+    if VARIANT == "next_gen4_augmentation_v4":
+        assert result.parameters["augmentation_policy"] == "validity_guard_v4_context_crop_v1"
+        assert result.parameters["context_crop"]["output_size"] == 512
     with pytest.raises(ValueError, match="только на train"):
         TileDataloaderRequest(scenes=[TileSceneSource(scene_id="снимок", image_path="image.tif", annotation_file="truth.geojson")],
             batch_size=1, mode="val", pipeline_variant=VARIANT, collect_band_histogram=True)

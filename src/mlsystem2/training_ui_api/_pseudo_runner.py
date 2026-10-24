@@ -368,7 +368,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             )
             config = _native_inference_config(loaded, config)
             _apply_native_object_precision(torch, config)
-            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"}:
+            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}:
                 threshold = float(config["threshold"])
                 profile = _postprocess_profile_from_config(
                     _POSTPROCESS_NONE, config.get("postprocess_config")
@@ -446,7 +446,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     device=device,
                     postprocess_profile=profile,
                     object_types=list(config.get("object_types") or []),
-                    **({"notebook": True, "batch_size": int(config["batch_size"]), "pad_edges": config.get("pipeline_variant") in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}} if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"} else {}),
+                    **({"notebook": True, "batch_size": int(config["batch_size"]), "pad_edges": config.get("pipeline_variant") in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}} if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} else {}),
                 )
                 predicted_instances = None
             with warnings.catch_warnings():
@@ -1231,7 +1231,7 @@ def run_pseudo_markup(config: dict[str, Any]) -> dict[str, Any]:
             )
             config = _native_inference_config(loaded, config)
             _apply_native_object_precision(torch, config)
-            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"}:
+            if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}:
                 threshold = float(config["threshold"])
                 postprocess_profile = _postprocess_profile_from_config(
                     _POSTPROCESS_NONE, config.get("postprocess_config")
@@ -1584,7 +1584,7 @@ def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str
                 "batch_size": next_gen2_inference_batch_size(int(metadata.get("sample_size") or config.get("tile_size") or 512), str(getattr(spec, "name", "smp_segformer_b0"))),
                 "inference_merge": "gaussian_instances", "threshold_source": f"{variant}_profile",
                 **({"inference_precision": "fp32_no_tf32"} if variant == "object_f1_v2" else {})}
-    if variant not in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}:
+    if variant not in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
         return config
     return {
         **config,
@@ -1906,13 +1906,13 @@ def _infer_scene(
                     postprocess_profile=postprocess_profile, confidence_map=result.probabilities[0])
             finally:
                 accumulator.close()
-        if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}:
+        if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
             mask_window = Window(0, 0, dataset.width, dataset.height)
             mask, confidence_map = _infer_notebook_scene_mask(
                 dataset=dataset, input_indexes=input_indexes, input_channels=input_channels,
                 torch=torch, model=model, tile_size=tile_size, stride=stride,
                 batch_size=batch_size, threshold=threshold, device=device, metrics=performance,
-                pad_edges=config.get("pipeline_variant") in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"},
+                pad_edges=config.get("pipeline_variant") in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"},
             )
         elif aoi_wgs84 is not None:
             if dataset.crs is None:
@@ -1974,7 +1974,7 @@ def _infer_scene(
             postprocess_profile,
             list(config.get("object_types") or []),
         )
-        if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}:
+        if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
             valid = valid_data_mask(dataset, mask_window, input_indexes)
             mask[~valid] = 0
             confidence_map[~valid] = 0
@@ -1987,7 +1987,7 @@ def _infer_scene(
             config,
             postprocess_profile=postprocess_profile,
             confidence_map=confidence_map,
-            valid_mask=valid if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"} else None,
+            valid_mask=valid if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} else None,
         )
         performance["postprocessing_sec"] = float(
             performance.get("postprocessing_sec", 0.0)
@@ -3434,7 +3434,7 @@ def _configured_postprocess_profile(
     config: dict[str, Any],
     fallback_image_count: int,
 ) -> _PostprocessProfile:
-    if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"}:
+    if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}:
         return _POSTPROCESS_NONE
     name = config.get("postprocess_profile")
     if name is None:
@@ -3958,7 +3958,7 @@ def _checkpoint_inference_window(
     variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
     # Сетка eval-ноутбука независима от нарезки нового обучения без нахлёста.
     checkpoint_stride = (
-        max(1, checkpoint_tile_size // 2) if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"}
+        max(1, checkpoint_tile_size // 2) if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}
         else core_size if checkpoint_context else int(stride)
     )
     if checkpoint_stride <= 0 or checkpoint_stride > core_size:
@@ -4146,7 +4146,7 @@ def _summary(
                 "threshold_source": config.get("threshold_source"),
                 "inference_merge": config.get("inference_merge"),
                 "batch_size": config.get("batch_size"),
-            } if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"} else {}),
+            } if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} else {}),
             "f1_score": config.get("checkpoint_f1_score"),
             "epoch": config.get("checkpoint_epoch"),
         },

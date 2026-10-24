@@ -46,6 +46,8 @@
 - `mlflow` - прочитать/создать experiments, создать run, записать metrics/artifacts, скачать artifact запуска и завершить run.
 - `dataset_preparing.contracts` - тип отчета подготовки датасета.
 - `train.contracts` - типы `EpochMetrics` и `TrainResult`.
+
+Для next-gen4-augmentation-v4 `log_training_artifacts` дополнительно сохраняет `diagnostics.dense_train_windows` в `reports/dense_train_windows.json` и `test_dense_windows` в `reports/test_dense_windows.json`. Полная история сохраняет `EpochMetrics.val_dense_window_metrics` каждой эпохи. Число окон и микро-счётчики групп плотности не подменяют общие метрики и не участвуют в выборе весов; неопределённые метрики остаются `null`.
 - `train_pipeline.contracts` - типы итоговых отчетов и timing report.
 
 ### Публикуемые MLflow-метрики

@@ -759,7 +759,7 @@ def test_object_v2_pipeline_revision_preserves_current_fp32_dynamic_model(tmp_pa
     ) == current
 
 
-@pytest.mark.parametrize("profile", ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"])
+@pytest.mark.parametrize("profile", ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"])
 @pytest.mark.parametrize("operation", ["full", "test_sample_f1"])
 def test_geoalert_report_identifies_current_postprocessing(tmp_path, monkeypatch, profile, operation):
     report = {"status": "ok", "processed": 1}
@@ -776,7 +776,7 @@ def test_geoalert_report_identifies_current_postprocessing(tmp_path, monkeypatch
             "object_separation_algorithm": "interior_geodesic_v1",
             "object_simplification_algorithm": "shared_edges_v1", "inference_precision": "fp32_no_tf32",
         }
-    elif profile in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}:
+    elif profile in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
         assert result == {**report, "inference_profile": "notebook_valid_data_v2"}
     else:
         assert result == report

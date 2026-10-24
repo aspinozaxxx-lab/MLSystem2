@@ -17,10 +17,12 @@
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
-- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, optional `test_loader`, `config`, `checkpoint_dir`, `sample_size`, `run_metadata`.
+- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, optional `test_loader`, optional `dense_train_loader` (только v4: исходные плотные train-окна без аугментаций для eval лучших весов), `config`, `checkpoint_dir`, `sample_size`, `run_metadata`.
 - `TrainResult` - история/checkpoint/порог/остановка и `diagnostics`.
 
 `TrainConfig.pipeline_variant=next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3`: прежний loss и критерий next-gen2, обязательная valid-mask и адаптивный train-сэмплер. `EpochMetrics.adaptive_sampling` по умолчанию пуст: профили сохраняют квоты, нормированные ошибки полной validation, сглаживание и причину следующего решения. После test контроллер не вызывается. Checkpoint и итоговая диагностика сохраняют полное состояние и историю; продолжение от весов начинает новый контроллер. Различие сетки и защита аугментаций принадлежат tile_preparation, глобальная нормализация встроена в переданную модель, не реализуется в train. Правила — в `docs/architecture.md`.
+
+`TrainConfig.pipeline_variant` также принимает `next_gen4_augmentation_v4` с тем же loss/выбором. `EpochMetrics.val_dense_window_metrics` (по умолчанию `{}`) содержит только для v4 группы плотности 0,9/0,99 при допустимой площади ≥0,99: число окон и TP/FP/FN, precision/recall/F1 при 0,5/0,9. Multiclass оценивается как объединение объектов с суммой их вероятностей; неоднозначные отрицательные области исключены. Пустые группы имеют `null` метрик. После выбора best отдельные eval-аудиты train и test сохраняются в `TrainResult.diagnostics.dense_train_windows/test_dense_windows`, без влияния на веса, scheduler, early stopping и пороги.
 
 ## Список используемых данным модулем модулей и с какой целью
 

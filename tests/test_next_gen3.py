@@ -20,6 +20,12 @@ from mlsystem2.training_ui_api._templates import NEXT_GEN3_DEFAULT_CONFIG, initi
 from mlsystem2.training_ui_api import _service, _pseudo_runner
 
 
+def v4_parameters(variant):
+    return {"augmentation_policy": "validity_guard_v4_context_crop_v1",
+            "context_crop": {"area_scale": [0.25, 1.0], "ratio": [1.0, 1.0], "probability": 0.5,
+                             "output_size": 512, "source": "within_retained_train_window"}} if variant == "next_gen4_augmentation_v4" else {}
+
+
 def tiles(positive=20, background=2000):
     return [
         {"positive": i < positive, "valid_pixels": 1024, "scene_id": str(i % 5),
@@ -223,11 +229,12 @@ def test_parallel_preparation_keeps_counts_and_sampler_plan(tmp_path):
     parallel.close()
 
 
-def test_draw_augmentations_do_not_depend_on_worker_assignment(tmp_path):
+@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"])
+def test_draw_augmentations_do_not_depend_on_worker_assignment(tmp_path, variant):
     torch = pytest.importorskip("torch")
     from mlsystem2.tile_preparation._dataloader import _collate_tile_batch, _seed_tile_worker
-    data = TileDataset(scenes=[scene(tmp_path)], tile_size=32, stride=16, seed=42,
-                       augmentation_level=3, pipeline_variant="next_gen3", mode="train")
+    data = TileDataset(scenes=[scene(tmp_path)], tile_size=32, stride=16 if variant == "next_gen3" else 32, seed=42,
+                       augmentation_level=3, pipeline_variant=variant, mode="train")
     plans = []
     for workers in (0, 2):
         sampler = AdaptiveBackgroundSampler(data.adaptive_sampling_tiles(), seed=42)
@@ -280,7 +287,7 @@ def test_public_contracts_and_mlflow_sampling_artifacts(monkeypatch):
 
 
 @pytest.mark.parametrize("architecture", ["smp_segformer_b0", "segformer_b0"])
-@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"])
+@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"])
 def test_four_epochs_checkpoint_offline_and_onnx(tmp_path, monkeypatch, architecture, variant):
     torch = pytest.importorskip("torch")
     pytest.importorskip("segmentation_models_pytorch")
@@ -295,28 +302,29 @@ def test_four_epochs_checkpoint_offline_and_onnx(tmp_path, monkeypatch, architec
     torch.set_num_threads(2)
     torch.manual_seed(42)
     source = scene(tmp_path)
-    if variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}:
+    if variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
         # В новой сетке исходный единичный positive попал в held-out;
         # добавляем второй объект в известный train-тайл, не меняя старый эталон.
         annotation = Path(source.annotation_file)
         payload = json.loads(annotation.read_text(encoding="utf-8"))
         payload["features"].append({"type": "Feature", "properties": {}, "geometry": mapping(box(76, 20, 80, 24))})
         annotation.write_text(json.dumps(payload), encoding="utf-8")
-    datasets = {mode: TileDataset(scenes=[source], tile_size=32, stride=32 if variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"} else 16, mode=mode,
-        seed=42, augmentation_level=3 if variant == "next_gen4_augmentation_v3" else 0, pipeline_variant=variant,
-        collect_band_histogram=variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3"} and mode == "train",
+    datasets = {mode: TileDataset(scenes=[source], tile_size=32, stride=32 if variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} else 16, mode=mode,
+        seed=42, augmentation_level=3 if variant in {"next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} else 0, pipeline_variant=variant,
+        collect_band_histogram=variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} and mode == "train",
         tile_split=TileSplitRequest(val_fraction=0.2, test_fraction=0.2)) for mode in ("train", "val", "test")}
     sampler = AdaptiveBackgroundSampler(datasets["train"].adaptive_sampling_tiles(), seed=42)
     loaders = {mode: torch.utils.data.DataLoader(data, batch_size=4,
         sampler=sampler if mode == "train" else None, collate_fn=_collate_tile_batch) for mode, data in datasets.items()}
     from mlsystem2.train_pipeline._next_gen import global_minmax_parameters
-    preprocessing = (global_minmax_parameters(datasets["train"].band_histogram, 4) if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3"}
+    preprocessing = (global_minmax_parameters(datasets["train"].band_histogram, 4) if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}
                      else {"mode": "window_minmax", "epsilon": 1e-6,
                            **({"mask_output_nodata": True} if variant == "next_gen4" else {})})
     spec = ModelSpec(name=architecture, input_channels=4, output_channels=1,
         parameters={"pipeline_variant": variant, "preprocessing": preprocessing,
                     "sampler": sampler.snapshot()["policy"],
-                    **({"augmentation_policy": "validity_guard_v3"} if variant == "next_gen4_augmentation_v3" else {})})
+                    **({"augmentation_policy": "validity_guard_v3"} if variant == "next_gen4_augmentation_v3" else {}),
+                    **v4_parameters(variant)})
     handle = create_model(spec)
     result = train_model(TrainRequest(model=handle, train_loader=loaders["train"], val_loader=loaders["val"],
         test_loader=loaders["test"], checkpoint_dir=str(tmp_path / "checkpoints"), sample_size=32,
@@ -326,6 +334,9 @@ def test_four_epochs_checkpoint_offline_and_onnx(tmp_path, monkeypatch, architec
     assert result.epochs_total == 4
     assert len(result.diagnostics["adaptive_sampling"]["history"]) == 4
     assert result.diagnostics["test_metrics"]["checkpoint_epoch"] >= 1
+    if variant == "next_gen4_augmentation_v4":
+        assert result.history[-1].val_dense_window_metrics["target"] == "foreground_union"
+        assert "test_dense_windows" in result.diagnostics
     payload = torch.load(result.final_checkpoint_path, map_location="cpu", weights_only=True)
     assert payload["metadata"]["pipeline_variant"] == variant
     assert payload["metadata"]["adaptive_sampling"]["state"]["epoch"] == 4
@@ -345,7 +356,7 @@ def test_four_epochs_checkpoint_offline_and_onnx(tmp_path, monkeypatch, architec
         data.close()
 
 
-@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"])
+@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"])
 def test_multiclass_training_keeps_partial_negatives_out_of_background_mining(tmp_path, variant):
     torch = pytest.importorskip("torch")
     from mlsystem2.models.api import create_model
@@ -380,11 +391,12 @@ def test_multiclass_training_keeps_partial_negatives_out_of_background_mining(tm
     preprocessing = ({"mode": "global_minmax", "epsilon": 1e-6, "nodata": 0.0,
         "mask_output_nodata": True, "source": "retained_train_windows", "low": [0.0] * 3,
         "high": [255.0] * 3, "valid_pixel_count": 4096, "window_count": 4}
-        if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3"} else {"mode": "window_minmax", "epsilon": 1e-6,
+        if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} else {"mode": "window_minmax", "epsilon": 1e-6,
                     **({"mask_output_nodata": True} if variant == "next_gen4" else {})})
     model = create_model(ModelSpec(name="smp_segformer_b0", input_channels=3, output_channels=3,
         parameters={"pipeline_variant": variant, "preprocessing": preprocessing,
-                    **({"augmentation_policy": "validity_guard_v3"} if variant == "next_gen4_augmentation_v3" else {})}))
+                    **({"augmentation_policy": "validity_guard_v3"} if variant == "next_gen4_augmentation_v3" else {}),
+                    **v4_parameters(variant)}))
     config = TrainConfig(pipeline_variant=variant, task="multiclass", epochs=2, batch_size=2,
         device="cpu", learning_rate=1e-4, weight_decay=0.01, early_stopping_patience=5,
         loss="cross_entropy_tversky", class_weights=[0.5, 1, 1.5], class_schema=[
@@ -392,13 +404,15 @@ def test_multiclass_training_keeps_partial_negatives_out_of_background_mining(tm
     result = train_model(TrainRequest(model=model, train_loader=train, val_loader=val, test_loader=val,
         config=config, checkpoint_dir=str(tmp_path), sample_size=32))
     assert result.epochs_total == 2
+    if variant == "next_gen4_augmentation_v4":
+        assert result.history[-1].val_dense_window_metrics["target"] == "foreground_union"
     assert {m["id"] for m in result.history[-1].val_per_class_metrics} == {1, 2}
     assert len(result.diagnostics["adaptive_sampling"]["history"]) == 2
     assert set(result.diagnostics["adaptive_sampling"]["state"]["train_scores"]) <= {2}
 
 
 @pytest.mark.parametrize("imagery,channels", [("kanopus", 4), ("ortho", 3)])
-@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"])
+@pytest.mark.parametrize("variant", ["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"])
 def test_manual_job_and_worker_yaml_keep_variant_without_switching_templates(tmp_path, monkeypatch, imagery, channels, variant):
     from sqlalchemy import select
     from mlsystem2.settings.contracts import SystemSettings
@@ -435,7 +449,7 @@ def test_manual_job_and_worker_yaml_keep_variant_without_switching_templates(tmp
         settings = SystemSettings.model_validate(payload)
         assert settings.train.pipeline_variant == variant
         assert settings.tile_preparation.tile_size == 768
-        assert settings.tile_preparation.stride == (768 if variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"} else 384)
+        assert settings.tile_preparation.stride == (768 if variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} else 384)
         assert settings.train.input_channels == channels
         assert settings.train.max_val_batches_per_epoch is None
         assert all(t.default_config["train.pipeline_variant"] == "legacy" for t in session.scalars(select(TrainingTemplateRow)))

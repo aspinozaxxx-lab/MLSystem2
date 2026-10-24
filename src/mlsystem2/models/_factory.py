@@ -167,10 +167,18 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
         raise ModelsError("object f1 поддерживает SegFormer B0/B1/B2/B3")
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
-    if spec.parameters.get("pipeline_variant") in {"next_gen4_global_norm", "next_gen4_augmentation_v3"}:
+    if spec.parameters.get("pipeline_variant") in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
         if (spec.parameters.get("pipeline_variant") == "next_gen4_augmentation_v3"
                 and spec.parameters.get("augmentation_policy") != "validity_guard_v3"):
             raise ModelsError("next-gen4-augmentation-v3 требует сохранённую политику защищённых аугментаций")
+        if spec.parameters.get("pipeline_variant") == "next_gen4_augmentation_v4":
+            crop = spec.parameters.get("context_crop", {})
+            if (spec.parameters.get("augmentation_policy") != "validity_guard_v4_context_crop_v1"
+                    or not isinstance(crop, dict)
+                    or crop != {"area_scale": [0.25, 1.0], "ratio": [1.0, 1.0], "probability": 0.5,
+                                "output_size": crop.get("output_size"), "source": "within_retained_train_window"}
+                    or crop.get("output_size") not in (512, 768, 1024, 1536)):
+                raise ModelsError("next-gen4-augmentation-v4 требует сохранённую политику защищённых вырезок train")
         preprocessing = spec.parameters.get("preprocessing", {})
         if (not isinstance(preprocessing, dict)
                 or spec.name not in {_SEGFORMER_B0, *_SMP_ENCODERS} or spec.input_channels not in (3, 4)
@@ -205,7 +213,7 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
                 "std": [0.229, 0.224, 0.225, 0.229][:spec.input_channels],
             }
             return ModelHandle(spec=spec, model=_InputPreprocessingWrapper(model, preprocessing))
-        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"} and spec.output_channels == 1:
+        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} and spec.output_channels == 1:
             parameters = {**spec.parameters, "binary_output": "foreground_logit_minus_background_logit"}
             if spec.pretrained:
                 parameters["pretrained_source"] = f"smp-hub/{_SMP_ENCODERS[spec.name]}.imagenet"
@@ -242,7 +250,7 @@ def _ensure_torch_for_smp() -> None:
 def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True):
     smp = _import_smp()
     _ensure_torch_for_smp()
-    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}
+    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}
     if spec.pretrained and spec.input_channels not in (3, 4):
         raise ModelsError("Предобученная SegFormer поддерживает RGB или RGB+NIR (3 или 4 канала).")
     pretrained = spec.pretrained and initialize_pretrained
@@ -306,7 +314,7 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
 
     model_config = _SEGFORMER_CONFIGS[spec.name]
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
-    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3"}
+    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}
     if is_next_gen2:
         head_channels = 2 if spec.output_channels == 1 else spec.output_channels
         if not initialize_pretrained:
@@ -456,7 +464,7 @@ def _set_first_patch_projection(model, projection) -> None:
 
 
 def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "object_f1", "object_f1_v2"}:
+    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}:
         return ModelHandle(spec=spec, model=model)
     preprocessing = spec.parameters.get("preprocessing")
     if not isinstance(preprocessing, dict):
