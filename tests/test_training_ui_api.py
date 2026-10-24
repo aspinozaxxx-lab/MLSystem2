@@ -3780,7 +3780,8 @@ def test_class_results_removes_cancelled_results_from_database(tmp_path: Path, m
         assert session.get(PseudoMarkupResultRow, pseudo.id) is None
 
 
-def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("diagnostic_interval", [None, 900])
+def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatch, diagnostic_interval) -> None:
     mlmarkup_root = tmp_path / "MLMarkup"
     class_dir = mlmarkup_root / "Вырубки" / "main"
     class_dir.mkdir(parents=True)
@@ -3849,6 +3850,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
                     "train.max_train_batches_per_epoch": 72,
                     "train.max_val_batches_per_epoch": 1000,
                     "train.max_training_time_sec": None,
+                    "train.diagnostic_checkpoint_interval_sec": diagnostic_interval,
                 },
             ),
             config,
@@ -3875,6 +3877,7 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
         run_script = (run_dir / "run_training.sh").read_text(encoding="utf-8")
         assert "split_granularity" not in config_yaml
         run_payload = yaml.safe_load(config_yaml)
+        assert run_payload["train"]["diagnostic_checkpoint_interval_sec"] == diagnostic_interval
         base_payload = yaml.safe_load(config.training_settings_path.read_text(encoding="utf-8"))
         # Полный снимок фиксирует и общие параметры для последующего этапа обучения.
         assert run_payload["tile_preparation"]["num_workers"] == base_payload["tile_preparation"]["num_workers"]
@@ -3906,6 +3909,24 @@ def test_training_ui_worker_starts_first_training_job(tmp_path: Path, monkeypatc
     assert started[0][0][0] == "bash"
     assert started[0][1]["cwd"] == str(tmp_path)
     assert started[0][1]["start_new_session"] is True
+
+
+@pytest.mark.parametrize("variant", ["legacy", "next_gen4_consistency_v1"])
+@pytest.mark.parametrize("interval", [None, 900])
+def test_training_worker_forwards_diagnostic_interval_to_runtime_settings(tmp_path, monkeypatch, variant, interval):
+    from mlsystem2.settings.contracts import TrainSettings
+
+    monkeypatch.setattr(_worker, "_dataset_config", lambda *_args, **_kwargs: {
+        "images_dir": str(tmp_path / "снимки"), "scenes_file": str(tmp_path / "сцены.txt"),
+        "annotation_file": str(tmp_path / "разметка.geojson"),
+    })
+    row = SimpleNamespace(config={"train.pipeline_variant": variant,
+        "train.diagnostic_checkpoint_interval_sec": interval, "tile_preparation.tile_size": 1024},
+        tile_size=1024, architecture="smp_segformer_b2", mlflow_experiment_name="Проверка интервала")
+    payload = _worker._build_training_config(None, row, get_config(), tmp_path / "задание")
+    restored = yaml.safe_load(yaml.safe_dump(payload, allow_unicode=True))
+    assert restored["train"]["diagnostic_checkpoint_interval_sec"] == interval
+    assert TrainSettings.model_validate(restored["train"]).diagnostic_checkpoint_interval_sec == interval
 
 
 @pytest.mark.parametrize("pipeline_variant,tile_size,architecture",

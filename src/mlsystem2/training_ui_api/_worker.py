@@ -839,6 +839,7 @@ def _build_training_config(
                 else _optional_int(flat, "train.max_val_batches_per_epoch")
             ),
             "max_training_time_sec": _optional_int(flat, "train.max_training_time_sec"),
+            "diagnostic_checkpoint_interval_sec": _optional_int(flat, "train.diagnostic_checkpoint_interval_sec"),
         },
         "mlflow": {
             "experiment_name": row.mlflow_experiment_name or "MLSystem2",

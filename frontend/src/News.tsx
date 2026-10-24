@@ -14,6 +14,13 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [{
+  slug: "diagnostic-checkpoint-runtime-interval",
+  date: "2026-10-24",
+  title: "Исправлено сохранение диагностических срезов",
+  updates: [
+    "Заданный в интерфейсе период диагностических срезов теперь передаётся в фактический конфиг обучения; пустой период по-прежнему отключает дополнительные сохранения. Исправление действует для новых запусков, уже работающий процесс не изменяется.",
+  ],
+}, {
   slug: "next-gen4-consistency-v1",
   date: "2026-10-24",
   title: "Next-gen4-consistency-v1: одинаковые пиксели в разных контекстах",
