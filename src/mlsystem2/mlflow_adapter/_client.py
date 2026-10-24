@@ -105,7 +105,7 @@ def get_best_training_checkpoint(
         notebook_losses = (
             client.get_metric_history(run_id, "val/loss")
             # Старые запуски действительно сохраняли best по loss; их веса не переписываем.
-            if tags.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}
+            if tags.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"}
             and tags.get("checkpoint_selection_metric", "val_loss") == "val_loss"
             else None
         )
@@ -644,6 +644,7 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
         "adaptive_sampling": "reports/adaptive_sampling.json",
         "dense_train_windows": "reports/dense_train_windows.json",
         "test_dense_windows": "reports/test_dense_windows.json",
+        "diagnostic_checkpoints": "reports/diagnostic_checkpoints.json",
     }
     for key, artifact_path in diagnostic_artifacts.items():
         value = diagnostics.get(key)
@@ -675,7 +676,9 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
         if isinstance(preprocessing, dict) and preprocessing.get("mode"):
             mlflow.set_tag("preprocessing", str(preprocessing["mode"]))
     checkpoint_hashes: dict[str, dict[str, object]] = {}
-    for path in (result.best_checkpoint_path, result.final_checkpoint_path):
+    paths = [result.best_checkpoint_path, result.final_checkpoint_path]
+    paths.extend(item.uri for item in result.artifacts if item.label == "diagnostic")
+    for path in dict.fromkeys(paths):
         if path is not None and Path(path).exists():
             _log_artifact(path, "checkpoints")
             if diagnostics:

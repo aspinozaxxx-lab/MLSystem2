@@ -32,6 +32,10 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 
 ## Список используемых данным модулем модулей и с какой целью
 
+`TileDataloaderRequest.pipeline_variant=next_gen4_consistency_v1` полностью наследует v4:
+тот же split, статистика, protected crop и dense-loader. Согласованную пару формирует train
+только из готового batch; tile_preparation не читает для неё соседние val/test-пиксели.
+
 - `inference.api` — единая сетка окон полного покрытия для object_f1.
 - `settings.api` — параметры сетки, workers, sampling, augmentation и val-cache.
 - `rasterio` — ленивое чтение окон отдельных TIFF с `boundless=True`.

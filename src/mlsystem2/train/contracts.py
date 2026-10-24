@@ -29,7 +29,7 @@ class TrainConfig(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1", "object_f1_v2"] = "legacy"
     class_weights: list[float] = Field(default_factory=list)
     object_separation: ObjectSeparationConfig | None = None
     calibrate_object_threshold: bool = True
@@ -55,6 +55,7 @@ class TrainConfig(BaseModel):
     max_train_batches_per_epoch: int | None = Field(default=None, gt=0)
     max_val_batches_per_epoch: int | None = Field(default=None, gt=0)
     max_training_time_sec: int | None = Field(default=None, gt=0)
+    diagnostic_checkpoint_interval_sec: int | None = Field(default=None, gt=0)
     class_slugs: list[str] = Field(default_factory=list)
     class_schema: list[TrainClassDefinition] = Field(default_factory=list)
 
@@ -72,7 +73,7 @@ class TrainConfig(BaseModel):
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
         if self.task == "multiclass" and self.loss not in multiclass_losses | {"cross_entropy_tversky"}:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
-        if self.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}:
+        if self.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1", "object_f1_v2"}:
             if self.loss != "cross_entropy_tversky":
                 raise ValueError("next-gen2 требует CrossEntropy + Tversky")
             if self.pipeline_variant in {"object_f1", "object_f1_v2"} and self.task != "binary":
@@ -130,6 +131,7 @@ class TrainConfig(BaseModel):
 class EpochMetrics(BaseModel):
     adaptive_sampling: dict = Field(default_factory=dict)
     val_dense_window_metrics: dict[str, Any] = Field(default_factory=dict)
+    train_context_consistency: dict[str, Any] = Field(default_factory=dict)
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="before")
@@ -253,7 +255,7 @@ class TrainRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_inference_window(self) -> Self:
-        if self.dense_train_loader is not None and self.config.pipeline_variant != "next_gen4_augmentation_v4":
+        if self.dense_train_loader is not None and self.config.pipeline_variant not in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1"}:
             raise ValueError("Аудит плотных train-окон предусмотрен только для next-gen4-augmentation-v4")
         context = self.config.inference_context
         if context and self.sample_size is None:

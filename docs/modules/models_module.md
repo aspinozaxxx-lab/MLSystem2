@@ -33,6 +33,11 @@
 
 ## Список используемых данным модулем модулей и с какой целью
 
+`next_gen4_consistency_v1` наследует ABI, `preprocessing`, `augmentation_policy` и
+`context_crop` v4. Обязательный `parameters.context_consistency` строго фиксирует
+политику `confident_teacher_kl_v1` из архитектуры. Создание и загрузка отвергают другую
+политику; она сохраняется как происхождение обучения и не меняет forward инференса.
+
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.
 
 ## Алгоритм работы и его особенности

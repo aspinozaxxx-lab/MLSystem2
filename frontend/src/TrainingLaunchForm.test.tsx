@@ -7,7 +7,7 @@ const schema: ConfigSchema = {
   pipeline_descriptions: { next_gen2: "Фиксированный профиль. Train/validation/test 60/20/20.\n\nВыбор весов по validation loss.", next_gen3: "Автоматический фон по ошибкам полной валидации.", next_gen4: "Тайлы без пересечения, автоматический фон.", object_f1: "Области и границы; разделение объектов. Выбор весов по object F1." },
   fields: [
     { key: "train.pretrained", label: "Предобученные веса", value_type: "boolean", required: true, tooltip: "" },
-    ...["train.pipeline_variant", "train.loss"].map((key) => ({ key, label: key === "train.loss" ? "Loss" : "Конвейер", value_type: "select", required: true, tooltip: "", options: key === "train.loss" ? ["bce_dice", "focal_tversky"] : ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1"] })),
+    ...["train.pipeline_variant", "train.loss"].map((key) => ({ key, label: key === "train.loss" ? "Loss" : "Конвейер", value_type: "select", required: true, tooltip: "", options: key === "train.loss" ? ["bce_dice", "focal_tversky"] : ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1"] })),
     ...["tile_preparation.tile_size", "tile_preparation.stride", "tile_preparation.context", "train.batch_size", "train.epochs", "train.early_stopping_patience"].map((key) => ({ key, label: key, value_type: "integer", required: true, tooltip: "" })),
     ...["tile_preparation.positive_factor", "tile_preparation.hard_negative_factor", "tile_preparation.background_factor", "dataset.val_fraction", "train.learning_rate", "train.focal_alpha", "train.tversky_alpha"].map((key) => ({ key, label: key, value_type: "number", required: true, tooltip: "" })),
     { key: "train.max_training_time_sec", label: "Лимит времени", value_type: "integer-null", required: true, tooltip: "" },
@@ -68,7 +68,7 @@ describe("форма запуска обучения", () => {
     expect(html).not.toContain(" HF");
   });
 
-  it.each(["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1"])("в %s показывает независимую галочку весов и отражает её в описании", (variant) => {
+  it.each(["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1"])("в %s показывает независимую галочку весов и отражает её в описании", (variant) => {
     for (const pretrained of [true, false]) {
       const html = render({ ...value, "train.pipeline_variant": variant, "train.pretrained": pretrained });
       const checkbox = html.match(/<input[^>]+name="train.pretrained"[^>]*>/)?.[0] || "";

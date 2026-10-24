@@ -88,7 +88,7 @@ def describe_metric(name: str, context: dict[str, str]) -> dict[str, str]:
         object_score = name == "train/best_object_f1"
         kind = "объектовая" if object_score else "пиксельная" if name.endswith("threshold_pixel_f1") else "выбранного критерия качества"
         # Для object f1 pixel_f1 не записан в checkpoint_selection: адаптер сохраняет максимум истории.
-        selected = (variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}
+        selected = (variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"}
                     and context.get("checkpoint_selection_metric", "val_loss") == "val_loss") or object_score
         return _entry(f"F1 ({kind}) {'выбранного best.pt' if selected else 'с максимальным значением в истории validation'}.",
                       "Итоговая сводка validation, не независимый test. При выборе по loss F1 лучших весов может быть ниже максимума графика; сверять reports/checkpoint_selection.json.")
@@ -135,7 +135,7 @@ def build_catalog(names: Iterable[str], context: dict[str, str]) -> dict[str, ob
     """Описать только реально записанные ключи, включая типы и сцены."""
     variant = context.get("pipeline_variant", "legacy")
     selection = context.get("checkpoint_selection_metric")
-    if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} and selection in {None, "val_loss"}:
+    if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"} and selection in {None, "val_loss"}:
         checkpoint_note = "Лучшие веса этого запуска выбираются по минимуму val/loss, не по максимальной F1."
     elif selection == "val/object_f1" or variant in {"object_f1", "object_f1_v2"}:
         checkpoint_note = "Лучшие веса этого запуска выбираются по максимуму объектовой F1."

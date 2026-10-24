@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
+  <title id="title">Согласованность двух контекстов и временные срезы обучения</title>
+  <desc id="desc">Условная схема: один и тот же пиксель полного train-окна и его вырезки сравнивается только при правильном уверенном учителе. Срезы сохраняются в одном процессе на границе эпох.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0 L10 4 L0 8" fill="#6ea8fe"/></marker>
+  </defs>
+  <rect width="1200" height="640" rx="24" fill="#101b2d"/>
+  <g font-family="Arial, sans-serif" fill="#eaf2ff">
+    <text x="48" y="54" font-size="29" font-weight="700">Один пиксель — согласованный прогноз</text>
+    <text x="48" y="88" font-size="18" fill="#a7bedc">Поясняющая схема профиля next-gen4-consistency-v1</text>
+    <rect x="48" y="125" width="330" height="305" rx="16" fill="#1c304b" stroke="#486c99"/>
+    <text x="72" y="160" font-size="22" font-weight="700">Полное train-окно</text>
+    <rect x="85" y="184" width="245" height="172" rx="8" fill="#185e7c"/>
+    <path d="M85 185 H330 V233 Q245 205 214 240 T85 226Z" fill="#477450"/>
+    <rect x="125" y="229" width="160" height="104" fill="none" stroke="#8bc5ff" stroke-dasharray="7 5" stroke-width="3"/>
+    <circle cx="206" cy="280" r="8" fill="#ffd86b"/>
+    <text x="72" y="389" font-size="18">Учитель без градиента</text>
+    <text x="72" y="414" font-size="17" fill="#a7bedc">Правильный класс, уверенность &gt; 0,9</text>
+    <path d="M388 270 H452" stroke="#6ea8fe" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="470" y="125" width="282" height="305" rx="16" fill="#1c304b" stroke="#486c99"/>
+    <text x="494" y="160" font-size="22" font-weight="700">Вырезка без масштаба</text>
+    <rect x="522" y="217" width="160" height="104" fill="#185e7c" stroke="#8bc5ff" stroke-width="3"/>
+    <circle cx="603" cy="268" r="8" fill="#ffd86b"/>
+    <text x="494" y="365" font-size="18">Те же исходные пиксели</text>
+    <text x="494" y="392" font-size="17" fill="#a7bedc">Только внутри выбранного train</text>
+    <path d="M764 270 H820" stroke="#6ea8fe" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="842" y="125" width="310" height="305" rx="16" fill="#203a3b" stroke="#51b5a4"/>
+    <text x="866" y="166" font-size="22" font-weight="700">Основной loss + 0,25 KL</text>
+    <text x="866" y="217" font-size="18">Согласовать общий пиксель</text>
+    <text x="866" y="255" font-size="17" fill="#b3dcd5">Без nodata и неоднозначных зон</text>
+    <text x="866" y="290" font-size="17" fill="#b3dcd5">Без dropout и обновления</text>
+    <text x="866" y="314" font-size="17" fill="#b3dcd5">статистик BatchNorm в паре</text>
+    <text x="866" y="369" font-size="18">Один шаг optimizer</text>
+    <text x="866" y="398" font-size="17" fill="#b3dcd5">Инференс остаётся прежним</text>
+    <path d="M80 492 H1110" stroke="#6ea8fe" stroke-width="3" marker-end="url(#arrow)"/>
+    <g fill="#ffd86b"><circle cx="270" cy="492" r="7"/><circle cx="570" cy="492" r="7"/><circle cx="870" cy="492" r="7"/></g>
+    <text x="212" y="529" font-size="20">≈ 15 минут</text><text x="510" y="529" font-size="20">≈ 30 минут</text><text x="810" y="529" font-size="20">≈ 45 минут</text>
+    <text x="82" y="574" font-size="19">Текущие срезы на границе эпох • фактическое время записано • optimizer не перезапускается</text>
+    <text x="82" y="610" font-size="16" fill="#a7bedc">Схема не является результатом эксперимента. Исчезновение дефекта проверяется отдельно.</text>
+  </g>
+</svg>

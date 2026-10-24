@@ -69,12 +69,30 @@ NEXT_GEN2_DEFAULT_CONFIG: dict[str, Any] = {
 
 NEXT_GEN2_EDITABLE_KEYS = {
     "train.pretrained", "tile_preparation.tile_size", "train.epochs", "train.early_stopping_patience", "train.max_training_time_sec",
+    "train.diagnostic_checkpoint_interval_sec",
 }
 NEXT_GEN3_DEFAULT_CONFIG = {**NEXT_GEN2_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen3"}
 NEXT_GEN4_DEFAULT_CONFIG = {**NEXT_GEN3_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4", "tile_preparation.stride": 512}
 NEXT_GEN4_GLOBAL_NORM_DEFAULT_CONFIG = {**NEXT_GEN4_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4_global_norm"}
 NEXT_GEN4_AUGMENTATION_V3_DEFAULT_CONFIG = {**NEXT_GEN4_GLOBAL_NORM_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4_augmentation_v3"}
 NEXT_GEN4_AUGMENTATION_V4_DEFAULT_CONFIG = {**NEXT_GEN4_AUGMENTATION_V3_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4_augmentation_v4"}
+NEXT_GEN4_CONSISTENCY_V1_DEFAULT_CONFIG = {**NEXT_GEN4_AUGMENTATION_V4_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4_consistency_v1"}
+NEXT_GEN4_CONSISTENCY_V1_DESCRIPTION = (
+    "Next-gen4-consistency-v1 наследует глобальную нормализацию и защиту valid-mask v4. "
+    "Дополнительный KL-штраф с весом 0,25 учит одинаковые допустимые пиксели сохранять прогноз "
+    "при изменении контекста. В половине train-batch сравниваются полное окно и его немасштабированная "
+    "вырезка со стороной 50% либо 75%. Используются только уже выбранные train-пиксели; "
+    "правильный по разметке учитель должен иметь вероятность более 0,9. "
+    "Оба дополнительных прохода идут в eval-режиме без повторного обновления BatchNorm и без dropout; "
+    "градиент учителя отключён. Классы балансируются, nodata и неоднозначные отрицательные области исключены.\n\n"
+    "Основной CE/Tversky, split, автоматический фон, scheduler и best по validation loss прежние. "
+    "Проверка и инференс не используют дополнительную ветку, Gaussian и пороги не меняются. "
+    "Обучающий шаг дороже, поэтому за одинаковое время может пройти меньше эпох. "
+    "Для временной диагностики можно задать период текущих срезов, например 900 секунд. "
+    "Срез сохраняется после завершённой эпохи с фактическим временем; обучение не перезапускается. "
+    "Выберите отдельный профиль в ручном запуске или шаблоне SegFormer; старые веса не изменяются. "
+    "Устранение кругов нужно подтвердить проверкой, рост общей F1 сам по себе этого не доказывает."
+)
 NEXT_GEN4_AUGMENTATION_V4_DESCRIPTION = (
     "Next-gen4-augmentation-v4 — отдельный профиль на основе v3: глобальная нормализация train "
     "и защита valid-mask сохраняются. Перед прежней геометрией с вероятностью 50% выбирается "
@@ -248,7 +266,9 @@ OBJECT_F1_V2_DESCRIPTION = (
 
 
 def fixed_pipeline_defaults(variant: str) -> dict[str, Any]:
-    if variant == "next_gen4_augmentation_v4":
+    if variant == "next_gen4_consistency_v1":
+        return NEXT_GEN4_CONSISTENCY_V1_DEFAULT_CONFIG
+    if variant in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1"}:
         return NEXT_GEN4_AUGMENTATION_V4_DEFAULT_CONFIG
     if variant == "next_gen4_augmentation_v3":
         return NEXT_GEN4_AUGMENTATION_V3_DEFAULT_CONFIG
@@ -264,15 +284,15 @@ def fixed_pipeline_defaults(variant: str) -> dict[str, Any]:
 
 
 CONFIG_SCHEMA: dict[str, Any] = {
-    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG, "next_gen3": NEXT_GEN3_DEFAULT_CONFIG, "next_gen4": NEXT_GEN4_DEFAULT_CONFIG, "next_gen4_global_norm": NEXT_GEN4_GLOBAL_NORM_DEFAULT_CONFIG, "next_gen4_augmentation_v3": NEXT_GEN4_AUGMENTATION_V3_DEFAULT_CONFIG, "next_gen4_augmentation_v4": NEXT_GEN4_AUGMENTATION_V4_DEFAULT_CONFIG, "object_f1": OBJECT_F1_DEFAULT_CONFIG, "object_f1_v2": OBJECT_F1_V2_DEFAULT_CONFIG},
-    "pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION, "next_gen3": NEXT_GEN3_DESCRIPTION, "next_gen4": NEXT_GEN4_DESCRIPTION, "next_gen4_global_norm": NEXT_GEN4_GLOBAL_NORM_DESCRIPTION, "next_gen4_augmentation_v3": NEXT_GEN4_AUGMENTATION_V3_DESCRIPTION, "next_gen4_augmentation_v4": NEXT_GEN4_AUGMENTATION_V4_DESCRIPTION, "object_f1": OBJECT_F1_DESCRIPTION, "object_f1_v2": OBJECT_F1_V2_DESCRIPTION},
+    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG, "next_gen3": NEXT_GEN3_DEFAULT_CONFIG, "next_gen4": NEXT_GEN4_DEFAULT_CONFIG, "next_gen4_global_norm": NEXT_GEN4_GLOBAL_NORM_DEFAULT_CONFIG, "next_gen4_augmentation_v3": NEXT_GEN4_AUGMENTATION_V3_DEFAULT_CONFIG, "next_gen4_augmentation_v4": NEXT_GEN4_AUGMENTATION_V4_DEFAULT_CONFIG, "next_gen4_consistency_v1": NEXT_GEN4_CONSISTENCY_V1_DEFAULT_CONFIG, "object_f1": OBJECT_F1_DEFAULT_CONFIG, "object_f1_v2": OBJECT_F1_V2_DEFAULT_CONFIG},
+    "pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION, "next_gen3": NEXT_GEN3_DESCRIPTION, "next_gen4": NEXT_GEN4_DESCRIPTION, "next_gen4_global_norm": NEXT_GEN4_GLOBAL_NORM_DESCRIPTION, "next_gen4_augmentation_v3": NEXT_GEN4_AUGMENTATION_V3_DESCRIPTION, "next_gen4_augmentation_v4": NEXT_GEN4_AUGMENTATION_V4_DESCRIPTION, "next_gen4_consistency_v1": NEXT_GEN4_CONSISTENCY_V1_DESCRIPTION, "object_f1": OBJECT_F1_DESCRIPTION, "object_f1_v2": OBJECT_F1_V2_DESCRIPTION},
     "fields": [
         {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
             "tooltip": "Сначала выберите архитектуру. legacy — прежнее обучение; next-gen2 — профиль ноутбука с выбором весов по validation loss. object f1 обучает области и границы, выбирая лучшие веса по объектной F1 полных проверочных снимков. object f1 v2 различает фон, внутренность и широкую границу, восстанавливает полные отдельные полигоны и фильтрует мелкий шум. Оба объектных профиля предназначены для бинарных датасетов и SegFormer B0/B1/B2/B3. Подробности внизу формы.",
-            "options": ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"],
+            "options": ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1", "object_f1_v2"],
         },
         {
             "key": "dataset.val_fraction",
@@ -460,6 +480,13 @@ CONFIG_SCHEMA: dict[str, Any] = {
             "label": "Максимальное время обучения, сек",
             "value_type": "integer-null",
             "tooltip": "Wall-clock лимит train loop. Пустое значение означает обучение без лимита; проверяется после завершения эпохи.",
+            "min_value": 1,
+        },
+        {
+            "key": "train.diagnostic_checkpoint_interval_sec",
+            "label": "Период диагностических срезов, сек",
+            "value_type": "integer-null",
+            "tooltip": "Необязательные текущие веса на границе эпох без остановки optimizer. 900 — примерно каждые 15 минут; пусто — не сохранять.",
             "min_value": 1,
         },
     ]
@@ -712,6 +739,10 @@ _TRAIN_FIELD_HELP: dict[str, tuple[str, str]] = {
         "Wall-clock лимит обучения. Проверяется после завершения эпохи, поэтому процесс сохраняет final checkpoint штатно.",
         "Пусто без лимита; 1800 для короткого запуска, 7200..14400 для длинных рабочих обучений.",
     ),
+    "train.diagnostic_checkpoint_interval_sec": (
+        "Сохраняет текущие, не лучшие веса на границе завершённой эпохи; фактическое время может быть позже заданного рубежа. Обучение и optimizer не перезапускаются.",
+        "Пусто — без дополнительных файлов; 900 секунд — диагностические срезы примерно каждые 15 минут.",
+    ),
 }
 
 _INFERENCE_FIELD_HELP: dict[str, tuple[str, str]] = {
@@ -800,10 +831,10 @@ def sanitize_template_config(
     result = {
         key: value for key, value in (fallback or BASE_DEFAULT_CONFIG).items() if key in CONFIG_KEYS
     }
-    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}:
+    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1", "object_f1_v2"}:
         result.update(BASE_DEFAULT_CONFIG)
     if (
-        (config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}
+        (config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1", "object_f1_v2"}
         and result.get("train.pipeline_variant") != (config or {}).get("train.pipeline_variant")
     ):
         result.update(fixed_pipeline_defaults(str((config or {}).get("train.pipeline_variant"))))
@@ -816,12 +847,12 @@ def sanitize_template_config(
     if result.get("train.pipeline_variant") in {"object_f1", "object_f1_v2"} and architecture not in OBJECT_F1_MODEL_NAMES:
         label = "object f1 v2" if result.get("train.pipeline_variant") == "object_f1_v2" else "object f1"
         raise TrainingUIAPIError(f"{label} доступен для SegFormer B0/B1/B2/B3")
-    if result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "object_f1", "object_f1_v2"}:
+    if result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "object_f1", "object_f1_v2"}:
         result.update({key: value for key, value in fixed_pipeline_defaults(str(result["train.pipeline_variant"])).items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = result.get("tile_preparation.tile_size")
         if not isinstance(tile_size, (int, float)) or tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
             raise TrainingUIAPIError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
-        result["tile_preparation.stride"] = tile_size if result["train.pipeline_variant"] in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"} else tile_size // 2
+        result["tile_preparation.stride"] = tile_size if result["train.pipeline_variant"] in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"} else tile_size // 2
         result["train.batch_size"] = next_gen2_train_batch_size(tile_size, architecture)
     elif "tile_preparation.context" not in (config or {}):
         tile_size = int(result.get("tile_preparation.tile_size") or 0)
@@ -972,7 +1003,7 @@ def _template(
     legacy_defaults = deepcopy(BASE_DEFAULT_CONFIG)
     if default_config.get("train.pipeline_variant") == "legacy":
         legacy_defaults.update(default_config)
-    schema["fields"][0]["options"] = ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"]
+    schema["fields"][0]["options"] = ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"]
     if architecture in OBJECT_F1_MODEL_NAMES:
         schema["fields"][0]["options"].extend(["object_f1", "object_f1_v2"])
     schema["pipeline_defaults"] = {"legacy": legacy_defaults}
@@ -1001,6 +1032,9 @@ def _template(
         }
         schema["pipeline_defaults"]["next_gen4_augmentation_v4"] = {
             **NEXT_GEN4_AUGMENTATION_V4_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
+        }
+        schema["pipeline_defaults"]["next_gen4_consistency_v1"] = {
+            **NEXT_GEN4_CONSISTENCY_V1_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
         }
     else:
         schema["fields"][0]["options"] = ["legacy"]

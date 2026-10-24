@@ -30,6 +30,11 @@ Next-gen4 наследует эту оркестрацию, передавая s
 
 ## Список используемых данным модулем модулей и с какой целью
 
+`next_gen4_consistency_v1` передаётся всем прежним фасадам как отдельный профиль v4.
+Оркестратор фиксирует `context_consistency` в ModelSpec и сверяет её при продолжении;
+`diagnostic_checkpoint_interval_sec` передаётся из settings в TrainConfig без изменения
+правил выбора best, нормализации, разбиения и автоматического теста.
+
 - `settings.api` — текущие настройки и путь YAML.
 - `mlflow_adapter.api` — run, метрики, отчёты и артефакты.
 - `dataset_preparing.api` — получить проверенный `PreparedDataset` со сценами.
