@@ -149,9 +149,11 @@ def model_spec(variant=VARIANT):
     return ModelSpec(name="smp_segformer_b0", input_channels=4, output_channels=1, parameters={
         "pipeline_variant": variant, "context_consistency": {**POLICY,
             **({"version": "bidirectional_confident_teacher_kl_v1", "direction_reduction": "mean_of_active_directions"}
-               if variant == "next_gen4_consistency_v3" else {})},
+               if variant in {"next_gen4_consistency_v3", "next_gen4_consistency_v4"} else {}),
+            **({"version": "bidirectional_confident_teacher_kl_with_gt_fallback_v1",
+                "uncovered_supervision": "ground_truth_cross_entropy_v1"} if variant == "next_gen4_consistency_v4" else {})},
         **({"decoder_normalization": {"version": "per_pixel_channel_layer_norm_v1", "epsilon": 1e-5, "affine": True}}
-           if variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3"} else {}),
+           if variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4"} else {}),
         "augmentation_policy": "validity_guard_v4_context_crop_v1",
         "context_crop": {"area_scale": [0.25, 1.0], "ratio": [1.0, 1.0], "probability": 0.5,
             "output_size": 512, "source": "within_retained_train_window"},
@@ -192,7 +194,7 @@ def test_continuation_rejects_different_consistency_policy(monkeypatch):
         _runner._load_or_create_model(settings, deps)
 
 
-@pytest.mark.parametrize("variant", [VARIANT, "next_gen4_consistency_v2", "next_gen4_consistency_v3"])
+@pytest.mark.parametrize("variant", [VARIANT, "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4"])
 def test_periodic_current_snapshots_preserve_one_training_loop_and_best_selection(tmp_path, monkeypatch, variant):
     from mlsystem2.models import _factory
     from mlsystem2.models.api import create_model
@@ -226,6 +228,12 @@ def test_periodic_current_snapshots_preserve_one_training_loop_and_best_selectio
     assert result.diagnostics["checkpoint_selection"]["metric"] == "val_loss"
     assert result.diagnostics["dense_train_windows"]["evaluation_performed"]
     assert all(item.train_context_consistency["attempted_batches"] > 0 for item in result.history)
+    if variant == "next_gen4_consistency_v4":
+        assert sum(item.train_context_consistency["fallback_supervised_pixels"] for item in result.history) > 0
+        for item in result.history:
+            stats = item.train_context_consistency
+            assert stats["mean_context_loss"] == pytest.approx(
+                stats["mean_teacher_contribution"] + stats["mean_fallback_ce_contribution"], abs=1e-6)
     for row in index["checkpoints"]:
         assert row["actual_elapsed_sec"] >= row["scheduled_elapsed_sec"]
         value = torch.load(row["uri"], map_location="cpu", weights_only=True)

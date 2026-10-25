@@ -17,7 +17,7 @@
 - `DatasetClassSettings` — `slug`, `name`, `scenes_file`, `annotation_file`, optional `hard_negative_annotation_file`, `priority`.
 - `DatasetSettings` — `images_dir`, optional legacy-поля `scenes_file`, `annotation_file`, `hard_negative_annotation_file`, optional `annotations_dir`, `classes`, `val_fraction`; свойство `is_multiclass`.
 - `TilePreparationSettings` — `tile_size`, `stride`, `num_workers`, `prefetch_epochs`, `seed`, `augmentation_level`, три sampling factor, `val_positive_factor`, `class_balance`.
-- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|object_f1|object_f1_v2`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits. Next-gen3 наследует ограничения архитектур/тайлов next-gen2; автоматическая политика фона версионируется в сэмплере, новых ручных коэффициентов нет.
+- `TrainSettings` — task/metric/model/channels/checkpoint, `pipeline_variant=legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|object_f1|object_f1_v2`, epochs/batch/device, optimizer/loss параметры, threshold, patience и optional batch/time limits. Next-gen3 наследует ограничения архитектур/тайлов next-gen2; автоматическая политика фона версионируется в сэмплере, новых ручных коэффициентов нет.
 - `NextGenSettings` — validation fold, normalization, validation interval, threshold mode и optional Gaussian A/B.
 - `InferenceSettings` — `checkpoint_uri`, `threshold`, `batch_size`, `device`.
 - `MLflowSettings` — `enabled`, `tracking_uri`, `experiment_name`.
@@ -42,6 +42,10 @@ B0/B1/B2/B3; способ нормализации декодера фиксир
 `next_gen4_consistency_v3` — отдельное допустимое значение `TrainSettings.pipeline_variant`
 с теми же ограничениями SMP B0/B1/B2/B3, размеров, seed и optimizer, что у v2.
 Параметры двунаправленного штрафа фиксированы профилем, новых ручных настроек нет.
+
+`next_gen4_consistency_v4` — отдельное значение `TrainSettings.pipeline_variant`,
+наследующее фиксированные настройки SMP-профиля v3. Надзор неохваченных пикселей
+по train-эталону задан версией; новых ручных коэффициентов нет.
 
 ## Список используемых данным модулем модулей и с какой целью
 

@@ -47,6 +47,12 @@ epsilon:1e-5,affine:true}` проверяется до создания/загр
 Остальные поля политики прежние. Несовместимая версия отвергается до создания/загрузки;
 forward не содержит дополнительных веток. Старые checkpoint не переинтерпретируются.
 
+`next_gen4_consistency_v4` сохраняет ту же модель и требует точную политику
+`bidirectional_confident_teacher_kl_with_gt_fallback_v1` с прежними полями v3 и
+`uncovered_supervision=ground_truth_cross_entropy_v1`. Проверки выполняются до
+создания/загрузки; маркер LayerNorm обязателен. Изменение loss принадлежит train,
+forward и инференс новых веток не содержат; старые checkpoint не преобразуются.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.

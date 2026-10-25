@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">Согласованность v4: надзор для неохваченных пикселей</title>
+  <desc id="desc">Поясняющая схема обучения. Два контекста одного train-окна используют KL по правильному уверенному учителю либо CE по обучающему эталону, если ни один учитель не подходит. Невалидные пиксели исключены, общий вес 0,25.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#66758a"/></marker></defs>
+  <rect width="1120" height="560" rx="24" fill="#f3f6fc"/>
+  <g font-family="Arial,sans-serif" fill="#182b44">
+    <text x="48" y="54" font-size="27" font-weight="700">Согласованность v4: цель для неохваченных пикселей</text>
+    <text x="48" y="85" font-size="16" fill="#52657d">Поясняющая схема обучения, не результат инференса</text>
+    <rect x="48" y="125" width="252" height="166" rx="16" fill="#fff" stroke="#c8d3e2"/>
+    <text x="72" y="160" font-size="19" font-weight="700">Один train-вход</text>
+    <text x="72" y="191" font-size="16">Полное окно и вырезка</text>
+    <text x="72" y="217" font-size="16">Те же пиксели и target</text>
+    <text x="72" y="254" font-size="15" fill="#52657d">Только допустимая разметка</text>
+    <path d="M302 209H359" stroke="#66758a" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="372" y="125" width="305" height="166" rx="16" fill="#e5edfd" stroke="#a2b8de"/>
+    <text x="396" y="160" font-size="19" font-weight="700">Проверка двух учителей</text>
+    <text x="396" y="192" font-size="16">Правильный класс по target</text>
+    <text x="396" y="219" font-size="16">Уверенность строго &gt; 0,9</text>
+    <text x="396" y="254" font-size="15" fill="#52657d">Учитель отсоединён от графа</text>
+    <path d="M679 177H739" stroke="#66758a" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="752" y="125" width="320" height="100" rx="16" fill="#e1f2eb" stroke="#8dbca7"/>
+    <text x="776" y="160" font-size="19" font-weight="700">Есть подходящий учитель</text>
+    <text x="776" y="194" font-size="17">KL для другого контекста</text>
+    <path d="M679 260H709V309H739" fill="none" stroke="#66758a" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="752" y="257" width="320" height="111" rx="16" fill="#fff0d9" stroke="#d8b26c"/>
+    <text x="776" y="293" font-size="19" font-weight="700">Оба учителя не подходят</text>
+    <text x="776" y="326" font-size="17">CE по train-эталону</text>
+    <text x="776" y="350" font-size="16">для обоих контекстов</text>
+    <rect x="48" y="398" width="1024" height="104" rx="16" fill="#182b44"/>
+    <text x="76" y="436" font-size="21" fill="#fff" font-weight="700">Равный вес классов → среднее направлений → общий вес 0,25</text>
+    <text x="76" y="472" font-size="17" fill="#d8e4f2">Невалидные пиксели исключены. Пороги, Gaussian и постобработка не меняются.</text>
+    <text x="48" y="536" font-size="15" fill="#52657d">Качество и отсутствие дефектов подтверждаются новым обучением и оценкой всей сцены.</text>
+  </g>
+</svg>

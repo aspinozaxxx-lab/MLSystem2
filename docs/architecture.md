@@ -1084,7 +1084,7 @@ HTTP-кэш обязан перепроверять ETag; ответ 304 раз�
 старые шаблоны переводятся на `next_gen2` при штатном обновлении каталога.
 Исторические jobs, MLflow и checkpoint сохраняют `next_gen`; его исполнение и чтение оставлены
 для уже созданных заданий и результатов. Новые HTTP API и миграции БД не требуются.
-`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|object_f1|object_f1_v2`. Конфигурация и checkpoint без
+`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|object_f1|object_f1_v2`. Конфигурация и checkpoint без
 этого поля всегда трактуются как `legacy`; его оконный split, balanced validation, аугментации только
 positive/hard-negative, cosine scheduler, пороги и обработка nodata не меняются. `next_gen` не является
 отдельным верхнеуровневым модулем: он реализован приватными ветками тех же фасадов `settings`,
@@ -1483,6 +1483,47 @@ split, sampler, основной CE/Tversky, scheduler и выбор best по v
 Gaussian, пороги и постобработка прежние; старые профили и веса не преобразуются.
 Профиль и статья со схемой доступны как `next-gen4-consistency-v3`. Обратная ветка
 устраняет одностороннюю слепую зону, но не является обещанием устранения всех дефектов.
+
+## Конвейер next-gen4-consistency-v4
+
+`train.pipeline_variant=next_gen4_consistency_v4` — отдельная версия v3 в существующих
+модулях, без изменения модели, данных, split, raw-нормализации, sampler, аугментаций,
+основного CE/Tversky, scheduler, выбора best или рабочего инференса.
+Обязательная политика `context_consistency.version=bidirectional_confident_teacher_kl_with_gt_fallback_v1`
+сохраняет прежние поля v3, `direction_reduction=mean_of_active_directions` и добавляет
+`uncovered_supervision=ground_truth_cross_entropy_v1`. Попиксельная LayerNorm декодера
+и её точный маркер наследуются от v2/v3. При создании, загрузке, продолжении и экспорте
+проверяется вся политика; старые checkpoint не преобразуются и не переинтерпретируются.
+
+Для двух eval-прогнозов одного train-входа и его немасштабированной вырезки сначала
+строятся прежние маски правильного уверенного (>0,9) учителя. На их объединённом
+дополнении внутри допустимой обучающей разметки ни один учитель не подходит.
+Только там оба контекста получают прямой CrossEntropy по target. Невалидные пиксели,
+nodata, padding и неоднозначные class-specific negative области исключены; target
+таких пикселей безопасно заменяется нулём до gather, но не включается в loss.
+Собственный уверенный неверный прогноз не может стать учителем; target берётся
+только из текущего retained-train batch, никогда из внешней тестовой маски.
+
+Для каждого направления KL на охваченных учителем пикселях и CE на неохваченных
+образуют одну попиксельную функцию потерь. Она усредняется отдельно по каждому
+присутствующему классу и затем поровну между классами. Активные направления
+усредняются с общим весом 0,25 и прежней вероятностью 0,5 — вес не удваивается.
+Учителя отсоединены от графа; оба ученика получают градиент. Сохраняются два
+дополнительных eval-forward, восстановление состояний модулей и один optimizer step.
+Если новых неохваченных пикселей нет, поведение совпадает с v3.
+
+История сохраняет прежние KL-счётчики учителей и отдельно `fallback_selected_batches`,
+`fallback_supervised_pixels` (сумма двух направлений), `context_loss_sum`,
+`teacher_contribution_sum`, `fallback_ce_contribution_sum`, а также их средние
+`mean_context_loss`, `mean_teacher_contribution`, `mean_fallback_ce_contribution`.
+Последние два вклада суммируются в общий невзвешенный loss контекста; множитель 0,25
+применяется один раз. Это посещения пикселей, не уникальная площадь снимка.
+Периодические текущие срезы, внутренние dense-аудиты и выбор best прежние.
+Validation/test не используют дополнительную функцию потерь. Новых модулей,
+HTTP API, таблиц, ручных коэффициентов или изменений старых профилей нет.
+Профиль и статья со схемой доступны как `next-gen4-consistency-v4`.
+Новый надзор закрывает доказанную слепую зону; устранение кругов проверяется
+обучением и всей сценой, не обещается по одному градиентному тесту.
 
 ## Конвейер object f1
 

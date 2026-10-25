@@ -41,6 +41,12 @@ models; loaders, loss, split, глобальные train-границы и вы�
 `bidirectional_confident_teacher_kl_v1` и усреднение активных направлений. Продолжение
 строго сверяет эту политику и прежний нормализатор; данные и критерий best не меняются.
 
+`next_gen4_consistency_v4` наследует оркестрацию v3 и сохраняет точную политику
+`bidirectional_confident_teacher_kl_with_gt_fallback_v1` с
+`uncovered_supervision=ground_truth_cross_entropy_v1`. Продолжение сверяет всю
+политику и нормализатор. Источник дополнительного надзора — только target текущего
+train batch; данные, split, нормализация, основной loss и выбор best прежние.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `settings.api` — текущие настройки и путь YAML.

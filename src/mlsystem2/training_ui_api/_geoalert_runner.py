@@ -509,7 +509,7 @@ def _ensure_runtime_export(
         {
             "runtime_contract": 8 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
             **(_object_inference_metadata(config.get("pipeline_variant"))
-               if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"} else {}),
+               if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4"} else {}),
             "checkpoint_sha256": checkpoint_sha,
             "tile_size": int(config.get("tile_size") or 768),
             "threshold": config.get("threshold"),
@@ -574,7 +574,7 @@ def _ensure_runtime_export(
                 ),
                 external_manifest=external_manifest,
                 probability_output=model_marker.get("output_kind") in {"probabilities", "object_probabilities"},
-                pad_edges=model_marker.get("pipeline_variant") in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"},
+                pad_edges=model_marker.get("pipeline_variant") in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4"},
                 object_output=model_marker.get("output_kind") == "object_probabilities",
                 object_separation=model_marker.get("object_separation"),
                 threshold=(
