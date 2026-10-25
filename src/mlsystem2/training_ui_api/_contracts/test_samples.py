@@ -8,8 +8,30 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mlsystem2.models.contracts import LoadedCheckpoint
+
 from .catalog import ImageryType
 from .common import RuntimeProgress
+
+
+class NativeTileInferenceRequest(BaseModel):
+    """Один TIFF и уже загруженная eval-сеть, без сущностей очереди."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    loaded: LoadedCheckpoint
+    image_path: str = Field(min_length=1)
+    device: Literal["cpu", "cuda"] = "cpu"
+    postprocess_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class NativeTileInferenceResult(BaseModel):
+    """Штатная маска в памяти и фактически применённый профиль."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    mask: object
+    effective_config: dict[str, Any]
 
 
 class TestSampleCreate(BaseModel):
@@ -444,6 +466,8 @@ class TestSampleBatchInfo(BaseModel):
 
 
 __all__ = [
+    "NativeTileInferenceRequest",
+    "NativeTileInferenceResult",
     "TestSampleCard",
     "TestSampleClassIndexItem",
     "TestSampleClassIndexResponse",

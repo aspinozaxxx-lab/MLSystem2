@@ -68,8 +68,19 @@ Frontend — React + TypeScript + Vite SPA. TypeScript-типы генериру
 - `get_openapi_schema() -> dict[str, Any]` - возвращает OpenAPI-схему сервиса.
 - `main() -> None` - запускает `uvicorn` для сервиса.
 - `worker_main() -> None` - отдельно запускает исполнителей общей очереди и batch-задач тестовых разметок.
+- `infer_native_tile(request: NativeTileInferenceRequest) -> NativeTileInferenceResult` — синхронно
+  вычислить маску ровно одного TIFF штатным бинарным Gaussian-runner семейства next-gen2/3/4.
+  Загруженная через `models` сеть уже должна находиться на выбранном устройстве в eval.
+  Размер окна берётся из checkpoint, шаг равен половине окна, порог и batch — из штатного профиля,
+  края дополняются. Постобработка передаётся явно. Вызов не обращается к БД/очереди/MLflow,
+  не сохраняет файлы и не управляет занятостью GPU; эти проверки выполняет вызывающая сторона.
 
 ## Публичные контракты
+
+`NativeTileInferenceRequest`: `loaded` — публичный `models.LoadedCheckpoint`, `image_path` — один TIFF,
+`device=cpu|cuda` (по умолчанию CPU), `postprocess_config` — явные параметры прежней постобработки.
+`NativeTileInferenceResult`: `mask` — двумерный NumPy-массив uint8 и `effective_config` — фактические
+размер окна, шаг, context, порог, batch и профиль. Это Python-контракты, не новые HTTP endpoints.
 
 `AnnotationVersionUsage`: `dataset_key`, `dataset_name`, `indirect` (использование через управляемый набор).
 `AnnotationVersionInfo`: `id`, `name`, `revision`, `created_at`, `updated_at`, `usages`. `AnnotationVersionCatalog`: `image_id`, `revision`,
@@ -483,7 +494,8 @@ v3. Экспорт сохраняет полную политику KL с над
 
 ## Список используемых данным модулем модулей и с какой целью
 
-- `models.api` - получить публичный список поддерживаемых архитектур и прочитать выбранный последний чекпойнт на CPU через штатный загрузчик.
+- `models.api/contracts` - получить публичный список архитектур, прочитать выбранный checkpoint на CPU
+  и принять публичный `LoadedCheckpoint` для синхронного однотайлового расчёта.
 - `mlflow_adapter.api` - получить и создать MLflow experiments, прочитать лучший нативный checkpoint либо произвольный артефакт завершённого run и скачать его для инференса; сервис не пишет MLflow-метрики.
 - `mlflow_adapter.contracts` - передать публичные DTO experiment, нативного checkpoint и артефакта завершённого run.
 - `settings.contracts` - валидировать YAML-настройки, сформированные для запуска training CLI.

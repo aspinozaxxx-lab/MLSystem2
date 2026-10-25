@@ -1570,6 +1570,37 @@ def _apply_native_object_precision(torch: Any, config: dict[str, Any]) -> None:
             backend.allow_tf32 = False
 
 
+def _infer_native_tile(request):
+    """Единственный синхронный вход к прежнему runner без БД и очереди."""
+    from .contracts import NativeTileInferenceResult, TrainingUIAPIError
+
+    loaded = request.loaded
+    tile_size = loaded.artifact.metadata.get("sample_size")
+    if not isinstance(tile_size, int) or isinstance(tile_size, bool) or tile_size not in (512, 768, 1024, 1536):
+        raise TrainingUIAPIError("Checkpoint должен явно сохранять поддерживаемый размер окна")
+    variant = loaded.artifact.metadata.get("pipeline_variant") or loaded.model.spec.parameters.get("pipeline_variant")
+    if variant in {"object_f1", "object_f1_v2"}:
+        raise TrainingUIAPIError("Однотайловый вызов поддерживает только бинарный Gaussian-профиль next-gen2/3/4")
+    configuration = _native_inference_config(
+        loaded, {"tile_size": tile_size, "stride": tile_size // 2, "context": 0},
+    )
+    if configuration.get("inference_merge") != "gaussian_probabilities" or loaded.model.spec.output_channels != 1:
+        raise TrainingUIAPIError("Однотайловый вызов поддерживает только бинарный Gaussian-профиль next-gen2/3/4")
+    model = loaded.model.model
+    if any(module.training for module in model.modules()):
+        raise TrainingUIAPIError("Перед однотайловым инференсом сеть должна быть переведена в eval")
+    import torch
+
+    mask = _infer_test_tile_mask(
+        torch=torch, model=model, input_channels=loaded.model.spec.input_channels,
+        image_path=Path(request.image_path), tile_size=tile_size, stride=tile_size // 2,
+        threshold=configuration["threshold"], device=request.device,
+        postprocess_profile=_postprocess_profile_from_config(_POSTPROCESS_NONE, request.postprocess_config),
+        context=0, notebook=True, batch_size=configuration["batch_size"], pad_edges=True,
+    )
+    return NativeTileInferenceResult(mask=mask, effective_config=configuration)
+
+
 def _native_inference_config(loaded: object, config: dict[str, Any]) -> dict[str, Any]:
     """Отделить порог диагностики обучения от профиля eval-ноутбука."""
     metadata = getattr(getattr(loaded, "artifact", None), "metadata", None) or {}
