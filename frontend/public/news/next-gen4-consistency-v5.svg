@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Согласованность v5: полный вход и изменённый контекст внимания</title>
+  <desc id="desc">Поясняющая схема обучения: внутренняя вырезка без градиента даёт отсоединённые K/V всей сети, полный неизменный вход получает надзор по допустимой train-разметке. Инференс без подмены.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0L12 6L0 12" fill="none" stroke="#167f79" stroke-width="2"/></marker>
+    <pattern id="water" width="54" height="42" patternUnits="userSpaceOnUse"><rect width="54" height="42" fill="#c7eeeb"/><path d="M0 22Q14 9 28 22T56 22" fill="none" stroke="#63b9b0" stroke-width="3"/></pattern>
+  </defs>
+  <rect width="1600" height="900" rx="24" fill="#f3f8f6"/>
+  <g font-family="Arial,DejaVu Sans,sans-serif" fill="#173b3a">
+    <text x="64" y="72" font-size="22" font-weight="700" letter-spacing="2" fill="#167f79">ПОЯСНЯЮЩАЯ СХЕМА ОБУЧЕНИЯ</text>
+    <text x="64" y="130" font-size="44" font-weight="700">Меняется контекст, а не проверяемые пиксели</text>
+    <text x="64" y="176" font-size="24" fill="#496965">Одинаковое правило для допустимых обучающих окон. Без координат отдельных дефектов.</text>
+    <rect x="64" y="220" width="425" height="522" rx="20" fill="white" stroke="#c3dcd5" stroke-width="2"/>
+    <text x="96" y="264" font-size="26" font-weight="700">Полный обучающий вход</text>
+    <rect x="96" y="292" width="360" height="276" rx="12" fill="url(#water)"/>
+    <path d="M96 292H456V375Q391 348 368 307L349 292ZM96 568V489Q134 496 154 533L170 568Z" fill="#c9c0a3"/>
+    <rect x="194" y="357" width="164" height="164" rx="3" fill="none" stroke="#164f4a" stroke-width="4" stroke-dasharray="10 8"/>
+    <text x="96" y="610" font-size="24" font-weight="700">Размер и пиксели сохранены</text>
+    <text x="96" y="650" font-size="22">Вырезка только внутри train-входа</text>
+    <text x="96" y="689" font-size="22">Сторона 50% или 75%, без масштаба</text>
+    <rect x="562" y="220" width="442" height="218" rx="20" fill="#e3f3ef" stroke="#94c6b7" stroke-width="2"/>
+    <text x="593" y="267" font-size="26" font-weight="700">Вырезка → та же сеть</text>
+    <text x="593" y="312" font-size="23">Без градиента, в eval-режиме</text>
+    <text x="593" y="356" font-size="25" font-weight="700" fill="#167f79">Отсоединённые K/V внимания</text>
+    <text x="593" y="397" font-size="22">Только временно, без новых весов</text>
+    <rect x="562" y="507" width="442" height="235" rx="20" fill="white" stroke="#94c6b7" stroke-width="2"/>
+    <text x="593" y="555" font-size="26" font-weight="700">Полный вход → та же сеть</text>
+    <text x="593" y="601" font-size="23">Прежняя сетка запросов внимания</text>
+    <text x="593" y="644" font-size="23">K/V-контекст приходит из вырезки</text>
+    <text x="593" y="691" font-size="24" font-weight="700" fill="#167f79">Эта ветвь получает градиент</text>
+    <rect x="1090" y="220" width="446" height="522" rx="20" fill="white" stroke="#c3dcd5" stroke-width="2"/>
+    <text x="1123" y="270" font-size="27" font-weight="700">Надзор по train-разметке</text>
+    <text x="1123" y="329" font-size="26" font-weight="700" fill="#167f79">CE всех допустимых пикселей</text>
+    <text x="1123" y="376" font-size="23">Равный вес присутствующих классов</text>
+    <text x="1123" y="422" font-size="23">Общий множитель 0,25 один раз</text>
+    <text x="1123" y="468" font-size="23">Вероятность прохода 0,5</text>
+    <line x1="1123" y1="501" x2="1504" y2="501" stroke="#d5e6df" stroke-width="2"/>
+    <text x="1123" y="547" font-size="23">Nodata и неоднозначность исключены</text>
+    <text x="1123" y="590" font-size="23">Один optimizer step после backward</text>
+    <text x="1123" y="633" font-size="23">Режимы и перехватчики восстановлены</text>
+    <text x="1123" y="689" font-size="25" font-weight="700">Инференс — без подмены</text>
+    <g fill="none" stroke="#167f79" stroke-width="4" marker-end="url(#arrow)">
+      <path d="M489 329H548"/>
+      <path d="M489 624H548"/>
+      <path d="M783 438V491"/>
+      <path d="M1004 624H1075"/>
+    </g>
+    <rect x="64" y="783" width="1472" height="70" rx="14" fill="#fff0d5"/>
+    <text x="88" y="826" font-size="24" fill="#77551c">Это схема механизма, не снимок и не доказательство качества. Результат проверяется обучением и всей сценой.</text>
+  </g>
+</svg>

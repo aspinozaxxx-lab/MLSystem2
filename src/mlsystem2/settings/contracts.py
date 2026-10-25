@@ -126,7 +126,7 @@ class TrainSettings(BaseModel):
 
     task: Literal["binary", "multiclass"] = "binary"
     quality_metric: Literal["pixel", "objects"] = "pixel"
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "object_f1", "object_f1_v2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"] = "legacy"
     model_name: str
     input_channels: int = Field(default=4, gt=0)
     output_channels: int = Field(default=1, gt=0)
@@ -156,7 +156,7 @@ class TrainSettings(BaseModel):
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
         if self.task == "multiclass" and self.loss not in multiclass_losses | {"cross_entropy_tversky"}:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")
-        if self.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "object_f1", "object_f1_v2"}:
+        if self.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"}:
             if self.loss != "cross_entropy_tversky":
                 raise ValueError("next-gen2 требует CrossEntropy + Tversky")
             if self.pipeline_variant in {"object_f1", "object_f1_v2"} and self.task != "binary":
@@ -232,7 +232,7 @@ class SystemSettings(BaseModel):
                 raise ValueError("multiclass per-image dataset требует минимум 3 output_channels")
         elif self.train.task != "binary":
             raise ValueError("binary dataset требует train.task=binary")
-        if self.train.pipeline_variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4"} and self.train.model_name not in {
+        if self.train.pipeline_variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} and self.train.model_name not in {
             "smp_segformer_b0", "smp_segformer_b1", "smp_segformer_b2", "smp_segformer_b3",
         }:
             raise ValueError("Профиль попиксельной согласованности поддерживает только SMP SegFormer B0/B1/B2/B3")
@@ -241,7 +241,7 @@ class SystemSettings(BaseModel):
             or self.train.quality_metric != "objects"
         ):
             raise ValueError("object f1 требует SegFormer B0/B1/B2/B3 и объектовую метрику")
-        if self.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "object_f1", "object_f1_v2"}:
+        if self.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"}:
             batch_sizes = {
                 "segformer_b0": (16, 8, 4, 2), "smp_segformer_b0": (16, 8, 4, 2),
                 "smp_segformer_b1": (8, 4, 2, 1), "smp_segformer_b2": (4, 2, 1, 1),
@@ -257,7 +257,7 @@ class SystemSettings(BaseModel):
                 raise ValueError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
             fixed = (
                 (self.dataset.val_fraction, 0.2),
-                (self.tile_preparation.stride, self.tile_preparation.tile_size if self.train.pipeline_variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4"} else self.tile_preparation.tile_size // 2),
+                (self.tile_preparation.stride, self.tile_preparation.tile_size if self.train.pipeline_variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} else self.tile_preparation.tile_size // 2),
                 (self.tile_preparation.context, 0), (self.tile_preparation.augmentation_level, 3),
                 (self.tile_preparation.seed, 42),
                 (self.train.batch_size, batch_sizes[self.train.model_name][(512, 768, 1024, 1536).index(self.tile_preparation.tile_size)]),

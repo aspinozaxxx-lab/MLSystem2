@@ -259,7 +259,7 @@ class TrainingResultInfo(BaseModel):
     started_by: str | None = Field(default=None, title="Автор запуска", description="Канонический логин запустившего этот этап обучения; null, если не сохранён.")
     dataset_number: int | None = Field(default=None, ge=1, title="Постоянный номер сети в датасете")
     comment: str = Field(default="", title="Комментарий к этому этапу обучения")
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "object_f1", "object_f1_v2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"] = "legacy"
     validation_fold: int = Field(default=0, ge=0)
     is_primary: bool = False
     can_continue_training: bool = False

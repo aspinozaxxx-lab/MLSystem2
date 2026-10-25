@@ -5,6 +5,50 @@ from __future__ import annotations
 from .contracts import TrainError
 
 
+def full_query_context_loss(torch, model, images, masks, valid_pixels, class_negative, *, seed, epoch, batch_index):
+    """Обучить полный query-вход по train-target при отсоединённом контексте вырезки."""
+    stats = {"attempted_batches": 1, "selected_batches": 0, "supervised_pixels": 0,
+             "reference_valid_pixels": 0, "half_side_selected_batches": 0,
+             "three_quarter_side_selected_batches": 0, "context_loss_sum": 0.0}
+    height, width = images.shape[-2:]
+    if min(height, width) < 64:
+        return None, stats
+    generator = torch.Generator(device="cpu").manual_seed(seed + epoch * 1_000_003 + batch_index * 97)
+    if float(torch.rand((), generator=generator)) >= 0.5:
+        return None, stats
+    fraction_index = int(torch.randint(2, (), generator=generator))
+    fraction = (0.5, 0.75)[fraction_index]
+    side = max(32, int(min(height, width) * fraction) // 32 * 32)
+    top = int(torch.randint((height - side) // 32 + 1, (), generator=generator)) * 32
+    left = int(torch.randint((width - side) // 32 + 1, (), generator=generator)) * 32
+    region = (..., slice(top, top + side), slice(left, left + side))
+    target = masks[:, 0].long() if masks.ndim == 4 else masks.long()
+    valid = torch.ones_like(target, dtype=torch.bool)
+    if valid_pixels is not None:
+        valid &= valid_pixels[:, 0] if valid_pixels.ndim == 4 else valid_pixels
+    if class_negative is not None:
+        valid &= ~class_negative.any(dim=1)
+    if not valid.any() or not valid[region].any():
+        return None, stats
+    states = [(module, module.training) for module in model.modules()]
+    try:
+        model.eval()
+        logits = model(images, return_two_class_logits=True, context_reference=images[region].contiguous())
+        if ((target[valid] < 0) | (target[valid] >= logits.shape[1])).any():
+            raise TrainError("Недопустимый класс допустимого query-пикселя согласованности")
+        labels = target.masked_fill(~valid, -100)
+        ce = torch.nn.functional.cross_entropy(logits, labels, reduction="none", ignore_index=-100)
+        classes = [valid & (target == index) for index in range(logits.shape[1]) if (valid & (target == index)).any()]
+        loss = torch.stack([ce[mask].mean() for mask in classes]).mean()
+        stats.update(selected_batches=1, supervised_pixels=int(valid.sum().item()),
+                     reference_valid_pixels=int(valid[region].sum().item()), context_loss_sum=float(loss.detach().item()))
+        stats[("half_side_selected_batches", "three_quarter_side_selected_batches")[fraction_index]] = 1
+        return 0.25 * loss, stats
+    finally:
+        for module, training in states:
+            module.training = training
+
+
 def context_consistency_loss(torch, model, images, masks, valid_pixels, class_negative, *, seed, epoch, batch_index, bidirectional=False, ground_truth_fallback=False):
     """Вернуть дополнительный KL-граф; состояния модулей и исходный вход не изменять."""
     stats = {"attempted_batches": 1, "selected_batches": 0, "supervised_pixels": 0,

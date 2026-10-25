@@ -56,6 +56,16 @@ KL и CE усредняются по присутствующим классам
 KL-счётчики относятся только к уверенным учителям; общий `selected_batches` в v4
 включает и пакеты только с прямым надзором. Validation/test не получают новый loss.
 
+`next_gen4_consistency_v5` сохраняет цикл, но дополнительный CE обучает все допустимые
+пиксели полного query-входа при отсоединённых K/V случайной внутренней вырезки.
+Train выбирает вырезку и full valid-mask, исключает class-negative, усредняет CE
+равными средними присутствующих классов и применяет вес0,25 один раз. Два прохода
+eval и один optimizer step, режимы восстанавливаются при ошибке. Attention выполняет
+models через аргумент `context_reference`; private-код models не импортируется.
+История содержит attempted/selected batches, supervised_pixels, reference_valid_pixels,
+half_side_selected_batches, three_quarter_side_selected_batches, context_loss_sum,
+mean_context_loss; направленных KL/teacher/fallback-счётчиков у v5 нет.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `models.contracts` - публичный контракт модели, которую нужно обучить.

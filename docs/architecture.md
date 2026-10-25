@@ -1084,7 +1084,7 @@ HTTP-кэш обязан перепроверять ETag; ответ 304 раз�
 старые шаблоны переводятся на `next_gen2` при штатном обновлении каталога.
 Исторические jobs, MLflow и checkpoint сохраняют `next_gen`; его исполнение и чтение оставлены
 для уже созданных заданий и результатов. Новые HTTP API и миграции БД не требуются.
-`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|object_f1|object_f1_v2`. Конфигурация и checkpoint без
+`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|next_gen4_consistency_v5|object_f1|object_f1_v2`. Конфигурация и checkpoint без
 этого поля всегда трактуются как `legacy`; его оконный split, balanced validation, аугментации только
 positive/hard-negative, cosine scheduler, пороги и обработка nodata не меняются. `next_gen` не является
 отдельным верхнеуровневым модулем: он реализован приватными ветками тех же фасадов `settings`,
@@ -1524,6 +1524,53 @@ HTTP API, таблиц, ручных коэффициентов или изме�
 Профиль и статья со схемой доступны как `next-gen4-consistency-v4`.
 Новый надзор закрывает доказанную слепую зону; устранение кругов проверяется
 обучением и всей сценой, не обещается по одному градиентному тесту.
+
+## Конвейер next-gen4-consistency-v5
+
+`train.pipeline_variant=next_gen4_consistency_v5` — отдельная версия в существующих
+модулях. Она сохраняет SMP SegFormer B0/B1/B2/B3, попиксельную LayerNorm v2,
+сохранённую train-нормализацию, подготовку v4, sampler, split, seed, основной
+CE/Tversky, scheduler и выбор best по val loss. Старые профили и веса не меняются.
+Новых верхнеуровневых модулей, таблиц или HTTP endpoints нет.
+
+Дополнительный надзор `full_query_detached_crop_kv_gt_v1` разрывает зависимость
+класса пикселя от удалённого attention-контекста. С вероятностью 0,5 из готового
+train-входа выбирается немасштабированная квадратная вырезка со стороной 0,5/0,75
+и координатами, кратными32. В eval и без градиента та же сеть получает вырезку;
+models временно сохраняет отсоединённые K/V-проекции всех attention-блоков encoder.
+Затем eval-проход с графом получает весь исходный вход, без изменения его query-сетки,
+пикселей или нормализации, но с этими K/V. Временные hooks удаляются в `finally`,
+никакие дополнительные параметры/буферы либо контекст не сохраняются в checkpoint.
+Ни соседние окна, ни val/test-пиксели не читаются.
+
+По всем допустимым размеченным пикселям полного query-входа вычисляется CE:
+сначала среднее внутри каждого присутствующего класса, затем равное среднее классов
+и общий вес0,25 ровно один раз. Invalid/nodata и неоднозначные class-negative
+исключены; при пустом допустимом query либо пустой допустимой вырезке надзора нет.
+Уверенные учителя, KL, fallback и усреднение направлений в v5 не используются.
+Режимы модулей восстанавливает train, один optimizer step следует после основного
+и дополнительного backward. Градиент источника K/V отсутствует; query-ветвь обучается.
+
+`ModelSpec.parameters.context_consistency` строго равен
+`{version:full_query_detached_crop_kv_gt_v1,weight:0.25,probability:0.5,
+crop_side_fractions:[0.5,0.75],source:within_retained_train_window,evaluation_mode:true,
+class_balance:true,reference:detached_same_model_crop_kv_v1,
+supervision:full_query_ground_truth_cross_entropy_v1}`. Маркер `decoder_normalization`
+прежний и обязателен. Создание/загрузка и resume строго сверяют политику.
+Только модель v5 поддерживает дополнительный аргумент forward `context_reference`
+в eval-режиме; без него PyTorch/ONNX и штатный инференс полностью сохраняют прежнюю
+формулу и ABI. Работа с attention принадлежит models; выбор вырезки, valid-mask,
+цели, loss и восстановление режимов — train.
+
+История `train_context_consistency` содержит attempted/selected batches,
+supervised_pixels полного query, reference_valid_pixels, счётчики двух долей вырезки,
+context_loss_sum и mean_context_loss до веса0,25. Пиксели — повторные посещения,
+не уникальная площадь. Не публикуются фиктивные нулевые KL/teacher/fallback-метрики.
+UI и шаблоны предлагают отдельный профиль с прежними размером и условиями остановки;
+новость имеет постоянный адрес `#/news/next-gen4-consistency-v5` и явно обозначенную схему.
+Правило общее для допустимых train-входов, не содержит координат дефектов.
+Причинные пробы обосновывают эксперимент, но устранение кругов устанавливается
+новым обучением, плотными контрольными окнами и всей проверяемой сценой, не обещается заранее.
 
 ## Конвейер object f1
 

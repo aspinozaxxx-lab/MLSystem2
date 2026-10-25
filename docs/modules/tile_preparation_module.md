@@ -46,6 +46,11 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 Новых окон или источников разметки нет; дополнение масок учителей и CE вычисляет
 train только по допустимому target уже выбранного обучающего batch.
 
+`TileDataloaderRequest.pipeline_variant=next_gen4_consistency_v5` полностью сохраняет
+подготовку v4: тот же raw-вход, split, sampler, защищённые аугментации, train-only
+статистика и dense-loader. Вырезку K/V формирует train внутри готового batch;
+tile_preparation не читает для неё соседние окна и не меняет разметку.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `inference.api` — единая сетка окон полного покрытия для object_f1.
