@@ -34,7 +34,7 @@ def test_onnx_preserves_probabilities_instead_of_thresholding(tmp_path):
 
 @pytest.mark.parametrize("override", [None, 0.8])
 @pytest.mark.parametrize("tile_size,channels", [(512, 4), (768, 3), (1024, 4), (1536, 3)])
-@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"])
+@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"])
 def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, override, tile_size, channels, variant):
     metadata = {"pipeline_variant": variant, "sample_size": tile_size,
                 "inference_context": 0, "confidence_threshold": 0.5}
@@ -42,12 +42,12 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         artifact=SimpleNamespace(metadata=metadata),
         model=SimpleNamespace(model=object(), spec=SimpleNamespace(
             input_channels=channels, output_channels=1, parameters={"task": "binary"})))
-    if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
+    if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
         loaded.model.spec.parameters["preprocessing"] = {"mode": "global_minmax", "low": [10] * channels,
             "high": [200] * channels, "source": "retained_train_windows"}
     if variant == "next_gen4_augmentation_v3":
         loaded.model.spec.parameters["augmentation_policy"] = "validity_guard_v3"
-    if variant in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
+    if variant in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
         loaded.model.spec.parameters.update(augmentation_policy="validity_guard_v4_context_crop_v1", context_crop={
             "area_scale": [0.25, 1.0], "ratio": [1.0, 1.0], "probability": 0.5,
             "output_size": tile_size, "source": "within_retained_train_window"})
@@ -59,14 +59,14 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
             "source": "within_retained_train_window", "evaluation_mode": True, "class_balance": True,
             **({"direction_reduction": "mean_of_active_directions"} if variant in {"next_gen4_consistency_v3", "next_gen4_consistency_v4"} else {}),
             **({"uncovered_supervision": "ground_truth_cross_entropy_v1"} if variant == "next_gen4_consistency_v4" else {})}
-    if variant in {"next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
+    if variant in {"next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
         loaded.model.spec.parameters["context_consistency"] = {
             "version": "full_query_detached_crop_kv_with_reference_gt_v1" if variant == "next_gen4_consistency_v6" else "full_query_detached_crop_kv_gt_v1", "weight": .25, "probability": .5,
             "crop_side_fractions": [.5, .75], "source": "within_retained_train_window",
             "evaluation_mode": True, "class_balance": True, "reference": "detached_same_model_crop_kv_v1",
             "supervision": "query_and_reference_ground_truth_cross_entropy_v1" if variant == "next_gen4_consistency_v6" else "full_query_ground_truth_cross_entropy_v1",
             **({"context_reduction": "mean_of_query_and_reference"} if variant == "next_gen4_consistency_v6" else {})}
-    if variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
+    if variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
         loaded.model.spec.parameters["decoder_normalization"] = {
             "version": "per_pixel_channel_layer_norm_v1", "epsilon": 1e-5, "affine": True}
     monkeypatch.setattr(_model_export, "_load_binary_checkpoint", lambda _: loaded)
@@ -88,15 +88,15 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         expected_threshold = 0.9 if override is None else override
         assert info["threshold"] == expected_threshold
         assert info["pipeline_variant"] == variant
-        if variant in {"next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
+        if variant in {"next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
             assert info["context_consistency"] == loaded.model.spec.parameters["context_consistency"]
-        if variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
+        if variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
             assert info["decoder_normalization"] == loaded.model.spec.parameters["decoder_normalization"]
-        if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
+        if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
             assert info["preprocessing"] == loaded.model.spec.parameters["preprocessing"]
         if variant == "next_gen4_augmentation_v3":
             assert info["augmentation_policy"] == "validity_guard_v3"
-        if variant in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
+        if variant in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
             assert info["augmentation_policy"] == "validity_guard_v4_context_crop_v1"
             assert info["context_crop"] == loaded.model.spec.parameters["context_crop"]
         assert info["threshold_source"] == ("next_gen2_eval_notebook" if override is None else "request")
@@ -111,7 +111,7 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         assert segmentation["_class"] == "SlidingWindowSegmentation"
         assert segmentation["window_size"] == tile_size and segmentation["stride"] == tile_size // 2
         assert segmentation["adapter"]["output_dtype"] == "float32"
-        assert segmentation["pad_edges"] is (variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"})
+        assert segmentation["pad_edges"] is (variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"})
         assert threshold["_class"] == "MultiThresholding"
         assert threshold["thresholds"] == [expected_threshold] and threshold["strict_more"]
         assert vectorize["value_property_name"] == "class_id"

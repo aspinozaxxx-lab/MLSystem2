@@ -77,6 +77,13 @@ mean_context_loss; направленных KL/teacher/fallback-счётчико
 соответствующие mean; contribution — половина CE, сумма даёт `context_loss_sum`
 до общего веса. Остальные счётчики отбора v5 сохраняются; KL/teacher/fallback нет.
 
+`next_gen4_consistency_v7` наследует v6, но равновероятно выбирает обычную вырезку,
+квадрат или горизонтальную/вертикальную полосу в полном нулевом окне. Масштаб не
+меняется, target/valid переносятся вместе; пустая область исключена из CE. Вход
+квадратный, размещения кратны 32. История добавляет четыре счётчика геометрий
+`ordinary_crop/padded_square/padded_horizontal/padded_vertical_selected_batches`;
+сумма равна selected_batches. Query/source CE, вес 0,25 и один optimizer step прежние.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `models.contracts` - публичный контракт модели, которую нужно обучить.

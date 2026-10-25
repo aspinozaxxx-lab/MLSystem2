@@ -70,6 +70,11 @@ query, стороны кратны32. Hooks удаляются при любом
 Без reference обычный forward и ABI прежние. Другой режим, неверные размеры
 или отсутствие запроса двух logits отвергаются; hooks снимаются при любом исходе.
 
+`next_gen4_consistency_v7` сохраняет forward и модель v6; `context_reference`
+принимает вырезку либо полный квадратный canvas. Строго проверяется точная политика
+`full_query_detached_geometry_kv_with_reference_gt_v1` из архитектуры и прежняя
+LayerNorm. Создание геометрий и перенос целей принадлежат train, не models.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.

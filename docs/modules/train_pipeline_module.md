@@ -58,6 +58,11 @@ Resume строго сверяет их. Train получает тот же batc
 сверяет их. Надзор query и источника по собственным train-target выполняет train,
 работу с K/V и пару logits — models. Данные, loaders, нормализация и best прежние.
 
+`next_gen4_consistency_v7` сохраняет и проверяет точную политику
+`full_query_detached_geometry_kv_with_reference_gt_v1` и нормализатор v6.
+Данные и выбор best прежние; новую reference-геометрию исполняет train,
+пару logits и detached K/V — models через прежние публичные интерфейсы.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `settings.api` — текущие настройки и путь YAML.

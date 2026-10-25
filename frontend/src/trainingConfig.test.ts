@@ -167,7 +167,7 @@ describe("профиль object f1", () => {
   });
 });
 
-describe.each(["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"])("автоматический фон %s", (variant) => {
+describe.each(["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"])("автоматический фон %s", (variant) => {
   const defaults = {
     legacy: { "train.loss": "bce_dice" },
     [variant]: { "train.pipeline_variant": variant, "train.loss": "cross_entropy_tversky",
@@ -178,7 +178,7 @@ describe.each(["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_aug
     const template = { architecture: "smp_segformer_b0", default_config: defaults.legacy,
       config_schema: { ...schema, fields: [...schema.fields, {
         key: "train.pipeline_variant", label: "Конвейер", value_type: "select", tooltip: "", required: true,
-        options: ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "object_f1", "object_f1_v2"],
+        options: ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"],
       }], pipeline_defaults: defaults } };
     const chosen = trainingConfigForTemplate(template, task, variant, false);
     expect(chosen["train.pipeline_variant"]).toBe(variant);
@@ -191,7 +191,7 @@ describe.each(["next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_aug
     for (const [index, size] of [512, 768, 1024, 1536].entries()) {
       const resized = configWithField(chosen, "tile_preparation.tile_size", size, defaults);
       expect(resized["train.batch_size"]).toBe([16, 8, 4, 2][index]);
-      expect(resized["tile_preparation.stride"]).toBe(["next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"].includes(variant) ? size : size / 2);
+      expect(resized["tile_preparation.stride"]).toBe(["next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"].includes(variant) ? size : size / 2);
       expect(trainingConfigFieldVisible("tile_preparation.tile_size", variant, "smp_segformer_b0")).toBe(true);
     }
     expect(configWithField(chosen, "train.pipeline_variant", "legacy", defaults)["train.loss"]).toBe("bce_dice");

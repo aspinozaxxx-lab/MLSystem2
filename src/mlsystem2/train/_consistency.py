@@ -5,7 +5,7 @@ from __future__ import annotations
 from .contracts import TrainError
 
 
-def full_query_context_loss(torch, model, images, masks, valid_pixels, class_negative, *, seed, epoch, batch_index, supervise_reference=False):
+def full_query_context_loss(torch, model, images, masks, valid_pixels, class_negative, *, seed, epoch, batch_index, supervise_reference=False, geometry_views=False):
     """Обучить полный query-вход по train-target при отсоединённом контексте вырезки."""
     stats = {"attempted_batches": 1, "selected_batches": 0, "supervised_pixels": 0,
              "half_side_selected_batches": 0,
@@ -14,6 +14,11 @@ def full_query_context_loss(torch, model, images, masks, valid_pixels, class_neg
                   "query_contribution_sum": 0.0, "reference_contribution_sum": 0.0}
                  if supervise_reference else {"reference_valid_pixels": 0})
     height, width = images.shape[-2:]
+    geometries = ("ordinary_crop", "padded_square", "padded_horizontal", "padded_vertical")
+    if geometry_views:
+        if not supervise_reference or height != width or height % 32:
+            raise TrainError("Геометрии v7 требуют надзор источника и квадратный вход со стороной, кратной 32")
+        stats.update({name + "_selected_batches": 0 for name in geometries})
     if min(height, width) < 64:
         return None, stats
     generator = torch.Generator(device="cpu").manual_seed(seed + epoch * 1_000_003 + batch_index * 97)
@@ -22,9 +27,12 @@ def full_query_context_loss(torch, model, images, masks, valid_pixels, class_neg
     fraction_index = int(torch.randint(2, (), generator=generator))
     fraction = (0.5, 0.75)[fraction_index]
     side = max(32, int(min(height, width) * fraction) // 32 * 32)
-    top = int(torch.randint((height - side) // 32 + 1, (), generator=generator)) * 32
-    left = int(torch.randint((width - side) // 32 + 1, (), generator=generator)) * 32
-    region = (..., slice(top, top + side), slice(left, left + side))
+    geometry_index = int(torch.randint(4, (), generator=generator)) if geometry_views else 0
+    crop_height = height if geometry_index == 3 else side
+    crop_width = width if geometry_index == 2 else side
+    top = int(torch.randint((height - crop_height) // 32 + 1, (), generator=generator)) * 32
+    left = int(torch.randint((width - crop_width) // 32 + 1, (), generator=generator)) * 32
+    region = (..., slice(top, top + crop_height), slice(left, left + crop_width))
     target = masks[:, 0].long() if masks.ndim == 4 else masks.long()
     valid = torch.ones_like(target, dtype=torch.bool)
     if valid_pixels is not None:
@@ -33,20 +41,31 @@ def full_query_context_loss(torch, model, images, masks, valid_pixels, class_neg
         valid &= ~class_negative.any(dim=1)
     if not valid.any() or not valid[region].any():
         return None, stats
+    reference = images[region].contiguous()
+    reference_target, reference_valid = target[region], valid[region]
+    if geometry_index:
+        destination_top = int(torch.randint((height - crop_height) // 32 + 1, (), generator=generator)) * 32
+        destination_left = int(torch.randint((width - crop_width) // 32 + 1, (), generator=generator)) * 32
+        destination = (..., slice(destination_top, destination_top + crop_height),
+                       slice(destination_left, destination_left + crop_width))
+        reference = torch.zeros_like(images)
+        reference_target, reference_valid = torch.zeros_like(target), torch.zeros_like(valid)
+        reference[destination] = images[region]
+        reference_target[destination], reference_valid[destination] = target[region], valid[region]
     states = [(module, module.training) for module in model.modules()]
     try:
         model.eval()
-        result = model(images, return_two_class_logits=True, context_reference=images[region].contiguous())
+        result = model(images, return_two_class_logits=True, context_reference=reference)
         if supervise_reference:
             if not isinstance(result, tuple) or len(result) != 2:
-                raise TrainError("Профиль v6 требует пару прогнозов query и источника K/V")
+                raise TrainError("Совместный надзор требует пару прогнозов query и источника K/V")
             logits, reference_logits = result
         else:
             logits = result
         query_loss = _balanced_ground_truth_ce(torch, logits, target, valid)
-        query_pixels, reference_pixels = int(valid.sum().item()), int(valid[region].sum().item())
+        query_pixels, reference_pixels = int(valid.sum().item()), int(reference_valid.sum().item())
         if supervise_reference:
-            reference_loss = _balanced_ground_truth_ce(torch, reference_logits, target[region], valid[region])
+            reference_loss = _balanced_ground_truth_ce(torch, reference_logits, reference_target, reference_valid)
             loss = torch.stack((query_loss, reference_loss)).mean()
             stats.update(query_supervised_pixels=query_pixels, reference_supervised_pixels=reference_pixels,
                          query_contribution_sum=0.5 * float(query_loss.detach().item()),
@@ -58,6 +77,8 @@ def full_query_context_loss(torch, model, images, masks, valid_pixels, class_neg
                      supervised_pixels=query_pixels + reference_pixels if supervise_reference else query_pixels,
                      context_loss_sum=float(loss.detach().item()))
         stats[("half_side_selected_batches", "three_quarter_side_selected_batches")[fraction_index]] = 1
+        if geometry_views:
+            stats[geometries[geometry_index] + "_selected_batches"] = 1
         return 0.25 * loss, stats
     finally:
         for module, training in states:

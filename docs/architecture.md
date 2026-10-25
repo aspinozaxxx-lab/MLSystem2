@@ -1091,7 +1091,7 @@ HTTP-кэш обязан перепроверять ETag; ответ 304 раз�
 старые шаблоны переводятся на `next_gen2` при штатном обновлении каталога.
 Исторические jobs, MLflow и checkpoint сохраняют `next_gen`; его исполнение и чтение оставлены
 для уже созданных заданий и результатов. Новые HTTP API и миграции БД не требуются.
-`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|next_gen4_consistency_v5|next_gen4_consistency_v6|object_f1|object_f1_v2`. Конфигурация и checkpoint без
+`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|next_gen4_consistency_v5|next_gen4_consistency_v6|next_gen4_consistency_v7|object_f1|object_f1_v2`. Конфигурация и checkpoint без
 этого поля всегда трактуются как `legacy`; его оконный split, balanced validation, аугментации только
 positive/hard-negative, cosine scheduler, пороги и обработка nodata не меняются. `next_gen` не является
 отдельным верхнеуровневым модулем: он реализован приватными ветками тех же фасадов `settings`,
@@ -1628,6 +1628,57 @@ UI и шаблоны предлагают v6 отдельно, с прежним
 V4 уже надзирала обычную вырезку, поэтому v6 сохраняет и adversarial query v5,
 а не просто повторяет v4. Достаточность устанавливается новым обучением и общей
 проверкой сцены/плотных окон, не обещается по одной причинной пробе.
+
+## Конвейер next-gen4-consistency-v7
+
+`train.pipeline_variant=next_gen4_consistency_v7` — отдельный профиль в тех же модулях.
+Единственное изменение v6 — геометрия источника K/V и его собственной цели.
+Модель, LayerNorm, нормализация, подготовка данных, split, sampler, seed, предобучение,
+основной CE/Tversky, scheduler и best по внутреннему val loss прежние. Исторические
+профили не преобразуются. Формула обычного PyTorch/ONNX-инференса не меняется.
+
+После отбора с вероятностью 0,5 и стороны 0,5/0,75 равновероятно выбирается одна
+из четырёх геометрий: `ordinary_crop` — прежняя квадратная вырезка;
+`padded_square` — квадратная вырезка в полном нулевом canvas;
+`padded_horizontal` — полоса высотой выбранной стороны и полной шириной;
+`padded_vertical` — полная высота и ширина выбранной стороны. Извлечение и независимое
+размещение внутри квадратного входа выполняются на сетке 32, без масштабирования.
+Только содержимое текущего retained train-входа; соседние окна/val/test не читаются.
+Target и valid-mask переносятся точно вместе с пикселями. Вне вставки raw=0,
+valid=false: это исключённая область, не фоновая разметка. Внутренние invalid/nodata
+и неоднозначные class-negative также исключены. При пустой допустимой цели loss нет.
+
+Оба прохода eval, источник с графом, его K/V для неизменного полного query detached.
+Каждый контекст получает собственную CE с равным весом присутствующих допустимых
+классов. Среднее двух CE умножается на 0,25 один раз; основной backward,
+дополнительный backward и один optimizer step прежние. Models возвращает ту же
+пару logits, что v6; временные hooks и режимы восстанавливаются при любом исходе.
+Источник имеет размер вырезки либо полного входа; нового аргумента forward нет.
+
+Точная политика в `ModelSpec.parameters.context_consistency`:
+`{version:full_query_detached_geometry_kv_with_reference_gt_v1,weight:0.25,
+probability:0.5,crop_side_fractions:[0.5,0.75],source:within_retained_train_window,
+evaluation_mode:true,class_balance:true,reference:detached_same_model_crop_kv_v1,
+supervision:query_and_reference_ground_truth_cross_entropy_v1,
+context_reduction:mean_of_query_and_reference,
+reference_geometries:[ordinary_crop,padded_square,padded_horizontal,padded_vertical],
+geometry_sampling:uniform,placement:independent_grid32_within_input}`.
+Создание, автономная загрузка и resume строго сверяют всю политику и прежний
+`decoder_normalization`; новые ручные коэффициенты не вводятся.
+
+История сохраняет все счётчики v6 и четыре `*_selected_batches` с именами геометрий.
+Их сумма равна selected_batches; счётчики сторон также сохраняются. После исключения
+пустых целей доли не обязаны быть точно 1/4. Пиксели — посещения, не уникальная площадь;
+сумма query/reference contributions равна context loss до веса 0,25.
+Число проходов прежнее, затраты полноразмерного источника выше: при одном лимите
+времени число эпох/шагов может различаться, это не чистая абляция.
+
+UI предлагает v7 отдельно; новость `#/news/next-gen4-consistency-v7` содержит явно
+обозначенную схему и ограничения. Нет новых модулей, endpoints, таблиц, координатных
+правил, порогов или постобработки. Основной loss раньше уже видел частично допустимые
+входы: добавляется именно парная геометрия дополнительного надзора. Причинные пробы
+обосновывают эксперимент, но не гарантируют достаточность. Проверка охватывает всю
+сцену, новые пропуски, разные контексты и исходные плотные train/val/test-окна.
 
 ## Конвейер object f1
 
