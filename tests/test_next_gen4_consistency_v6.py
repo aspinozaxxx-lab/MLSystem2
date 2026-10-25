@@ -280,6 +280,24 @@ def test_pipeline_spec_changes_only_variant_and_context_policy():
     assert after.parameters == {**before.parameters, "pipeline_variant": VARIANT, "context_consistency": POLICY}
 
 
+def test_real_multiclass_smp_keeps_three_logits_for_each_context():
+    configured = spec()
+    configured.output_channels = 3
+    model = create_model(configured).model.eval()
+    image = torch.full((1, 4, 64, 64), 40.)
+    query, source = model(image, return_two_class_logits=True, context_reference=image[..., :32, :32])
+    assert query.shape == (1, 3, 64, 64) and source.shape == (1, 3, 32, 32)
+    labels = (torch.arange(64).view(1, 64, 1) % 3).expand(1, 64, 64)
+    loss = .125 * (torch.nn.functional.cross_entropy(query, labels)
+                   + torch.nn.functional.cross_entropy(source, labels[..., :32, :32]))
+    loss.backward()
+    assert all(torch.isfinite(parameter.grad).all() for parameter in model.parameters() if parameter.grad is not None)
+    assert any(module.kv.weight.grad is not None and torch.count_nonzero(module.kv.weight.grad)
+               for module in model.modules() if type(module).__name__ == "Attention")
+    with torch.no_grad():
+        assert model(image).shape == query.shape
+
+
 @pytest.mark.parametrize("field", ["supervision", "context_reduction"])
 def test_continuation_rejects_different_context_policy(monkeypatch, field):
     from mlsystem2.train_pipeline import _runner
