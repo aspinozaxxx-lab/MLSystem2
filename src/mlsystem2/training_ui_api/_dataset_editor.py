@@ -934,7 +934,7 @@ def editor_scene_pseudo_markup(
         if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") == "object_f1_v2"
         else None
     )
-    if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"}:
+    if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"}:
         inference_profile = "notebook_valid_data_v2"
     inference_config_hash = _editor_pseudo_inference_config_hash(
         selected, tile_size, inference_profile=inference_profile,

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">Двунаправленное обучение согласованности v3</title>
+  <desc id="desc">Условная схема. Оба контекста могут быть отсоединённым правильным уверенным учителем другого. Активные направления усредняются с общим весом 0,25.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="#148b91"/></marker>
+  </defs>
+  <rect width="1200" height="680" rx="28" fill="#f2f7fb"/>
+  <text x="60" y="62" font-family="sans-serif" font-size="32" font-weight="700" fill="#153044">Согласованность v3: учитель в обоих контекстах</text>
+  <text x="60" y="96" font-family="sans-serif" font-size="19" fill="#4b6474">Поясняющая схема обучения, не снимок и не измерение точности</text>
+  <rect x="60" y="134" width="420" height="300" rx="20" fill="#fff" stroke="#b7cddc" stroke-width="2"/>
+  <text x="88" y="174" font-family="sans-serif" font-size="24" font-weight="700" fill="#153044">Полное train-окно</text>
+  <rect x="114" y="200" width="300" height="174" rx="10" fill="#bad8e8"/>
+  <path d="M115 201 L193 201 Q277 240 271 285 Q261 324 414 353 L414 374 L115 374Z" fill="#8fbe9d"/>
+  <rect x="246" y="246" width="88" height="88" fill="none" stroke="#fff" stroke-width="4" stroke-dasharray="7 5"/>
+  <circle cx="290" cy="290" r="7" fill="#efb544"/>
+  <text x="88" y="407" font-family="sans-serif" font-size="19" fill="#4b6474">Общие пиксели, исходный масштаб</text>
+  <rect x="720" y="134" width="420" height="300" rx="20" fill="#fff" stroke="#b7cddc" stroke-width="2"/>
+  <text x="748" y="174" font-family="sans-serif" font-size="24" font-weight="700" fill="#153044">Вырезка 50% / 75%</text>
+  <rect x="812" y="210" width="150" height="150" rx="10" fill="#bad8e8"/>
+  <path d="M812 210 L838 210 Q878 236 852 271 Q834 300 962 337 L962 360 L812 360Z" fill="#8fbe9d"/>
+  <circle cx="887" cy="285" r="7" fill="#efb544"/>
+  <text x="748" y="407" font-family="sans-serif" font-size="19" fill="#4b6474">Только внутри исходного train-окна</text>
+  <path d="M490 228 H708" stroke="#148b91" stroke-width="5" marker-end="url(#arrow)"/>
+  <path d="M710 334 H492" stroke="#148b91" stroke-width="5" marker-end="url(#arrow)"/>
+  <text x="600" y="202" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#153044">учит вырезку</text>
+  <text x="600" y="372" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#153044">учит полное окно</text>
+  <rect x="60" y="460" width="1080" height="152" rx="20" fill="#153044"/>
+  <text x="88" y="497" font-family="sans-serif" font-size="21" font-weight="700" fill="#fff">В каждом направлении: учитель уверен &gt; 0,9 и совпадает с train-разметкой</text>
+  <text x="88" y="532" font-family="sans-serif" font-size="19" fill="#d8e9f2">Учитель отсоединён от градиента. Nodata и неоднозначная разметка исключены.</text>
+  <text x="88" y="570" font-family="sans-serif" font-size="23" font-weight="700" fill="#8edbd5">Дополнение к loss = 0,25 × средний KL активных направлений</text>
+  <text x="60" y="650" font-family="sans-serif" font-size="19" fill="#4b6474">Нет подходящего учителя — нет дополнительного градиента. Инференс и старые веса не меняются.</text>
+</svg>

@@ -147,9 +147,11 @@ def test_registered_profile_preserves_base_defaults_and_optional_slices(architec
 def model_spec(variant=VARIANT):
     from mlsystem2.models.contracts import ModelSpec
     return ModelSpec(name="smp_segformer_b0", input_channels=4, output_channels=1, parameters={
-        "pipeline_variant": variant, "context_consistency": POLICY,
+        "pipeline_variant": variant, "context_consistency": {**POLICY,
+            **({"version": "bidirectional_confident_teacher_kl_v1", "direction_reduction": "mean_of_active_directions"}
+               if variant == "next_gen4_consistency_v3" else {})},
         **({"decoder_normalization": {"version": "per_pixel_channel_layer_norm_v1", "epsilon": 1e-5, "affine": True}}
-           if variant == "next_gen4_consistency_v2" else {}),
+           if variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3"} else {}),
         "augmentation_policy": "validity_guard_v4_context_crop_v1",
         "context_crop": {"area_scale": [0.25, 1.0], "ratio": [1.0, 1.0], "probability": 0.5,
             "output_size": 512, "source": "within_retained_train_window"},
@@ -190,7 +192,7 @@ def test_continuation_rejects_different_consistency_policy(monkeypatch):
         _runner._load_or_create_model(settings, deps)
 
 
-@pytest.mark.parametrize("variant", [VARIANT, "next_gen4_consistency_v2"])
+@pytest.mark.parametrize("variant", [VARIANT, "next_gen4_consistency_v2", "next_gen4_consistency_v3"])
 def test_periodic_current_snapshots_preserve_one_training_loop_and_best_selection(tmp_path, monkeypatch, variant):
     from mlsystem2.models import _factory
     from mlsystem2.models.api import create_model

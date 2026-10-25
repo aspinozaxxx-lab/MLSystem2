@@ -40,7 +40,7 @@ _BOUNDARY_TAG = "_touches_raster_boundary"
 
 def _object_inference_metadata(variant: object) -> dict[str, str]:
     """Версия текущей CPU-постобработки, независимая от весов checkpoint."""
-    if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"}:
+    if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"}:
         return {"inference_profile": "notebook_valid_data_v2"}
     if variant != "object_f1_v2":
         return {}
@@ -102,7 +102,7 @@ def build_triton_model_export_zip(
         task, class_schema = _checkpoint_task_schema(loaded)
         metadata = loaded.artifact.metadata
         parameters = getattr(loaded.model.spec, "parameters", None) or {}
-        next_gen2 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"}
+        next_gen2 = (metadata.get("pipeline_variant") or parameters.get("pipeline_variant")) in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"}
         variant = metadata.get("pipeline_variant") or parameters.get("pipeline_variant")
         object_f1 = variant in {"object_f1", "object_f1_v2"}
         separation = object_separation_config(loaded.model.spec) if variant == "object_f1_v2" else None
@@ -207,7 +207,7 @@ def build_triton_model_export_zip(
                 object_output=object_f1,
                 object_separation=separation.model_dump() if separation is not None else None,
                 batch_size=inference_batch_size,
-                pad_edges=variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"},
+                pad_edges=variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"},
             ),
         )
         if object_f1 or next_gen2:
@@ -238,11 +238,11 @@ def build_triton_model_export_zip(
                 ),
                 "output_kind": "object_probabilities" if object_f1 else "probabilities" if next_gen2 else "binary_masks",
                 "pipeline_variant": variant if object_f1 or next_gen2 else "legacy",
-                **({"preprocessing": parameters["preprocessing"]} if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"} else {}),
-                **({"augmentation_policy": parameters["augmentation_policy"]} if variant in {"next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"} else {}),
-                **({"context_crop": parameters["context_crop"]} if variant in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2"} else {}),
-                **({"context_consistency": parameters["context_consistency"]} if variant in {"next_gen4_consistency_v1", "next_gen4_consistency_v2"} else {}),
-                **({"decoder_normalization": parameters["decoder_normalization"]} if variant == "next_gen4_consistency_v2" else {}),
+                **({"preprocessing": parameters["preprocessing"]} if variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"} else {}),
+                **({"augmentation_policy": parameters["augmentation_policy"]} if variant in {"next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"} else {}),
+                **({"context_crop": parameters["context_crop"]} if variant in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"} else {}),
+                **({"context_consistency": parameters["context_consistency"]} if variant in {"next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3"} else {}),
+                **({"decoder_normalization": parameters["decoder_normalization"]} if variant in {"next_gen4_consistency_v2", "next_gen4_consistency_v3"} else {}),
                 **_object_inference_metadata(variant),
                 "output_channels": ["foreground", "boundary"] if object_f1 else ["background", *[str(item["slug"]) for item in class_schema]] if next_gen2 and task == "multiclass" else None,
                 "object_separation": separation.model_dump() if separation is not None else parameters.get("object_separation") if object_f1 else None,
