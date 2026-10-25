@@ -18,7 +18,7 @@ Batch содержит `images: float32[B,C,H,W]`, binary `masks: float32[B,1,H,
 - `TileClassDefinition` — `class_id`, `slug`, `name`, `color`, `priority` для class-filtered чтения одного per-image GeoJSON.
 - `TileSceneSource` — `scene_id`, `image_path`, optional per-image `annotation_file`, `footprint_file`, `parent_scene_id`, `zone_id`, `region_geometry` в CRS TIFF, `region_window=(x,y,width,height)` в пикселях TIFF.
 - `TileSplitRequest` — `val_fraction`, `test_fraction` (default 0), `seed`, `strategy=window_random|scene_fold|scene_groups`, `validation_fold`, `spatial_purge`.
-- `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode=train|val|test`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant=legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|object_f1|object_f1_v2`, optional `input_channels` (число модельных каналов во всех профилях; 3/4 для объектных профилей), optional сбор histogram. Для профилей глобальной нормализации сбор разрешён только при `mode=train`.
+- `TileDataloaderRequest` — непустой `scenes`, optional общие binary-файлы, legacy `class_annotations` либо per-image `classes`, `batch_size`, `mode=train|val|test`, optional `tile_split`, `max_batches_per_epoch`, `include_object_instances`, `pipeline_variant=legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|next_gen4_consistency_v5|next_gen4_consistency_v6|object_f1|object_f1_v2`, optional `input_channels` (число модельных каналов во всех профилях; 3/4 для объектных профилей), optional сбор histogram. Для профилей глобальной нормализации сбор разрешён только при `mode=train`.
 - `SamplingFeedback` — только агрегаты полной validation: `empty_tiles`, `false_positive_tiles`, `empty_pixels`, `false_positive_pixels`, `positive_pixels`, `true_positive_pixels`; фиксированный порог 0,5.
 - `AdaptiveSamplingController` — протокол train-сэмплера: `set_epoch(epoch)`, `observe_train(indices,scores)`, `update_feedback(feedback)`, `snapshot(include_state=False)`. Состояние и история включаются явно; validation/test не передают индексы. Batch next-gen3/4 содержит `sample_indices` и обязательный `valid_pixels`. Политика `adaptive_background_v1`, квоты, ротация и защита полноты описаны в `docs/architecture.md`; прежние сэмплеры не меняются.
 
@@ -50,6 +50,10 @@ train только по допустимому target уже выбранног�
 подготовку v4: тот же raw-вход, split, sampler, защищённые аугментации, train-only
 статистика и dense-loader. Вырезку K/V формирует train внутри готового batch;
 tile_preparation не читает для неё соседние окна и не меняет разметку.
+
+`TileDataloaderRequest.pipeline_variant=next_gen4_consistency_v6` наследует подготовку
+v5 без изменений. Дополнительный source-target получается точной вырезкой текущего
+train batch в train; соседние окна и val/test для обучения не читаются.
 
 ## Список используемых данным модулем модулей и с какой целью
 

@@ -3,7 +3,7 @@
 from .contracts import ModelsError
 
 
-def forward_with_context_reference(torch, wrapper, image, reference, *, return_two_class_logits):
+def forward_with_context_reference(torch, wrapper, image, reference, *, return_two_class_logits, supervise_reference=False):
     if (not isinstance(image, torch.Tensor) or not isinstance(reference, torch.Tensor)
             or image.ndim != 4 or reference.ndim != 4
             or image.shape[:2] != reference.shape[:2] or image.device != reference.device
@@ -49,8 +49,10 @@ def forward_with_context_reference(torch, wrapper, image, reference, *, return_t
     try:
         for index, projection in enumerate(projections):
             handles.append(projection.register_forward_hook(capture(index)))
-        with torch.no_grad():
-            wrapper(reference, return_two_class_logits=True)
+        with torch.set_grad_enabled(torch.is_grad_enabled() and supervise_reference):
+            reference_logits = wrapper(reference, return_two_class_logits=True)
+        if not supervise_reference:
+            reference_logits = None
     finally:
         for handle in handles:
             handle.remove()
@@ -60,7 +62,8 @@ def forward_with_context_reference(torch, wrapper, image, reference, *, return_t
     try:
         for index, projection in enumerate(projections):
             handles.append(projection.register_forward_hook(replace(index)))
-        return wrapper(image, return_two_class_logits=return_two_class_logits)
+        query_logits = wrapper(image, return_two_class_logits=return_two_class_logits)
+        return (query_logits, reference_logits) if supervise_reference else query_logits
     finally:
         for handle in handles:
             handle.remove()

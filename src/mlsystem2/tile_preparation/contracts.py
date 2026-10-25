@@ -113,13 +113,13 @@ class TileDataloaderRequest(BaseModel):
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
     include_object_instances: bool = False
-    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"] = "legacy"
+    pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "object_f1", "object_f1_v2"] = "legacy"
     collect_band_histogram: bool = False
     input_channels: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_annotation_mode(self) -> Self:
-        if self.pipeline_variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} and self.collect_band_histogram and self.mode != "train":
+        if self.pipeline_variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"} and self.collect_band_histogram and self.mode != "train":
             raise ValueError("Статистика глобальной нормализации вычисляется только на train")
         has_per_image = any(item.annotation_file is not None for item in self.scenes)
         if has_per_image and not all(item.annotation_file is not None for item in self.scenes):
@@ -165,7 +165,7 @@ class TileDataloaderRequest(BaseModel):
                 raise ValueError("object f1 требует binary и вход RGB или RGB+NIR")
             if not self.include_object_instances or self.max_batches_per_epoch is not None:
                 raise ValueError("object f1 требует маски объектов и полные эпохи")
-        elif self.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"}:
+        elif self.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
             if self.tile_split is None or self.tile_split.strategy != "window_random":
                 raise ValueError("next-gen2 требует разбиение по тайлам")
             if self.tile_split.spatial_purge or self.tile_split.test_fraction != 0.2 or self.tile_split.val_fraction != 0.2:

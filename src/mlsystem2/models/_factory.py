@@ -167,6 +167,15 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
         raise ModelsError("object f1 поддерживает SegFormer B0/B1/B2/B3")
     if spec.name not in _SUPPORTED_NAMES:
         raise ModelsError(f"Неподдерживаемая архитектура модели: {spec.name}")
+    if spec.parameters.get("pipeline_variant") == "next_gen4_consistency_v6" and spec.parameters.get("context_consistency") != {
+        "version": "full_query_detached_crop_kv_with_reference_gt_v1", "weight": 0.25, "probability": 0.5,
+        "crop_side_fractions": [0.5, 0.75], "source": "within_retained_train_window",
+        "evaluation_mode": True, "class_balance": True,
+        "reference": "detached_same_model_crop_kv_v1",
+        "supervision": "query_and_reference_ground_truth_cross_entropy_v1",
+        "context_reduction": "mean_of_query_and_reference",
+    }:
+        raise ModelsError("Профиль v6 требует сохранённую политику совместного надзора query и источника K/V")
     if spec.parameters.get("pipeline_variant") == "next_gen4_consistency_v5" and spec.parameters.get("context_consistency") != {
         "version": "full_query_detached_crop_kv_gt_v1", "weight": 0.25, "probability": 0.5,
         "crop_side_fractions": [0.5, 0.75], "source": "within_retained_train_window",
@@ -185,18 +194,18 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
         **({"uncovered_supervision": "ground_truth_cross_entropy_v1"} if spec.parameters.get("pipeline_variant") == "next_gen4_consistency_v4" else {}),
     }:
         raise ModelsError("Профиль согласованности требует сохранённую политику согласованности")
-    if spec.parameters.get("pipeline_variant") in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} and (
+    if spec.parameters.get("pipeline_variant") in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"} and (
         spec.name not in _SMP_ENCODERS
         or spec.parameters.get("decoder_normalization") != {
             "version": "per_pixel_channel_layer_norm_v1", "epsilon": 1e-5, "affine": True,
         }
     ):
         raise ModelsError("Профиль согласованности требует SMP SegFormer и сохранённую попиксельную нормализацию декодера")
-    if spec.parameters.get("pipeline_variant") in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"}:
+    if spec.parameters.get("pipeline_variant") in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
         if (spec.parameters.get("pipeline_variant") == "next_gen4_augmentation_v3"
                 and spec.parameters.get("augmentation_policy") != "validity_guard_v3"):
             raise ModelsError("next-gen4-augmentation-v3 требует сохранённую политику защищённых аугментаций")
-        if spec.parameters.get("pipeline_variant") in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"}:
+        if spec.parameters.get("pipeline_variant") in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
             crop = spec.parameters.get("context_crop", {})
             if (spec.parameters.get("augmentation_policy") != "validity_guard_v4_context_crop_v1"
                     or not isinstance(crop, dict)
@@ -238,7 +247,7 @@ def _create_model(spec: ModelSpec, *, initialize_pretrained: bool) -> ModelHandl
                 "std": [0.229, 0.224, 0.225, 0.229][:spec.input_channels],
             }
             return ModelHandle(spec=spec, model=_InputPreprocessingWrapper(model, preprocessing))
-        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} and spec.output_channels == 1:
+        if spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"} and spec.output_channels == 1:
             parameters = {**spec.parameters, "binary_output": "foreground_logit_minus_background_logit"}
             if spec.pretrained:
                 parameters["pretrained_source"] = f"smp-hub/{_SMP_ENCODERS[spec.name]}.imagenet"
@@ -275,7 +284,7 @@ def _ensure_torch_for_smp() -> None:
 def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True):
     smp = _import_smp()
     _ensure_torch_for_smp()
-    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"}
+    notebook = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}
     if spec.pretrained and spec.input_channels not in (3, 4):
         raise ModelsError("Предобученная SegFormer поддерживает RGB или RGB+NIR (3 или 4 канала).")
     pretrained = spec.pretrained and initialize_pretrained
@@ -292,7 +301,7 @@ def _create_smp_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True
         with torch.no_grad():
             model.encoder.patch_embed1.proj.weight[:, :3].copy_(rgb_weights)
             model.encoder.patch_embed1.proj.weight[:, 3].copy_(rgb_weights[:, 0])
-    if spec.parameters.get("pipeline_variant") in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"}:
+    if spec.parameters.get("pipeline_variant") in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}:
         batch_norms = [(name, module) for name, module in model.named_modules()
                        if isinstance(module, torch.nn.modules.batchnorm._BatchNorm)]
         if [name for name, _ in batch_norms] != ["decoder.fuse_stage.1"]:
@@ -348,7 +357,7 @@ def _create_segformer(spec: ModelSpec, *, initialize_pretrained: bool = True) ->
 
     model_config = _SEGFORMER_CONFIGS[spec.name]
     is_next_gen = spec.parameters.get("pipeline_variant") == "next_gen"
-    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"}
+    is_next_gen2 = spec.parameters.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}
     if is_next_gen2:
         head_channels = 2 if spec.output_channels == 1 else spec.output_channels
         if not initialize_pretrained:
@@ -498,7 +507,7 @@ def _set_first_patch_projection(model, projection) -> None:
 
 
 def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
-    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"}:
+    if spec.parameters.get("pipeline_variant") not in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "object_f1", "object_f1_v2"}:
         return ModelHandle(spec=spec, model=model)
     preprocessing = spec.parameters.get("preprocessing")
     if not isinstance(preprocessing, dict):
@@ -506,7 +515,8 @@ def _wrap_next_gen(spec: ModelSpec, model) -> ModelHandle:
     return ModelHandle(
         spec=spec,
         model=_InputPreprocessingWrapper(model, preprocessing, object_output=spec.parameters.get("pipeline_variant") in {"object_f1", "object_f1_v2"}, multiclass_output=spec.output_channels > 1,
-                                         allow_context_reference=spec.parameters.get("pipeline_variant") == "next_gen4_consistency_v5"),
+                                         allow_context_reference=spec.parameters.get("pipeline_variant") in {"next_gen4_consistency_v5", "next_gen4_consistency_v6"},
+                                         supervise_context_reference=spec.parameters.get("pipeline_variant") == "next_gen4_consistency_v6"),
     )
 
 
@@ -519,12 +529,13 @@ if torch is not None:
             return super().forward(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
     class _InputPreprocessingWrapper(torch.nn.Module):
-        def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False, multiclass_output: bool = False, allow_context_reference: bool = False) -> None:
+        def __init__(self, model, preprocessing: dict[str, object], *, object_output: bool = False, multiclass_output: bool = False, allow_context_reference: bool = False, supervise_context_reference: bool = False) -> None:
             super().__init__()
             self.model = model
             self.object_output = object_output
             self.multiclass_output = multiclass_output
             self.allow_context_reference = allow_context_reference
+            self.supervise_context_reference = supervise_context_reference
             self.mode = str(preprocessing.get("mode") or "scale_255")
             self.nodata = float(preprocessing.get("nodata", 0.0))
             self.mask_nodata = bool(preprocessing.get("mask_nodata", True))
@@ -541,11 +552,14 @@ if torch is not None:
         def forward(self, x, *, return_two_class_logits: bool = False, context_reference=None):
             if context_reference is not None:
                 if not self.allow_context_reference:
-                    raise ModelsError("Дополнительный K/V-контекст разрешён только для профиля v5")
+                    raise ModelsError("Дополнительный K/V-контекст разрешён только для профиля v5 или v6")
+                if self.supervise_context_reference and not return_two_class_logits:
+                    raise ModelsError("Совместный надзор query и источника требует return_two_class_logits=True")
                 from ._context import forward_with_context_reference
 
                 return forward_with_context_reference(
                     torch, self, x, context_reference, return_two_class_logits=return_two_class_logits,
+                    supervise_reference=self.supervise_context_reference,
                 )
             raw = x.float()
             if self.mode == "window_minmax":

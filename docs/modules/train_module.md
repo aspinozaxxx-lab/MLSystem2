@@ -66,6 +66,17 @@ models через аргумент `context_reference`; private-код models н
 half_side_selected_batches, three_quarter_side_selected_batches, context_loss_sum,
 mean_context_loss; направленных KL/teacher/fallback-счётчиков у v5 нет.
 
+`next_gen4_consistency_v6` сохраняет adversarial query v5 и добавляет CE обычного
+прогноза источника по его собственным обрезанным target/valid-mask. Обе цели
+исключают invalid/nodata/class-negative, балансируются по присутствующим классам;
+среднее двух CE умножается на0,25 один раз. Оба прохода eval, режимы восстанавливаются,
+основной CE/Tversky и один optimizer step прежние. Train получает пару logits через
+тот же публичный forward модели, не импортирует private models.
+История хранит `query_supervised_pixels`, `reference_supervised_pixels`, их сумму
+`supervised_pixels`, `query_contribution_sum`, `reference_contribution_sum` и
+соответствующие mean; contribution — половина CE, сумма даёт `context_loss_sum`
+до общего веса. Остальные счётчики отбора v5 сохраняются; KL/teacher/fallback нет.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 - `models.contracts` - публичный контракт модели, которую нужно обучить.

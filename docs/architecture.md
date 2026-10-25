@@ -1091,7 +1091,7 @@ HTTP-кэш обязан перепроверять ETag; ответ 304 раз�
 старые шаблоны переводятся на `next_gen2` при штатном обновлении каталога.
 Исторические jobs, MLflow и checkpoint сохраняют `next_gen`; его исполнение и чтение оставлены
 для уже созданных заданий и результатов. Новые HTTP API и миграции БД не требуются.
-`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|next_gen4_consistency_v5|object_f1|object_f1_v2`. Конфигурация и checkpoint без
+`train.pipeline_variant` в контрактах — `legacy|next_gen|next_gen2|next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3|next_gen4_augmentation_v4|next_gen4_consistency_v1|next_gen4_consistency_v2|next_gen4_consistency_v3|next_gen4_consistency_v4|next_gen4_consistency_v5|next_gen4_consistency_v6|object_f1|object_f1_v2`. Конфигурация и checkpoint без
 этого поля всегда трактуются как `legacy`; его оконный split, balanced validation, аугментации только
 positive/hard-negative, cosine scheduler, пороги и обработка nodata не меняются. `next_gen` не является
 отдельным верхнеуровневым модулем: он реализован приватными ветками тех же фасадов `settings`,
@@ -1564,7 +1564,7 @@ crop_side_fractions:[0.5,0.75],source:within_retained_train_window,evaluation_mo
 class_balance:true,reference:detached_same_model_crop_kv_v1,
 supervision:full_query_ground_truth_cross_entropy_v1}`. Маркер `decoder_normalization`
 прежний и обязателен. Создание/загрузка и resume строго сверяют политику.
-Только модель v5 поддерживает дополнительный аргумент forward `context_reference`
+Модель v5 поддерживает дополнительный аргумент forward `context_reference`
 в eval-режиме; без него PyTorch/ONNX и штатный инференс полностью сохраняют прежнюю
 формулу и ABI. Работа с attention принадлежит models; выбор вырезки, valid-mask,
 цели, loss и восстановление режимов — train.
@@ -1578,6 +1578,56 @@ UI и шаблоны предлагают отдельный профиль с �
 Правило общее для допустимых train-входов, не содержит координат дефектов.
 Причинные пробы обосновывают эксперимент, но устранение кругов устанавливается
 новым обучением, плотными контрольными окнами и всей проверяемой сценой, не обещается заранее.
+
+## Конвейер next-gen4-consistency-v6
+
+`train.pipeline_variant=next_gen4_consistency_v6` — отдельный фиксированный профиль
+в существующих модулях. Модель, попиксельная LayerNorm, предобучение, глобальная
+train-нормализация, подготовка v4, sampler, split, seed, основной CE/Tversky,
+scheduler и best по val loss сохраняются. Старые профили и checkpoint не меняются.
+
+Политика `full_query_detached_crop_kv_with_reference_gt_v1` сохраняет query-проход
+v5 с отсоединёнными K/V внутренней немасштабированной вырезки и дополнительно
+надзирает обычный прогноз самой вырезки по её собственной train-разметке.
+Источник выполняется с графом, но захваченные K/V для query остаются detached:
+query-метки не передают градиент источнику через K/V. Оба прохода eval;
+models удаляет временные hooks в `finally`, train восстанавливает все режимы.
+В модели v6 вызов с `context_reference` требует `return_two_class_logits=True`
+и возвращает `(query_logits, reference_logits)`. Без `context_reference`
+обычный PyTorch/ONNX forward и формула штатного инференса прежние.
+
+Для каждого контекста CE усредняется внутри присутствующих допустимых классов,
+затем равными средними классов. Две CE усредняются, общий вес0,25 применяется
+ровно один раз. Query использует полный target/valid-mask, источник — их точную
+вырезку. Invalid/nodata и неоднозначные class-negative исключены из обеих целей;
+при пустом допустимом query или источнике дополнительного loss нет.
+Вероятность0,5, стороны0,5/0,75 и координаты, кратные32, прежние.
+Основной backward, затем дополнительный backward и один optimizer step.
+Gradient checkpointing с временными hooks не включается. Val/test не получают loss.
+
+`ModelSpec.parameters.context_consistency` строго равен
+`{version:full_query_detached_crop_kv_with_reference_gt_v1,weight:0.25,probability:0.5,
+crop_side_fractions:[0.5,0.75],source:within_retained_train_window,evaluation_mode:true,
+class_balance:true,reference:detached_same_model_crop_kv_v1,
+supervision:query_and_reference_ground_truth_cross_entropy_v1,
+context_reduction:mean_of_query_and_reference}`. Создание, загрузка и resume
+сверяют всю политику и прежний `decoder_normalization`; смешивание версий запрещено.
+
+`train_context_consistency` хранит attempted/selected batches, query/reference
+supervised_pixels, их сумму `supervised_pixels`, счётчики двух сторон вырезки,
+`context_loss_sum`, `query_contribution_sum`, `reference_contribution_sum`.
+Два contribution равны половинам соответствующих CE; их сумма даёт context loss
+до веса0,25. Средние считаются по selected batches. Пиксели — посещения,
+не уникальная площадь. Нет фиктивных KL/teacher/direction/fallback-метрик.
+
+UI и шаблоны предлагают v6 отдельно, с прежними размерами и условиями остановки;
+новость `#/news/next-gen4-consistency-v6` содержит явно обозначенную схему.
+Новых верхнеуровневых модулей, HTTP endpoints, таблиц или формул инференса нет.
+Правило не содержит координат дефекта. Отсутствие source-градиента у v5 — его
+заявленная семантика, не ошибка реализации; основной loss обучал полный вход.
+V4 уже надзирала обычную вырезку, поэтому v6 сохраняет и adversarial query v5,
+а не просто повторяет v4. Достаточность устанавливается новым обучением и общей
+проверкой сцены/плотных окон, не обещается по одной причинной пробе.
 
 ## Конвейер object f1
 

@@ -81,6 +81,22 @@ NEXT_GEN4_CONSISTENCY_V2_DEFAULT_CONFIG = {**NEXT_GEN4_CONSISTENCY_V1_DEFAULT_CO
 NEXT_GEN4_CONSISTENCY_V3_DEFAULT_CONFIG = {**NEXT_GEN4_CONSISTENCY_V2_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4_consistency_v3"}
 NEXT_GEN4_CONSISTENCY_V4_DEFAULT_CONFIG = {**NEXT_GEN4_CONSISTENCY_V3_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4_consistency_v4"}
 NEXT_GEN4_CONSISTENCY_V5_DEFAULT_CONFIG = {**NEXT_GEN4_CONSISTENCY_V4_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4_consistency_v5"}
+NEXT_GEN4_CONSISTENCY_V6_DEFAULT_CONFIG = {**NEXT_GEN4_CONSISTENCY_V5_DEFAULT_CONFIG, "train.pipeline_variant": "next_gen4_consistency_v6"}
+NEXT_GEN4_CONSISTENCY_V6_DESCRIPTION = (
+    "Отдельный профиль согласованности v6 для SMP SegFormer B0/B1/B2/B3. "
+    "Сохраняет полный query-вход с отсоединёнными K/V внутренней train-вырезки как в v5. "
+    "Дополнительно обычный прогноз самой вырезки обучается по её собственной допустимой train-разметке. "
+    "Query-цель не передаёт градиент источнику через K/V; источник получает градиент от своей CE.\n\n"
+    "В каждом контексте CrossEntropy усредняется поровну между присутствующими классами; "
+    "затем две CE усредняются, и общий вес0,25 применяется ровно один раз. "
+    "Вероятность0,5, стороны вырезки0,5/0,75, отсутствие масштабирования, eval и один optimizer step прежние. "
+    "Invalid/nodata и неоднозначные class-negative исключены. Ни val/test, ни соседние окна не читаются.\n\n"
+    "Выберите next-gen4-consistency-v6 в ручном запуске или шаблоне SMP SegFormer и создайте отдельное обучение. "
+    "Данные, split, sampler, LayerNorm, train-нормализация, основной loss и выбор best прежние; "
+    "штатный инференс и старые checkpoint не меняются. В истории train_context_consistency проверяйте "
+    "query/reference_supervised_pixels и mean_query/reference_contribution: сумма вкладов даёт mean_context_loss до веса0,25. "
+    "Это общее правило без координат дефектов, не гарантия устранения кругов: результат проверяется всей сценой и плотными контрольными окнами."
+)
 NEXT_GEN4_CONSISTENCY_V5_DESCRIPTION = (
     "Отдельный профиль согласованности v5 для SMP SegFormer B0/B1/B2/B3. "
     "Полный обучающий вход получает отсоединённый K/V-контекст случайной внутренней вырезки той же сети. "
@@ -332,6 +348,8 @@ OBJECT_F1_V2_DESCRIPTION = (
 
 
 def fixed_pipeline_defaults(variant: str) -> dict[str, Any]:
+    if variant == "next_gen4_consistency_v6":
+        return NEXT_GEN4_CONSISTENCY_V6_DEFAULT_CONFIG
     if variant == "next_gen4_consistency_v5":
         return NEXT_GEN4_CONSISTENCY_V5_DEFAULT_CONFIG
     if variant == "next_gen4_consistency_v4":
@@ -358,15 +376,15 @@ def fixed_pipeline_defaults(variant: str) -> dict[str, Any]:
 
 
 CONFIG_SCHEMA: dict[str, Any] = {
-    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG, "next_gen3": NEXT_GEN3_DEFAULT_CONFIG, "next_gen4": NEXT_GEN4_DEFAULT_CONFIG, "next_gen4_global_norm": NEXT_GEN4_GLOBAL_NORM_DEFAULT_CONFIG, "next_gen4_augmentation_v3": NEXT_GEN4_AUGMENTATION_V3_DEFAULT_CONFIG, "next_gen4_augmentation_v4": NEXT_GEN4_AUGMENTATION_V4_DEFAULT_CONFIG, "next_gen4_consistency_v1": NEXT_GEN4_CONSISTENCY_V1_DEFAULT_CONFIG, "next_gen4_consistency_v2": NEXT_GEN4_CONSISTENCY_V2_DEFAULT_CONFIG, "next_gen4_consistency_v3": NEXT_GEN4_CONSISTENCY_V3_DEFAULT_CONFIG, "next_gen4_consistency_v4": NEXT_GEN4_CONSISTENCY_V4_DEFAULT_CONFIG, "next_gen4_consistency_v5": NEXT_GEN4_CONSISTENCY_V5_DEFAULT_CONFIG, "object_f1": OBJECT_F1_DEFAULT_CONFIG, "object_f1_v2": OBJECT_F1_V2_DEFAULT_CONFIG},
-"pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION, "next_gen3": NEXT_GEN3_DESCRIPTION, "next_gen4": NEXT_GEN4_DESCRIPTION, "next_gen4_global_norm": NEXT_GEN4_GLOBAL_NORM_DESCRIPTION, "next_gen4_augmentation_v3": NEXT_GEN4_AUGMENTATION_V3_DESCRIPTION, "next_gen4_augmentation_v4": NEXT_GEN4_AUGMENTATION_V4_DESCRIPTION, "next_gen4_consistency_v1": NEXT_GEN4_CONSISTENCY_V1_DESCRIPTION, "next_gen4_consistency_v2": NEXT_GEN4_CONSISTENCY_V2_DESCRIPTION, "next_gen4_consistency_v3": NEXT_GEN4_CONSISTENCY_V3_DESCRIPTION, "next_gen4_consistency_v4": NEXT_GEN4_CONSISTENCY_V4_DESCRIPTION, "next_gen4_consistency_v5": NEXT_GEN4_CONSISTENCY_V5_DESCRIPTION, "object_f1": OBJECT_F1_DESCRIPTION, "object_f1_v2": OBJECT_F1_V2_DESCRIPTION},
+    "pipeline_defaults": {"next_gen2": NEXT_GEN2_DEFAULT_CONFIG, "next_gen3": NEXT_GEN3_DEFAULT_CONFIG, "next_gen4": NEXT_GEN4_DEFAULT_CONFIG, "next_gen4_global_norm": NEXT_GEN4_GLOBAL_NORM_DEFAULT_CONFIG, "next_gen4_augmentation_v3": NEXT_GEN4_AUGMENTATION_V3_DEFAULT_CONFIG, "next_gen4_augmentation_v4": NEXT_GEN4_AUGMENTATION_V4_DEFAULT_CONFIG, "next_gen4_consistency_v1": NEXT_GEN4_CONSISTENCY_V1_DEFAULT_CONFIG, "next_gen4_consistency_v2": NEXT_GEN4_CONSISTENCY_V2_DEFAULT_CONFIG, "next_gen4_consistency_v3": NEXT_GEN4_CONSISTENCY_V3_DEFAULT_CONFIG, "next_gen4_consistency_v4": NEXT_GEN4_CONSISTENCY_V4_DEFAULT_CONFIG, "next_gen4_consistency_v5": NEXT_GEN4_CONSISTENCY_V5_DEFAULT_CONFIG, "next_gen4_consistency_v6": NEXT_GEN4_CONSISTENCY_V6_DEFAULT_CONFIG, "object_f1": OBJECT_F1_DEFAULT_CONFIG, "object_f1_v2": OBJECT_F1_V2_DEFAULT_CONFIG},
+"pipeline_descriptions": {"next_gen2": NEXT_GEN2_DESCRIPTION, "next_gen3": NEXT_GEN3_DESCRIPTION, "next_gen4": NEXT_GEN4_DESCRIPTION, "next_gen4_global_norm": NEXT_GEN4_GLOBAL_NORM_DESCRIPTION, "next_gen4_augmentation_v3": NEXT_GEN4_AUGMENTATION_V3_DESCRIPTION, "next_gen4_augmentation_v4": NEXT_GEN4_AUGMENTATION_V4_DESCRIPTION, "next_gen4_consistency_v1": NEXT_GEN4_CONSISTENCY_V1_DESCRIPTION, "next_gen4_consistency_v2": NEXT_GEN4_CONSISTENCY_V2_DESCRIPTION, "next_gen4_consistency_v3": NEXT_GEN4_CONSISTENCY_V3_DESCRIPTION, "next_gen4_consistency_v4": NEXT_GEN4_CONSISTENCY_V4_DESCRIPTION, "next_gen4_consistency_v5": NEXT_GEN4_CONSISTENCY_V5_DESCRIPTION, "next_gen4_consistency_v6": NEXT_GEN4_CONSISTENCY_V6_DESCRIPTION, "object_f1": OBJECT_F1_DESCRIPTION, "object_f1_v2": OBJECT_F1_V2_DESCRIPTION},
     "fields": [
         {
             "key": "train.pipeline_variant",
             "label": "Вариант конвейера",
             "value_type": "select",
             "tooltip": "Сначала выберите архитектуру. legacy — прежнее обучение; next-gen2 — профиль ноутбука с выбором весов по validation loss. object f1 обучает области и границы, выбирая лучшие веса по объектной F1 полных проверочных снимков. object f1 v2 различает фон, внутренность и широкую границу, восстанавливает полные отдельные полигоны и фильтрует мелкий шум. Оба объектных профиля предназначены для бинарных датасетов и SegFormer B0/B1/B2/B3. Подробности внизу формы.",
-            "options": ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"],
+            "options": ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "object_f1", "object_f1_v2"],
         },
         {
             "key": "dataset.val_fraction",
@@ -905,10 +923,10 @@ def sanitize_template_config(
     result = {
         key: value for key, value in (fallback or BASE_DEFAULT_CONFIG).items() if key in CONFIG_KEYS
     }
-    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"}:
+    if (config or {}).get("train.pipeline_variant") == "legacy" and result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "object_f1", "object_f1_v2"}:
         result.update(BASE_DEFAULT_CONFIG)
     if (
-        (config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"}
+        (config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "object_f1", "object_f1_v2"}
         and result.get("train.pipeline_variant") != (config or {}).get("train.pipeline_variant")
     ):
         result.update(fixed_pipeline_defaults(str((config or {}).get("train.pipeline_variant"))))
@@ -918,17 +936,17 @@ def sanitize_template_config(
             if options is not None and value not in options:
                 continue
             result[key] = value
-    if result.get("train.pipeline_variant") in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} and architecture not in OBJECT_F1_MODEL_NAMES:
+    if result.get("train.pipeline_variant") in {"next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"} and architecture not in OBJECT_F1_MODEL_NAMES:
         raise TrainingUIAPIError("Профиль попиксельной согласованности поддерживает только SMP SegFormer B0/B1/B2/B3")
     if result.get("train.pipeline_variant") in {"object_f1", "object_f1_v2"} and architecture not in OBJECT_F1_MODEL_NAMES:
         label = "object f1 v2" if result.get("train.pipeline_variant") == "object_f1_v2" else "object f1"
         raise TrainingUIAPIError(f"{label} доступен для SegFormer B0/B1/B2/B3")
-    if result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"}:
+    if result.get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "object_f1", "object_f1_v2"}:
         result.update({key: value for key, value in fixed_pipeline_defaults(str(result["train.pipeline_variant"])).items() if key not in NEXT_GEN2_EDITABLE_KEYS})
         tile_size = result.get("tile_preparation.tile_size")
         if not isinstance(tile_size, (int, float)) or tile_size not in NEXT_GEN2_TRAIN_BATCH_SIZES:
             raise TrainingUIAPIError("next-gen2: размер тайла должен быть 512, 768, 1024 или 1536")
-        result["tile_preparation.stride"] = tile_size if result["train.pipeline_variant"] in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} else tile_size // 2
+        result["tile_preparation.stride"] = tile_size if result["train.pipeline_variant"] in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"} else tile_size // 2
         result["train.batch_size"] = next_gen2_train_batch_size(tile_size, architecture)
     elif "tile_preparation.context" not in (config or {}):
         tile_size = int(result.get("tile_preparation.tile_size") or 0)
@@ -1081,7 +1099,7 @@ def _template(
         legacy_defaults.update(default_config)
     schema["fields"][0]["options"] = ["legacy", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1"]
     if architecture in OBJECT_F1_MODEL_NAMES:
-        schema["fields"][0]["options"].extend(["next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "object_f1", "object_f1_v2"])
+        schema["fields"][0]["options"].extend(["next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "object_f1", "object_f1_v2"])
     schema["pipeline_defaults"] = {"legacy": legacy_defaults}
     if architecture in OBJECT_F1_MODEL_NAMES:
         schema["pipeline_defaults"]["next_gen4_consistency_v2"] = {
@@ -1095,6 +1113,9 @@ def _template(
         }
         schema["pipeline_defaults"]["next_gen4_consistency_v5"] = {
             **NEXT_GEN4_CONSISTENCY_V5_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
+        }
+        schema["pipeline_defaults"]["next_gen4_consistency_v6"] = {
+            **NEXT_GEN4_CONSISTENCY_V6_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),
         }
         schema["pipeline_defaults"]["object_f1"] = {
             **OBJECT_F1_DEFAULT_CONFIG, "train.batch_size": next_gen2_train_batch_size(512, architecture),

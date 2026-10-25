@@ -71,11 +71,13 @@ def describe_metric(name: str, context: dict[str, str]) -> dict[str, str]:
         return _entry(meaning, purpose, "доля 0–1" if "fraction" in field else "количество", "справочное значение, не качество")
     if name in {"train/loss", "val/loss", "test/loss"}:
         split = {"train": "обучающей", "val": "проверочной", "test": "итоговой тестовой"}[name.split("/")[0]]
-        extra = " Включает дополнительный KL-штраф согласованности; validation/test его не включают." if name == "train/loss" and variant in {"next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} else ""
+        extra = " Включает дополнительный KL-штраф согласованности; validation/test его не включают." if name == "train/loss" and variant in {"next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"} else ""
         if name == "train/loss" and variant == "next_gen4_consistency_v4":
             extra = " Включает KL согласованности и CE по train-эталону для неохваченных пикселей с общим весом 0,25; validation/test их не включают."
         if name == "train/loss" and variant == "next_gen4_consistency_v5":
             extra = " Включает дополнительный CE полного query-входа при отсоединённом K/V-контексте train-вырезки с весом0,25; validation/test его не включают. Это не KL и не CE fallback."
+        if name == "train/loss" and variant == "next_gen4_consistency_v6":
+            extra = " Включает среднее CE полного query с отсоединёнными K/V train-вырезки и CE самой вырезки по её собственной разметке; общий вес0,25 применяется один раз. Validation/test этот надзор не включают. Это не KL и не CE fallback."
         return _entry(f"Средняя функция потерь на {split} выборке по настроенному loss и весам." + extra,
                       "Контроль сходимости. Сравнивать только при одинаковых loss, весах и выборке; это не процент ошибок и не F1.",
                       "безразмерная величина", "меньше — лучше")
@@ -93,7 +95,7 @@ def describe_metric(name: str, context: dict[str, str]) -> dict[str, str]:
         object_score = name == "train/best_object_f1"
         kind = "объектовая" if object_score else "пиксельная" if name.endswith("threshold_pixel_f1") else "выбранного критерия качества"
         # Для object f1 pixel_f1 не записан в checkpoint_selection: адаптер сохраняет максимум истории.
-        selected = (variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"}
+        selected = (variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}
                     and context.get("checkpoint_selection_metric", "val_loss") == "val_loss") or object_score
         return _entry(f"F1 ({kind}) {'выбранного best.pt' if selected else 'с максимальным значением в истории validation'}.",
                       "Итоговая сводка validation, не независимый test. При выборе по loss F1 лучших весов может быть ниже максимума графика; сверять reports/checkpoint_selection.json.")
@@ -140,7 +142,7 @@ def build_catalog(names: Iterable[str], context: dict[str, str]) -> dict[str, ob
     """Описать только реально записанные ключи, включая типы и сцены."""
     variant = context.get("pipeline_variant", "legacy")
     selection = context.get("checkpoint_selection_metric")
-    if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"} and selection in {None, "val_loss"}:
+    if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"} and selection in {None, "val_loss"}:
         checkpoint_note = "Лучшие веса этого запуска выбираются по минимуму val/loss, не по максимальной F1."
     elif selection == "val/object_f1" or variant in {"object_f1", "object_f1_v2"}:
         checkpoint_note = "Лучшие веса этого запуска выбираются по максимуму объектовой F1."

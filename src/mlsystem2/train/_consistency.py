@@ -5,11 +5,14 @@ from __future__ import annotations
 from .contracts import TrainError
 
 
-def full_query_context_loss(torch, model, images, masks, valid_pixels, class_negative, *, seed, epoch, batch_index):
+def full_query_context_loss(torch, model, images, masks, valid_pixels, class_negative, *, seed, epoch, batch_index, supervise_reference=False):
     """Обучить полный query-вход по train-target при отсоединённом контексте вырезки."""
     stats = {"attempted_batches": 1, "selected_batches": 0, "supervised_pixels": 0,
-             "reference_valid_pixels": 0, "half_side_selected_batches": 0,
+             "half_side_selected_batches": 0,
              "three_quarter_side_selected_batches": 0, "context_loss_sum": 0.0}
+    stats.update({"query_supervised_pixels": 0, "reference_supervised_pixels": 0,
+                  "query_contribution_sum": 0.0, "reference_contribution_sum": 0.0}
+                 if supervise_reference else {"reference_valid_pixels": 0})
     height, width = images.shape[-2:]
     if min(height, width) < 64:
         return None, stats
@@ -33,20 +36,41 @@ def full_query_context_loss(torch, model, images, masks, valid_pixels, class_neg
     states = [(module, module.training) for module in model.modules()]
     try:
         model.eval()
-        logits = model(images, return_two_class_logits=True, context_reference=images[region].contiguous())
-        if ((target[valid] < 0) | (target[valid] >= logits.shape[1])).any():
-            raise TrainError("Недопустимый класс допустимого query-пикселя согласованности")
-        labels = target.masked_fill(~valid, -100)
-        ce = torch.nn.functional.cross_entropy(logits, labels, reduction="none", ignore_index=-100)
-        classes = [valid & (target == index) for index in range(logits.shape[1]) if (valid & (target == index)).any()]
-        loss = torch.stack([ce[mask].mean() for mask in classes]).mean()
-        stats.update(selected_batches=1, supervised_pixels=int(valid.sum().item()),
-                     reference_valid_pixels=int(valid[region].sum().item()), context_loss_sum=float(loss.detach().item()))
+        result = model(images, return_two_class_logits=True, context_reference=images[region].contiguous())
+        if supervise_reference:
+            if not isinstance(result, tuple) or len(result) != 2:
+                raise TrainError("Профиль v6 требует пару прогнозов query и источника K/V")
+            logits, reference_logits = result
+        else:
+            logits = result
+        query_loss = _balanced_ground_truth_ce(torch, logits, target, valid)
+        query_pixels, reference_pixels = int(valid.sum().item()), int(valid[region].sum().item())
+        if supervise_reference:
+            reference_loss = _balanced_ground_truth_ce(torch, reference_logits, target[region], valid[region])
+            loss = torch.stack((query_loss, reference_loss)).mean()
+            stats.update(query_supervised_pixels=query_pixels, reference_supervised_pixels=reference_pixels,
+                         query_contribution_sum=0.5 * float(query_loss.detach().item()),
+                         reference_contribution_sum=0.5 * float(reference_loss.detach().item()))
+        else:
+            loss = query_loss
+            stats["reference_valid_pixels"] = reference_pixels
+        stats.update(selected_batches=1,
+                     supervised_pixels=query_pixels + reference_pixels if supervise_reference else query_pixels,
+                     context_loss_sum=float(loss.detach().item()))
         stats[("half_side_selected_batches", "three_quarter_side_selected_batches")[fraction_index]] = 1
         return 0.25 * loss, stats
     finally:
         for module, training in states:
             module.training = training
+
+
+def _balanced_ground_truth_ce(torch, logits, target, valid):
+    if ((target[valid] < 0) | (target[valid] >= logits.shape[1])).any():
+        raise TrainError("Недопустимый класс допустимого query-пикселя согласованности")
+    labels = target.masked_fill(~valid, -100)
+    ce = torch.nn.functional.cross_entropy(logits, labels, reduction="none", ignore_index=-100)
+    classes = [valid & (target == index) for index in range(logits.shape[1]) if (valid & (target == index)).any()]
+    return torch.stack([ce[mask].mean() for mask in classes]).mean()
 
 
 def context_consistency_loss(torch, model, images, masks, valid_pixels, class_negative, *, seed, epoch, batch_index, bidirectional=False, ground_truth_fallback=False):

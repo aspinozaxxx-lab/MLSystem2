@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Согласованность v6: собственная цель для источника контекста</title>
+  <desc id="desc">Поясняющая схема: обычная train-вырезка получает собственную CE с графом. Её отсоединённые K/V передаются полному query с собственной CE. Среднее двух CE имеет общий вес0,25. Инференс не меняется.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10" fill="none" stroke="#167f79" stroke-width="2"/></marker>
+    <pattern id="water" width="48" height="36" patternUnits="userSpaceOnUse"><rect width="48" height="36" fill="#c7eeeb"/><path d="M0 20Q12 8 24 20T48 20" fill="none" stroke="#63b9b0" stroke-width="3"/></pattern>
+  </defs>
+  <rect width="1600" height="900" rx="24" fill="#f3f8f6"/>
+  <g font-family="Arial,DejaVu Sans,sans-serif" fill="#173b3a">
+    <text x="64" y="68" font-size="22" font-weight="700" letter-spacing="2" fill="#167f79">ПОЯСНЯЮЩАЯ СХЕМА ОБУЧЕНИЯ · V6</text>
+    <text x="64" y="126" font-size="42" font-weight="700">Собственная разметка для каждого контекста</text>
+    <text x="64" y="172" font-size="24" fill="#496965">Общее правило для train-входов. Без координат кругов и подбора внешнего порога.</text>
+    <rect x="64" y="226" width="408" height="488" rx="20" fill="white" stroke="#c3dcd5" stroke-width="2"/>
+    <text x="92" y="270" font-size="26" font-weight="700">Полный train-вход</text>
+    <rect x="92" y="300" width="352" height="226" rx="12" fill="url(#water)"/>
+    <path d="M92 300H444V359Q380 337 361 300ZM92 526V468Q132 481 147 526Z" fill="#c9c0a3"/>
+    <rect x="206" y="355" width="132" height="132" fill="none" stroke="#164f4a" stroke-width="4" stroke-dasharray="9 7"/>
+    <text x="92" y="568" font-size="23" font-weight="700">Вырезка без масштаба</text>
+    <text x="92" y="606" font-size="21">Сторона 50% или 75%, p = 0,5</text>
+    <text x="92" y="643" font-size="21">Только внутри train-окна</text>
+    <text x="92" y="680" font-size="21">Общие пиксели неизменны</text>
+    <rect x="522" y="226" width="468" height="488" rx="20" fill="white" stroke="#c3dcd5" stroke-width="2"/>
+    <text x="550" y="270" font-size="26" font-weight="700">Обычный прогноз вырезки</text>
+    <rect x="550" y="300" width="412" height="102" rx="12" fill="#e2f4ef"/>
+    <text x="574" y="342" font-size="24" font-weight="700">Та же сеть · eval · с графом</text>
+    <text x="574" y="378" font-size="22">Собственные logits источника</text>
+    <path d="M756 412V455" stroke="#167f79" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="550" y="472" width="412" height="134" rx="12" fill="#f2f7e6" stroke="#bdd39b"/>
+    <text x="574" y="513" font-size="24" font-weight="700">CE по разметке вырезки</text>
+    <text x="574" y="551" font-size="21">Только её допустимые пиксели</text>
+    <text x="574" y="584" font-size="21">Градиент обучает и её K/V</text>
+    <text x="550" y="653" font-size="21">Классы усредняются поровну</text>
+    <text x="550" y="688" font-size="21">Фон также получает надзор</text>
+    <rect x="1040" y="226" width="496" height="488" rx="20" fill="white" stroke="#c3dcd5" stroke-width="2"/>
+    <text x="1068" y="270" font-size="26" font-weight="700">Полный query с K/V вырезки</text>
+    <rect x="1068" y="300" width="440" height="102" rx="12" fill="#e2f4ef"/>
+    <text x="1092" y="342" font-size="24" font-weight="700">K/V отсоединены от графа</text>
+    <text x="1092" y="378" font-size="22">Пиксели и query-сетка прежние</text>
+    <path d="M1288 412V455" stroke="#167f79" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="1068" y="472" width="440" height="134" rx="12" fill="#f2f7e6" stroke="#bdd39b"/>
+    <text x="1092" y="513" font-size="24" font-weight="700">CE по полному train-target</text>
+    <text x="1092" y="551" font-size="21">Только допустимые query-пиксели</text>
+    <text x="1092" y="584" font-size="21">Нет градиента источнику через K/V</text>
+    <text x="1068" y="653" font-size="21">Размер полного входа сохранён</text>
+    <text x="1068" y="688" font-size="21">Val/test не входят в обучение</text>
+    <path d="M477 350H511M995 350H1029" stroke="#167f79" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="64" y="750" width="1472" height="108" rx="18" fill="#174f4a"/>
+    <text x="94" y="791" font-size="29" font-weight="700" fill="white">Дополнительный loss = 0,25 × среднее двух CE · один шаг optimizer</text>
+    <text x="94" y="831" font-size="22" fill="#d1efea">Это проверяемая гипотеза, не обещание устранения кругов. Штатный инференс и старые веса прежние.</text>
+  </g>
+</svg>

@@ -78,6 +78,16 @@ def test_context_changes_meaning_not_metric_names():
     assert not any("выбираются по минимуму" in note for note in historical["notes"])
 
 
+def test_v6_description_explains_two_ce_and_does_not_add_context_to_validation():
+    context = {"pipeline_variant": "next_gen4_consistency_v6", "checkpoint_selection_metric": "val_loss"}
+    train = describe_metric("train/loss", context)["meaning"]
+    assert "среднее CE" in train and "собственной разметке" in train
+    assert "вес0,25 применяется один раз" in train
+    assert "Включает дополнительный KL" not in train
+    assert "среднее CE" not in describe_metric("val/loss", context)["meaning"]
+    assert "среднее CE" not in describe_metric("test/loss", context)["meaning"]
+
+
 def test_html_is_offline_safe_and_has_tooltips():
     name = 'val/scene/снимок<img src=x onerror="alert(1)">/pixel_f1'
     html = render_html(build_catalog([name], {"task": '<script>ошибка</script>'}))

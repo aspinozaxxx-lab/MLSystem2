@@ -105,7 +105,7 @@ def get_best_training_checkpoint(
         notebook_losses = (
             client.get_metric_history(run_id, "val/loss")
             # Старые запуски действительно сохраняли best по loss; их веса не переписываем.
-            if tags.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5"}
+            if tags.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6"}
             and tags.get("checkpoint_selection_metric", "val_loss") == "val_loss"
             else None
         )
