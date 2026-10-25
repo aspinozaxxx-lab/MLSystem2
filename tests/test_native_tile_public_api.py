@@ -4,7 +4,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
+
+torch = pytest.importorskip("torch", reason="Для вычислительных проверок необходим необязательный PyTorch")
 
 from mlsystem2.models.contracts import CheckpointArtifact, LoadedCheckpoint, ModelHandle, ModelSpec
 from mlsystem2.training_ui_api.api import infer_native_tile
