@@ -7,7 +7,7 @@ import type Geometry from "ol/geom/Geometry";
 import VectorSource from "ol/source/Vector";
 import type { AnnotationFeatureHistoryEntry } from "./api/types";
 import { polygonHistoryPreview } from "./DatasetPolygonHistory";
-import { clipEditorGeometry, synchronizeEditorSource } from "./utils/datasetEditor";
+import { clipEditorGeometry, editorGeometryNeedsUntangling, synchronizeEditorSource } from "./utils/datasetEditor";
 
 describe("автоматическая обрезка контуров", () => {
   const footprint = new Polygon([[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]], [[4, 4], [4, 6], [6, 6], [6, 4], [4, 4]]]);
@@ -39,6 +39,37 @@ describe("автоматическая обрезка контуров", () => {
   it("возвращает пустое пересечение при касании и полностью внешнем контуре", () => {
     const source = new Polygon([[[10, 0], [12, 0], [12, 10], [10, 10], [10, 0]]]);
     expect(clipEditorGeometry(source, footprint)).toBeNull();
+  });
+  it.each([0, -3, 20])("не добавляет вершину в самопересечение даже за footprint: смещение %s", (offset) => {
+    const coordinates = [[[offset, 1], [offset + 8, 9], [offset, 9], [offset + 8, 1], [offset, 1]]];
+    const source = new Polygon(coordinates);
+    expect(editorGeometryNeedsUntangling(source)).toBe(true);
+    const saved = clipEditorGeometry(source, footprint) as Polygon;
+    expect(saved.getType()).toBe("Polygon");
+    expect(saved.getCoordinates()).toEqual(coordinates);
+    expect(source.getCoordinates()).toEqual(coordinates);
+    const feature = new Feature<Geometry>({ geometry: saved });
+    const restored = new GeoJSON().readFeature(new GeoJSON().writeFeatureObject(feature)) as Feature<Geometry>;
+    expect((restored.getGeometry() as Polygon).getCoordinates()).toEqual(coordinates);
+  });
+  it("снова обрезает контур после распутывания", () => {
+    const source = new Polygon([[[-2, -2], [12, 12], [-2, 12], [12, -2], [-2, -2]]]);
+    const editable = clipEditorGeometry(source, footprint) as Polygon;
+    editable.setCoordinates([[[-2, -2], [12, -2], [12, 12], [-2, 12], [-2, -2]]]);
+    expect(editorGeometryNeedsUntangling(editable)).toBe(false);
+    const result = clipEditorGeometry(editable, footprint) as Polygon;
+    expect(result.getArea()).toBe(96);
+    expect(result.getCoordinates()).toHaveLength(2);
+  });
+  it("не перестраивает пересекающиеся кольца и наложенные части", () => {
+    const crossedRings = new Polygon([[[0, 0], [8, 0], [8, 8], [0, 8], [0, 0]],
+      [[6, 2], [10, 2], [10, 6], [6, 6], [6, 2]]]);
+    const overlapped = new MultiPolygon([[[[0, 0], [8, 0], [8, 8], [0, 8], [0, 0]]],
+      [[[4, 4], [12, 4], [12, 12], [4, 12], [4, 4]]]]);
+    for (const geometry of [crossedRings, overlapped]) {
+      expect(editorGeometryNeedsUntangling(geometry)).toBe(true);
+      expect((clipEditorGeometry(geometry, footprint) as Polygon | MultiPolygon).getCoordinates()).toEqual(geometry.getCoordinates());
+    }
   });
 });
 

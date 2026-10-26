@@ -9,7 +9,7 @@ import pytest
 import numpy as np
 import rasterio
 from fastapi.testclient import TestClient
-from shapely.geometry import box, mapping, shape
+from shapely.geometry import Polygon, box, mapping, shape
 from sqlalchemy import select
 from rasterio.enums import ColorInterp
 from rasterio.transform import from_origin
@@ -143,6 +143,29 @@ def test_manual_import_and_conflicts_are_atomic(manual_client):
     assert rejected.status_code == 409
     with create_session_factory(config)() as session:
         assert session.scalars(select(JobRow)).all() == []
+
+
+def test_manual_self_intersection_draft_is_not_polygonized(manual_client):
+    client, _config, sample = manual_client
+    scene = _add_image(client, sample)
+    name = scene["annotation_name"]
+    base = f"/api/v1/test-samples/{sample['id']}/editor"
+    geometry = Polygon([(0, 0), (70, 70), (0, 70), (70, 0), (0, 0)])
+    payload = json.loads(json.dumps(_annotation(geometry)))
+    request = {"base_revision": scene["revision"], "geojson": payload}
+    saved = client.put(f"{base}/drafts/{name}", json=request)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["geojson"]["features"][0]["geometry"] == payload["features"][0]["geometry"]
+    rejected = client.post(base + "/drafts/publish")
+    assert rejected.status_code == 400, rejected.text
+    detail = client.get(f"{base}/scenes/{name}").json()
+    assert detail["draft"]["geojson"] == saved.json()["geojson"]
+    request["geojson"] = _annotation(box(0, 0, 70, 70))
+    fixed = client.put(f"{base}/drafts/{name}", json=request)
+    assert fixed.status_code == 200, fixed.text
+    assert shape(fixed.json()["geojson"]["features"][0]["geometry"]).equals(shape(detail["valid_data_footprint"]))
+    published = client.post(base + "/drafts/publish")
+    assert published.status_code == 200, published.text
 
 
 def test_manual_publication_restores_files_when_transaction_fails(manual_client):

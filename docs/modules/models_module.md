@@ -75,6 +75,13 @@ query, стороны кратны32. Hooks удаляются при любом
 `full_query_detached_geometry_kv_with_reference_gt_v1` из архитектуры и прежняя
 LayerNorm. Создание геометрий и перенос целей принадлежат train, не models.
 
+При дополнительном надзоре источника v6/v7 два eval-прохода используют
+non-reentrant activation checkpointing: активации пересчитываются при backward,
+а не хранятся одновременно. Пересчёт query заново устанавливает отсоединённые
+K/V и гарантированно снимает hooks; eval временно восстанавливается также после
+возвращения вызывающего кода в train. Logits, градиенты, веса loss и один optimizer
+step прежние. Без градиента, без reference и в v5 пересчёта нет; ABI весов не меняется.
+
 ## Список используемых данным модулем модулей и с какой целью
 
 Модуль не использует публичные API других модулей. `torch` подключается как optional dependency без падения при импорте модуля, `transformers` импортируется лениво при создании Hugging Face SegFormer, `segmentation_models_pytorch` импортируется лениво при создании SMP SegFormer и SMP DeepLabV3Plus.

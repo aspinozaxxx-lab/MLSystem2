@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-torch = pytest.importorskip("torch")
-
 from mlsystem2.train._consistency import context_consistency_loss
 from mlsystem2.training_ui_api._templates import initial_templates, sanitize_template_config
+
+torch = pytest.importorskip("torch")
 
 VARIANT = "next_gen4_consistency_v1"
 POLICY = {"version": "confident_teacher_kl_v1", "weight": 0.25, "probability": 0.5,
@@ -223,7 +223,7 @@ def test_periodic_current_snapshots_preserve_one_training_loop_and_best_selectio
         early_stopping_patience=10, diagnostic_checkpoint_interval_sec=1)
     result = _trainer.train_model(TrainRequest(model=model, train_loader=loader, val_loader=loader,
         dense_train_loader=loader, config=config, checkpoint_dir=str(tmp_path), sample_size=64))
-    index = json.loads((tmp_path / "diagnostic_checkpoints.json").read_text())
+    index = json.loads((tmp_path / "diagnostic_checkpoints.json").read_text(encoding="utf-8"))
     assert result.epochs_total == 2 and len(index["checkpoints"]) == 2
     assert result.diagnostics["checkpoint_selection"]["metric"] == "val_loss"
     assert result.diagnostics["dense_train_windows"]["evaluation_performed"]

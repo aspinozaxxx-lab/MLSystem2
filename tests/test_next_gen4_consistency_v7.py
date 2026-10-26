@@ -25,6 +25,78 @@ def spec():
     return configured
 
 
+@pytest.mark.parametrize("source_side", [64, 128])
+def test_context_recomputation_preserves_logits_gradients_and_modes(monkeypatch, source_side):
+    from mlsystem2.models import _context
+
+    torch.set_num_threads(2)
+    torch.manual_seed(817)
+    model = create_model(spec()).model.eval()
+    eager = deepcopy(model)
+    image = torch.rand(1, 4, 128, 128) * 200 + 1
+    source = image[..., :source_side, :source_side].clone()
+    target = (torch.arange(128).view(1, 128, 1) % 2).expand(1, 128, 128)
+
+    def execute(current):
+        saved_sizes = []
+
+        def remember(tensor):
+            saved_sizes.append(tensor.numel())
+            return tensor
+
+        with torch.autograd.graph.saved_tensors_hooks(remember, lambda tensor: tensor):
+            query, reference = current(image, return_two_class_logits=True, context_reference=source)
+        loss = .125 * (torch.nn.functional.cross_entropy(query, target)
+                       + torch.nn.functional.cross_entropy(reference, target[..., :source_side, :source_side]))
+        # Train восстанавливает режимы до backward дополнительного loss.
+        current.train()
+        current.model.segmentation_head.eval()
+        states = [module.training for module in current.modules()]
+        loss.backward()
+        assert [module.training for module in current.modules()] == states
+        assert all(not module.kv._forward_hooks for module in current.modules()
+                   if type(module).__name__ == "Attention")
+        gradients = {name: parameter.grad.clone() if parameter.grad is not None else None
+                     for name, parameter in current.named_parameters()}
+        return query.detach(), reference.detach(), loss.detach(), gradients, sum(saved_sizes)
+
+    actual = execute(model)
+    with monkeypatch.context() as patch:
+        patch.setattr(_context, "_checkpointed_evaluation", lambda wrapper, forward, value: forward(value))
+        expected = execute(eager)
+    for before, after in zip(expected[:3], actual[:3]):
+        torch.testing.assert_close(after, before, rtol=0, atol=0)
+    for name, gradient in expected[3].items():
+        if gradient is None:
+            assert actual[3][name] is None
+        else:
+            torch.testing.assert_close(actual[3][name], gradient, rtol=1e-5, atol=1e-7)
+    assert actual[4] < expected[4] / 4
+
+
+@pytest.mark.parametrize("loss_index", [0, 1])
+def test_context_recomputation_restores_hooks_and_modes_after_backward_failure(loss_index):
+    model = create_model(spec()).model.eval()
+    image = torch.full((1, 4, 64, 64), 40.)
+    logits = model(image, return_two_class_logits=True, context_reference=image)
+    model.train()
+    model.model.segmentation_head.eval()
+    states = [module.training for module in model.modules()]
+
+    def fail(module, inputs):
+        raise RuntimeError("Проверочная ошибка пересчёта активаций")
+
+    handle = model.model.encoder.block1[0].register_forward_pre_hook(fail)
+    try:
+        with pytest.raises(RuntimeError, match="пересчёта"):
+            logits[loss_index].mean().backward()
+    finally:
+        handle.remove()
+    assert [module.training for module in model.modules()] == states
+    assert all(not module.kv._forward_hooks for module in model.modules()
+               if type(module).__name__ == "Attention")
+
+
 class GeometryModel(torch.nn.Module):
     def __init__(self, channels=2, batch=1, failure=None):
         super().__init__()

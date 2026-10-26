@@ -1,4 +1,4 @@
-"""Точная обрезка векторных геометрий по валидным пикселям TIFF."""
+"""Маска валидных пикселей TIFF, точная обрезка и отдельный контур редактора."""
 
 from __future__ import annotations
 
@@ -15,12 +15,14 @@ from rasterio.features import shapes
 from rasterio.windows import transform as window_transform
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.affinity import affine_transform
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
 
 _VALID_FOOTPRINT_MAX_SIDE = 4096
 _VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
+_EDITOR_CLIPPING_SIMPLIFY_PIXELS = 1.0
 
 
 def valid_data_footprint(image_path: Path) -> BaseGeometry:
@@ -118,6 +120,37 @@ def _cached_valid_data_footprint(
             f"Не удалось построить footprint валидных данных: {Path(image_path).name}"
         )
     return footprint
+
+
+def editor_clipping_footprint(image_path: Path) -> BaseGeometry:
+    """Отдельный удобный контур редактора; маска обучения и служебный footprint прежние."""
+    from .contracts import TrainingUIAPIError
+
+    try:
+        valid_data_footprint(image_path)
+        status = image_path.stat()
+        return _cached_editor_clipping_footprint(
+            str(image_path.resolve()), status.st_mtime_ns, status.st_size,
+        )
+    except (OSError, rasterio.errors.RasterioError) as exc:
+        raise TrainingUIAPIError(f"Не удалось построить контур подрезки TIFF {image_path.name}: {exc}") from exc
+
+
+@lru_cache(maxsize=64)
+def _cached_editor_clipping_footprint(
+    image_path: str, _modified_ns: int, _size_bytes: int,
+) -> BaseGeometry:
+    footprint = _cached_valid_data_footprint(image_path, _modified_ns, _size_bytes)
+    with rasterio.open(image_path) as source:
+        native = source.transform
+    inverse = ~native
+    pixels = affine_transform(
+        footprint, [inverse.a, inverse.b, inverse.d, inverse.e, inverse.c, inverse.f],
+    )
+    simplified = pixels.simplify(_EDITOR_CLIPPING_SIMPLIFY_PIXELS, preserve_topology=True)
+    if simplified.equals_exact(pixels, tolerance=0):
+        return footprint
+    return affine_transform(simplified, [native.a, native.b, native.d, native.e, native.c, native.f])
 
 
 def valid_data_mask(dataset, window=None, indexes=None):

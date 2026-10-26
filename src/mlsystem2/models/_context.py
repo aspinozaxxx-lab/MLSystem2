@@ -1,6 +1,30 @@
 """Временный отсоединённый K/V-контекст без изменения штатного forward модели."""
 
+from contextlib import contextmanager, nullcontext
+
 from .contracts import ModelsError
+
+
+@contextmanager
+def _evaluation_for_recomputation(wrapper):
+    """Пересчитать eval-граф после восстановления train-режима вызывающим кодом."""
+    states = [(module, module.training) for module in wrapper.modules()]
+    try:
+        wrapper.eval()
+        yield
+    finally:
+        for module, training in states:
+            module.training = training
+
+
+def _checkpointed_evaluation(wrapper, forward, image):
+    """Не хранить одновременно активации источника и полного query-прохода."""
+    from torch.utils.checkpoint import checkpoint
+
+    return checkpoint(
+        forward, image, use_reentrant=False,
+        context_fn=lambda: (nullcontext(), _evaluation_for_recomputation(wrapper)),
+    )
 
 
 def forward_with_context_reference(torch, wrapper, image, reference, *, return_two_class_logits, supervise_reference=False):
@@ -46,11 +70,16 @@ def forward_with_context_reference(torch, wrapper, image, reference, *, return_t
             return value
         return hook
 
+    recompute = supervise_reference and torch.is_grad_enabled()
     try:
         for index, projection in enumerate(projections):
             handles.append(projection.register_forward_hook(capture(index)))
         with torch.set_grad_enabled(torch.is_grad_enabled() and supervise_reference):
-            reference_logits = wrapper(reference, return_two_class_logits=True)
+            def reference_forward(value):
+                return wrapper(value, return_two_class_logits=True)
+
+            reference_logits = (_checkpointed_evaluation(wrapper, reference_forward, reference)
+                                if recompute else reference_forward(reference))
         if not supervise_reference:
             reference_logits = None
     finally:
@@ -58,12 +87,16 @@ def forward_with_context_reference(torch, wrapper, image, reference, *, return_t
             handle.remove()
     if len(values) != len(projections):
         raise ModelsError("Не все attention-блоки предоставили K/V-контекст вырезки")
-    handles = []
-    try:
-        for index, projection in enumerate(projections):
-            handles.append(projection.register_forward_hook(replace(index)))
-        query_logits = wrapper(image, return_two_class_logits=return_two_class_logits)
-        return (query_logits, reference_logits) if supervise_reference else query_logits
-    finally:
-        for handle in handles:
-            handle.remove()
+    def query_forward(value):
+        query_handles = []
+        try:
+            for index, projection in enumerate(projections):
+                query_handles.append(projection.register_forward_hook(replace(index)))
+            return wrapper(value, return_two_class_logits=return_two_class_logits)
+        finally:
+            for handle in query_handles:
+                handle.remove()
+
+    query_logits = (_checkpointed_evaluation(wrapper, query_forward, image)
+                    if recompute else query_forward(image))
+    return (query_logits, reference_logits) if supervise_reference else query_logits

@@ -280,6 +280,9 @@ export function editableVertexCoordinates(
 export function clipEditorGeometry(geometry: Geometry | null | undefined, footprint: Geometry | null): Geometry | null {
   if (!geometry) return null;
   if (!footprint) return geometry.clone();
+  // Промежуточный контур должен оставаться редактируемым: пересечения рёбер
+  // не превращаем в вершины нескольких частей. Обрежем после распутывания.
+  if (editorGeometryNeedsUntangling(geometry)) return geometry.clone();
   const coordinates = (value: Geometry): ClipMultiPolygon => {
     if (value.getType() === "Polygon") return [(value as Polygon).getCoordinates()] as ClipMultiPolygon;
     if (value.getType() === "MultiPolygon") return (value as MultiPolygon).getCoordinates() as ClipMultiPolygon;
@@ -290,6 +293,35 @@ export function clipEditorGeometry(geometry: Geometry | null | undefined, footpr
   const result = polygonClipping.intersection(input, boundary);
   if (!result.length) return null;
   return result.length === 1 ? new Polygon(result[0]) : new MultiPolygon(result);
+}
+
+export function editorGeometryNeedsUntangling(geometry: Geometry | null | undefined): boolean {
+  if (!(geometry instanceof Polygon || geometry instanceof MultiPolygon)) return false;
+  const polygons = geometry instanceof Polygon ? [geometry.getCoordinates()] : geometry.getCoordinates();
+  const epsilon = polygons.flat(2).reduce((scale, point) =>
+    Math.max(scale, Math.abs(point[0]), Math.abs(point[1])), 1) * Number.EPSILON * 32;
+  for (const polygon of polygons) {
+    if (!polygon.length || polygon.some((ring) => ring.length < 4 ||
+      ring.some((point) => point.length < 2 || !point.slice(0, 2).every(Number.isFinite)) ||
+      !simpleRing(ring, epsilon))) return true;
+    const outer = new Polygon([polygon[0]]);
+    for (let index = 1; index < polygon.length; index += 1) {
+      const hole = polygon[index];
+      if (!outer.intersectsCoordinate(hole[0]) || ringsTouch(polygon[0], hole, epsilon)) return true;
+      for (let other = 1; other < index; other += 1) {
+        if (ringsTouch(hole, polygon[other], epsilon) ||
+          new Polygon([polygon[other]]).intersectsCoordinate(hole[0]) ||
+          new Polygon([hole]).intersectsCoordinate(polygon[other][0])) return true;
+      }
+    }
+  }
+  for (let index = 0; index < polygons.length; index += 1) {
+    for (let other = 0; other < index; other += 1) {
+      if (polygonClipping.intersection([polygons[index]] as ClipMultiPolygon,
+        [polygons[other]] as ClipMultiPolygon).length) return true;
+    }
+  }
+  return false;
 }
 
 export function editableVertices(

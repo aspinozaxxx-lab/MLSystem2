@@ -30,7 +30,7 @@ from ._datasets import imagery_images_dir
 from ._markup_export import _write_png
 from ._markup_lock import test_sample_storage_lock
 from ._models import DatasetEditorDraftRow, TestSampleRow, TestSampleTileRow
-from ._raster_valid_data import valid_data_footprint
+from ._raster_valid_data import editor_clipping_footprint
 from ._test_samples import (
     _clear_test_sample_tile_f1, _mark_test_sample_evaluation_stale,
     _refresh_training_metrics_after_primary_change, _sample_root, _sample_row, _utc_now,
@@ -141,7 +141,7 @@ def sample_editor_detail(session, config, sample_id, name, username):
         image = sample_editor_raster(session, config, sample_id, name, username)
         payload = (_read_geojson(_sample_root(config, sample_id) / name)
                    if _tile(sample, name) else _empty_annotation_payload(image, dataset))
-        footprint = valid_data_footprint(image)
+        footprint = editor_clipping_footprint(image)
         draft = next((draft for draft in _drafts(session, sample_id, username) if draft.annotation_name == name), None)
         return DatasetEditorSceneDetail(
             scene=scene, geojson=payload, valid_data_footprint=dict(mapping(footprint)),
@@ -149,7 +149,7 @@ def sample_editor_detail(session, config, sample_id, name, username):
         )
 
 
-def _normalize(payload, previous, dataset, image, *, clip=True):
+def _normalize(payload, previous, dataset, image, *, clip=True, allow_invalid=False):
     candidate = copy.deepcopy(payload)
     if dataset.task == "binary" and candidate.get("_mlsystem2_task", "binary") != "binary":
         raise TrainingUIAPIError("Многоклассовая разметка не подходит бинарной тестовой выборке.")
@@ -169,8 +169,9 @@ def _normalize(payload, previous, dataset, image, *, clip=True):
     candidate = _reproject_editor_geojson(candidate, image)
     normalized = _normalize_editor_geojson(candidate, previous, dataset, image_path=image)
     if clip:
-        normalized = _clip_geojson_to_footprint(normalized, valid_data_footprint(image))
-    _validate_editor_geojson(normalized, image, dataset, check_footprint=clip)
+        normalized = _clip_geojson_to_footprint(normalized, editor_clipping_footprint(image))
+    _validate_editor_geojson(normalized, image, dataset,
+                             check_footprint=clip and not allow_invalid, allow_repair=allow_invalid)
     return normalized
 
 
@@ -182,7 +183,7 @@ def sample_editor_save_draft(session, config, sample_id, name, request, username
         sample = _sample_row(session, sample_id)
         dataset = _dataset(session, config, sample)
         image = sample_editor_raster(session, config, sample_id, name, username)
-        normalized = _normalize(request.geojson, detail.geojson, dataset, image)
+        normalized = _normalize(request.geojson, detail.geojson, dataset, image, allow_invalid=True)
         _validate_preserved_properties(detail.geojson, normalized)
         row = next((draft for draft in _drafts(session, sample_id, username) if draft.annotation_name == name), None)
         if row is None:
@@ -243,7 +244,7 @@ def sample_editor_import(session, config, sample_id, request, username):
                 image = _sample_root(config, sample_id) / Path(name).with_suffix(".tif")
         previous = _read_geojson(_sample_root(config, sample_id) / name) if tile else _empty_annotation_payload(image, dataset)
         candidate = _normalize(scene.geojson, previous, dataset, image, clip=False)
-        outside = sum(not _footprint_covers_geometry(valid_data_footprint(image), shape(feature["geometry"]))
+        outside = sum(not _footprint_covers_geometry(editor_clipping_footprint(image), shape(feature["geometry"]))
                       for feature in candidate["features"])
         if outside:
             clipping.append(f"{name}: объектов за контуром — {outside}.")

@@ -57,9 +57,9 @@ def prepare_fixture(tmp_path, zones=None, channels=3, alpha=False):
     return result, raster, markup
 
 
-def loader(scenes, pipeline="legacy", tile=16, augmentation=0, mode="val", **kwargs):
+def loader(scenes, pipeline="legacy", tile=16, augmentation=0, mode="val", stride=None, **kwargs):
     return TileDataset(scenes=[TileSceneSource(**scene.model_dump()) for scene in scenes],
-                       tile_size=tile, stride=tile // 2, mode=mode, seed=42,
+                       tile_size=tile, stride=tile // 2 if stride is None else stride, mode=mode, seed=42,
                        augmentation_level=augmentation, pipeline_variant=pipeline,
                        input_channels=3 if pipeline == "object_f1" else None, **kwargs)
 
@@ -169,6 +169,25 @@ def test_alpha_is_honoured_when_nodata_is_also_set(tmp_path):
     assert meta["valid_pixels"].sum() == 132
     assert not image[:, ~meta["valid_pixels"]].any()
     dataset.close()
+
+
+@pytest.mark.parametrize("pipeline", ["legacy", "next_gen2", "next_gen3", "next_gen4",
+                                      "next_gen4_consistency_v7", "object_f1_v2"])
+def test_loose_zone_outline_does_not_enable_nodata_supervision(tmp_path, pipeline):
+    result, _, markup = prepare_fixture(tmp_path, [feature("zone", box(-2, -2, 34, 34))])
+    original = markup.read_bytes()
+    dataset = loader(result.dataset.scenes, pipeline, tile=32,
+                     stride=32 if pipeline.startswith("next_gen4") else 16)
+    try:
+        image, target, metadata = dataset[0]
+        valid = metadata["valid_pixels"]
+        assert int(valid.sum()) == 32 * 32 - 4
+        assert not valid[13:15, 9:11].any()
+        assert not target[..., ~valid].any()
+        assert not image[:, ~valid].any()
+        assert markup.read_bytes() == original
+    finally:
+        dataset.close()
 
 
 @pytest.mark.parametrize("pipeline,loss,channels", [("legacy", "bce_dice", 1), ("legacy", "focal_tversky", 1),

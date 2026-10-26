@@ -277,10 +277,10 @@ def test_dataset_editor_preserves_polygon_holes_in_draft_and_publication(
         assert shape(feature["geometry"]).equals(shape(by_id[feature["id"]]["geometry"]))
 
 
-def test_dataset_editor_removes_detached_hole_after_topology_repair(
+def test_dataset_editor_keeps_detached_hole_editable_without_topology_repair(
     editor_environment: _EditorEnvironment,
 ) -> None:
-    """Вынесенный вырез после автосохранения удаляется как часть, без потери родителя."""
+    """Вынесенный вырез остаётся кольцом: его можно вернуть внутрь или удалить без дробления."""
     env = editor_environment
     base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
     scene = env.client.get(base + "/scenes").json()["scenes"][0]
@@ -301,14 +301,12 @@ def test_dataset_editor_removes_detached_hole_after_topology_repair(
     repaired = saved.json()["geojson"]
     target = next(feature for feature in repaired["features"] if feature["id"] == feature_id)
     geometry = shape(target["geometry"])
-    assert geometry.geom_type == "MultiPolygon"
-    assert len(geometry.geoms) == 2
-    assert any(part.equals(detached) for part in geometry.geoms)
-    # Результат удаления выбранной части во frontend остаётся MultiPolygon с одним родителем.
-    target["geometry"]["coordinates"] = [
-        coordinates for coordinates in target["geometry"]["coordinates"]
-        if not shape({"type": "Polygon", "coordinates": coordinates}).equals(detached)
-    ]
+    assert geometry.geom_type == "Polygon"
+    assert len(geometry.interiors) == 1 and not geometry.is_valid
+    assert target["geometry"] == json.loads(json.dumps(updated["features"][0]["geometry"]))
+    assert env.client.post(base + "/drafts/publish").status_code == 400
+    # Удаляем именно внутреннее кольцо, не созданную сервером отдельную часть.
+    target["geometry"]["coordinates"] = target["geometry"]["coordinates"][:1]
     saved_again = env.client.put(base + f"/drafts/{name}", json={
         "base_revision": scene["revision"], "geojson": repaired,
     })
@@ -765,6 +763,83 @@ def test_dataset_editor_draft_clips_objects_to_valid_raster_footprint(
     reopened = env.client.get(f"{scenes_url}/{annotation_path}").json()
     assert reopened["scene"]["annotation_zone_count"] == 1
     assert shape(next(item for item in reopened["geojson"]["features"] if item["id"] == 103)["geometry"]).equals(footprint)
+
+
+@pytest.mark.parametrize("role", ["positive", "hard_negative", "annotation_zone"])
+@pytest.mark.parametrize("explicit_version", [False, True])
+def test_self_intersection_stays_editable_until_fixed(editor_environment, role, explicit_version):
+    env = editor_environment
+    base = f"/api/v1/dataset-editor/datasets/{quote(env.dataset_key, safe='')}"
+    name = "Olskij_SCN01.part.geojson"
+    detail = env.client.get(f"{base}/scenes/{name}").json()
+    original = (env.editor_dataset / name).read_bytes()
+    ring = [[-2, -2], [10, 10], [-2, 10], [10, -2], [-2, -2]]
+    payload = _annotation_payload([_feature(100, role, ring)])
+    request = {"base_revision": detail["scene"]["revision"], "geojson": payload}
+    if explicit_version:
+        catalog = detail["annotation_versions"]
+        request["annotation_versions"] = {"catalog_revision": catalog["revision"],
+            "selected_id": catalog["selected_id"], "edits": [], "replacements": {}}
+    saved = env.client.put(f"{base}/drafts/{name}", json=request)
+    assert saved.status_code == 200, saved.text
+    feature = saved.json()["geojson"]["features"][0]
+    assert feature["geometry"] == payload["features"][0]["geometry"]
+    assert feature["id"] == 100 and feature["properties"]["_mlsystem2_role"] == role
+    reopened = env.client.get(f"{base}/scenes/{name}").json()
+    assert reopened["draft"]["geojson"] == saved.json()["geojson"]
+    rejected = env.client.post(f"{base}/drafts/publish")
+    assert rejected.status_code == 400, rejected.text
+    assert "самопересечения" in rejected.json()["detail"]
+    assert (env.editor_dataset / name).read_bytes() == original
+    assert env.client.get(f"{base}/scenes/{name}").json()["draft"]["geojson"] == saved.json()["geojson"]
+    deleting = env.client.put(f"{base}/drafts/{name}", json={**request, "deleted": True})
+    assert deleting.status_code == 200, deleting.text
+    rejected_deletion = env.client.post(f"{base}/drafts/publish")
+    assert rejected_deletion.status_code == 400, rejected_deletion.text
+    assert (env.editor_dataset / name).read_bytes() == original
+    payload["features"][0]["geometry"]["coordinates"] = [[[-2, -2], [10, -2], [10, 10], [-2, 10], [-2, -2]]]
+    request["geojson"] = payload
+    fixed = env.client.put(f"{base}/drafts/{name}", json=request)
+    assert fixed.status_code == 200, fixed.text
+    expected = shape(detail["valid_data_footprint"])
+    assert shape(fixed.json()["geojson"]["features"][0]["geometry"]).equals(expected)
+    published = env.client.post(f"{base}/drafts/publish")
+    assert published.status_code == 200, published.text
+    restored = env.client.get(f"{base}/scenes/{name}").json()
+    assert restored["draft"] is None
+    assert shape(restored["geojson"]["features"][0]["geometry"]).equals(expected)
+
+
+@pytest.mark.parametrize("rotated", [False, True])
+def test_editor_clipping_simplifies_in_native_pixels_without_changing_mask(tmp_path, rotated):
+    from affine import Affine
+    from shapely.affinity import affine_transform
+    from mlsystem2.training_ui_api._raster_valid_data import (
+        editor_clipping_footprint, valid_data_footprint, valid_data_mask,
+    )
+
+    rows, columns = np.indices((256, 512))
+    valid = rows >= np.floor(10 + 0.14 * columns)
+    transform = (Affine.translation(1000000, 5000000) * Affine.rotation(17) * Affine.scale(3, -5)
+                 if rotated else from_origin(0, 256, 1, 1))
+    path = tmp_path / "наклонный-край.tif"
+    with rasterio.open(path, "w", driver="GTiff", count=3, dtype="uint8", width=512,
+                       height=256, crs="EPSG:3857", nodata=0, transform=transform) as raster:
+        raster.write(np.broadcast_to(valid * np.uint8(80), (3, 256, 512)))
+    original = path.read_bytes()
+    footprint = valid_data_footprint(path)
+    simplified = editor_clipping_footprint(path)
+    assert len(simplified.exterior.coords) < len(footprint.exterior.coords) / 2
+    assert simplified.is_valid and simplified.area > 0
+    inverse = ~transform
+    matrix = [inverse.a, inverse.b, inverse.d, inverse.e, inverse.c, inverse.f]
+    assert affine_transform(footprint, matrix).hausdorff_distance(
+        affine_transform(simplified, matrix)) <= 1.000001
+    assert valid_data_footprint(path).equals_exact(footprint, tolerance=0)
+    assert editor_clipping_footprint(path) is simplified
+    with rasterio.open(path) as raster:
+        np.testing.assert_array_equal(valid_data_mask(raster), valid)
+    assert path.read_bytes() == original
 
 
 def test_dataset_editor_repairs_stale_crs_and_companion_footprint(

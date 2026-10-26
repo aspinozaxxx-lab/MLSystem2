@@ -69,6 +69,7 @@ import {
   editableVertexCoordinates,
   editableVertices,
   editableVerticesInExtent,
+  editorGeometryNeedsUntangling,
   editorSnapTargets,
   extendRasterResolutions,
   featureClassCounts,
@@ -1157,7 +1158,9 @@ export function DatasetEditorPage({
       featureProjection: crs,
     }) as Feature<Geometry>[];
     const newFeatures = new WeakSet<Feature<Geometry>>();
-    setGeometryNotice(features.some((feature) => feature.get(ROLE_PROPERTY) === "annotation_zone" &&
+    setGeometryNotice(features.some((feature) => editorGeometryNeedsUntangling(feature.getGeometry()))
+      ? "Есть самопересечение или пересечение колец. Исходные вершины сохранены: распутайте контур обычной правкой. Автоподрезка сработает после исправления; перед публикацией контур должен быть корректным."
+      : features.some((feature) => feature.get(ROLE_PROPERTY) === "annotation_zone" &&
       !clipEditorGeometry(feature.getGeometry(), rasterFootprintRef.current))
       ? "В прежней разметке есть зона целиком вне снимка. Перенесите её на изображение или удалите явно: автоматически убирать её небезопасно, это включило бы обучение на всём снимке."
       : "");
@@ -1438,7 +1441,9 @@ export function DatasetEditorPage({
         const clipped = clipEditorGeometry(event.feature.getGeometry(), rasterFootprintRef.current);
         if (!clipped) { setGeometryNotice("Полигон целиком вне снимка и не добавлен. Нарисуйте его на снимке."); return; }
         event.feature.setGeometry(clipped);
-        setGeometryNotice("");
+        setGeometryNotice(editorGeometryNeedsUntangling(clipped)
+          ? "Контур пересекает сам себя. Он сохранён без разбиения на части: распутайте вершины, после этого автоподрезка сработает."
+          : "");
       } catch { setGeometryNotice("Не удалось обрезать контур. Проверьте его пересечения и повторите рисование."); return; }
       newFeaturesRef.current.add(event.feature);
       vectorSource.addFeature(event.feature);
@@ -1458,7 +1463,9 @@ export function DatasetEditorPage({
           geometry: clipEditorGeometry(feature.getGeometry(), rasterFootprintRef.current) }));
         if (clipped.some((item) => !item.geometry)) throw new Error("Полигон оказался целиком вне снимка. Эта правка отменена; оставьте часть контура на изображении.");
         clipped.forEach(({ feature, geometry }) => feature.setGeometry(geometry!));
-        setGeometryNotice("");
+        setGeometryNotice(clipped.some(({ geometry }) => editorGeometryNeedsUntangling(geometry))
+          ? "Самопересечение пока осталось. Правка сохранена без новых вершин в пересечениях; продолжайте распутывать контур."
+          : "");
       } catch (error) {
         for (const [feature, geometry] of geometryBackups) feature.setGeometry(geometry);
         modifyBefore = null;
