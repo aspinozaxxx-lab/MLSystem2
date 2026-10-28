@@ -457,6 +457,15 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 raise RuntimeError(
                     f"Размер эталонной маски тайла {tile.get('index')} не совпадает с TIFF."
                 )
+            if tile.get("clip_to_valid_data"):
+                # Свободная тестовая область и padding не являются отрицательными примерами.
+                # Маска применяется после любой постобработки, также для внешних сетей.
+                with rasterio.open(Path(str(tile["image_path"]))) as region_raster:
+                    valid = valid_data_mask(region_raster)
+                prediction = np.where(valid, prediction, 0).astype(np.uint8, copy=False)
+                ground_truth_labels = np.where(valid, ground_truth_labels, 0).astype(np.uint8, copy=False)
+                if predicted_instances is not None:
+                    predicted_instances = np.where(valid, predicted_instances, 0).astype(np.int32, copy=False)
             tile_metrics: dict[str, Any] | None = None
             object_snapshots = {}
             if task == "multiclass":

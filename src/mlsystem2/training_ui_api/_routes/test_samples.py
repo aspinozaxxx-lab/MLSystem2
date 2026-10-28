@@ -79,11 +79,14 @@ from mlsystem2.training_ui_api._test_sample_editor import (
     sample_editor_discard, sample_editor_import, sample_editor_publish, sample_editor_raster,
     sample_editor_save_draft, sample_editor_scenes,
 )
+from mlsystem2.training_ui_api._test_sample_sources import source_version
+from mlsystem2.training_ui_api._test_sample_editor import _dataset, _sample_row
 from mlsystem2.training_ui_api.contracts import (
     DatasetEditorAddScenesRequest, DatasetEditorDatasetListResponse, DatasetEditorDiscardDraftsResult,
     DatasetEditorDraftInfo, DatasetEditorImportRequest, DatasetEditorMutationResult,
     DatasetEditorRasterBrowserResponse, DatasetEditorSaveDraftRequest, DatasetEditorSceneDetail,
     DatasetEditorSceneListResponse,
+    AnnotationVersionDetail,
 )
 
 
@@ -101,8 +104,19 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
         return editor_call(lambda: sample_editor_catalog(db, ctx.config, sample_id, username))
 
     @app.get("/api/v1/test-samples/{sample_id}/editor/scenes", response_model=DatasetEditorSceneListResponse)
-    def editor_scenes(sample_id: uuid.UUID, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
-        return editor_call(lambda: sample_editor_scenes(db, ctx.config, sample_id, username))
+    def editor_scenes(sample_id: uuid.UUID, include_class_sources: bool = False, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        result = editor_call(lambda: sample_editor_scenes(db, ctx.config, sample_id, username, include_class_sources=include_class_sources))
+        db.commit()
+        return result
+
+    @app.get("/api/v1/test-samples/{sample_id}/editor/scenes/{name}/versions/{version_id}", response_model=AnnotationVersionDetail)
+    def editor_source_version(sample_id: uuid.UUID, name: str, version_id: uuid.UUID,
+                              db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated)):
+        def load():
+            with test_sample_storage_lock(ctx.config, sample_id):
+                sample = _sample_row(db, sample_id)
+                return source_version(db, ctx.config, sample, _dataset(db, ctx.config, sample), name, version_id)
+        return editor_call(load)
 
     @app.get("/api/v1/test-samples/{sample_id}/editor/scenes/{name}", response_model=DatasetEditorSceneDetail)
     def editor_scene(sample_id: uuid.UUID, name: str, db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):

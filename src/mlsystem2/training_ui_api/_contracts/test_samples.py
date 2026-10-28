@@ -280,6 +280,7 @@ class TestSampleDetail(TestSampleSummary):
     model_config = ConfigDict(extra="forbid")
 
     tile_width: int = Field(gt=0)
+    has_region_sources: bool = False
     tile_height: int = Field(gt=0)
     requested_object_count: int = Field(gt=0)
     territory_count: int = Field(ge=0)

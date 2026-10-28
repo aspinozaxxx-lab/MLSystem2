@@ -31,6 +31,7 @@ import { noModifierKeys, primaryAction } from "ol/events/condition";
 import GeoJSON from "ol/format/GeoJSON";
 import type Geometry from "ol/geom/Geometry";
 import MultiPoint from "ol/geom/MultiPoint";
+import type { DrawEvent } from "ol/interaction/Draw";
 import { defaults as defaultInteractions } from "ol/interaction/defaults";
 import DragBox from "ol/interaction/DragBox";
 import DragPan from "ol/interaction/DragPan";
@@ -52,6 +53,7 @@ import "ol/ol.css";
 import { ApiError, apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
+import { squareTestRegion, testRegions, TEST_REGION_SIZES } from "./utils/testRegions";
 import { DatasetPolygonHistory, type PolygonHistoryPreview } from "./DatasetPolygonHistory";
 import { useRememberedClass } from "./ClassNavigation";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
@@ -169,6 +171,9 @@ type EditorScene = {
   draft: DraftSummary | null;
   annotation_version_count?: number;
   annotation_version_name?: string | null;
+  annotation_version_revision?: number | null;
+  annotation_zone_count?: number;
+  test_source?: boolean;
 };
 
 type DraftSummary = {
@@ -181,6 +186,7 @@ type DraftSummary = {
   hard_negative_count: number;
   class_counts: Record<string, number>;
   updated_at: string;
+  annotation_zone_count?: number;
 };
 
 type DraftInfo = DraftSummary & { geojson: JsonObject; annotation_versions?: AnnotationVersionDraft | null };
@@ -191,6 +197,7 @@ type SceneDetail = {
   valid_data_footprint: JsonObject;
   draft: DraftInfo | null;
   annotation_versions?: AnnotationVersionCatalog | null;
+  raster_grid?: number[] | null;
 };
 type PseudoMarkupInfo = {
   status: "unavailable" | "ready" | "queued" | "running" | "failed";
@@ -206,6 +213,7 @@ type PseudoMarkupInfo = {
   can_retry: boolean;
 };
 type SceneDraft = DraftState & {
+  rasterGrid?: number[] | null;
   scene: EditorScene;
   validDataFootprint: JsonObject;
   normalized: boolean;
@@ -311,6 +319,11 @@ export function DatasetEditorPage({
   const { classKey, setClassKey } = useRememberedClass(datasetsLoading ? null : classes);
   const [datasetKey, setDatasetKey] = useState("");
   const [scenes, setScenes] = useState<EditorScene[]>([]);
+  const includeClassSourcesRef = useRef(false);
+  const [unusedHidden, setUnusedHidden] = useState(false);
+  const [regionSize, setRegionSize] = useState(512);
+  const regionSizeRef = useRef(regionSize);
+  regionSizeRef.current = regionSize;
   const [annotationName, setAnnotationName] = useState("");
   const [detail, setDetail] = useState<SceneDetail | null>(null);
   const [drafts, setDrafts] = useState<DraftMap>({});
@@ -369,6 +382,8 @@ export function DatasetEditorPage({
   const vertexBoxRef = useRef<DragBox | null>(null);
   const modifyRef = useRef<Modify | null>(null);
   const drawRef = useRef<Draw | null>(null);
+  const freeDrawRef = useRef<Draw | null>(null);
+  const squareDrawRef = useRef<Draw | null>(null);
   const rasterFootprintRef = useRef<Geometry | null>(null);
   const draftsRef = useRef<DraftMap>({});
   const dirtyRef = useRef(false);
@@ -422,8 +437,12 @@ export function DatasetEditorPage({
     [draftSaveStatuses, drafts],
   );
   const sortedScenes = useMemo(
-    () => sortEditorScenes(scenes, drafts, sortDirection),
-    [drafts, scenes, sortDirection],
+    () => sortEditorScenes(scenes.filter((scene) => !unusedHidden || !scene.test_source || (
+      !(drafts[scene.annotation_name]?.current.deleted ?? scene.draft?.deleted) && (drafts[scene.annotation_name]
+        ? testRegions(drafts[scene.annotation_name].current.geojson).length
+        : scene.draft?.annotation_zone_count ?? scene.annotation_zone_count ?? 0) > 0
+    )), drafts, sortDirection),
+    [drafts, scenes, sortDirection, unusedHidden],
   );
   const activeSceneIndex = sortedScenes.findIndex((scene) => scene.annotation_name === annotationName);
   const previousScene = activeSceneIndex > 0 ? sortedScenes[activeSceneIndex - 1] : undefined;
@@ -433,6 +452,7 @@ export function DatasetEditorPage({
     [scenes],
   );
   const activeDraft = annotationName ? drafts[annotationName] : undefined;
+  const testSource = Boolean(activeDraft?.scene.test_source);
   const zoneMode = isZoneSelection(role);
   const activeZoneCount = ((activeDraft?.current.geojson.features || []) as JsonObject[])
     .filter((feature) => (feature.properties as JsonObject | undefined)?.[ROLE_PROPERTY] === "annotation_zone").length;
@@ -441,8 +461,8 @@ export function DatasetEditorPage({
     [selectedDataset],
   );
   const datasetTotals = useMemo(
-    () => datasetObjectTotals(scenes, drafts),
-    [drafts, scenes],
+    () => datasetObjectTotals(sortedScenes, drafts),
+    [drafts, sortedScenes],
   );
   const activeClassCounts = useMemo(
     () => activeDraft ? featureClassCounts(activeDraft.current.geojson) : {},
@@ -587,7 +607,7 @@ export function DatasetEditorPage({
       }
       const payload = await run(() =>
         apiJson<{ dataset: EditorDataset; scenes: EditorScene[] }>(
-          `${editorPath(key)}/scenes`,
+          `${editorPath(key)}/scenes${testSampleId && includeClassSourcesRef.current ? "?include_class_sources=true" : ""}`,
         ),
       );
       if (
@@ -617,6 +637,8 @@ export function DatasetEditorPage({
     loadedScenesDatasetKeyRef.current = "";
     activeAnnotationRef.current = "";
     setScenes([]);
+    includeClassSourcesRef.current = false;
+    setUnusedHidden(false);
     setAnnotationName("");
     resetDrafts();
     setDetail(null);
@@ -693,6 +715,7 @@ export function DatasetEditorPage({
           geojson: cached.current.geojson,
           valid_data_footprint: cached.validDataFootprint,
           draft: null,
+          raster_grid: cached.rasterGrid,
         });
         return;
       }
@@ -710,7 +733,7 @@ export function DatasetEditorPage({
       ) return;
       const versionCatalog = payload.annotation_versions;
       const initialVersions: AnnotationVersionDraft | undefined = versionCatalog?.selected_id
-        ? { catalog_revision: versionCatalog.revision, selected_id: versionCatalog.selected_id, edits: [], replacements: {} }
+        ? { catalog_revision: versionCatalog.revision, selected_id: versionCatalog.selected_id, selected_revision: payload.scene.annotation_version_revision, edits: [], replacements: {} }
         : undefined;
       const baseline: DraftSnapshot = { geojson: payload.geojson, newFeatureIndexes: [], deleted: false, annotationVersions: initialVersions };
       const draftSnapshot = payload.draft
@@ -746,6 +769,7 @@ export function DatasetEditorPage({
           normalized: Boolean(payload.draft),
           versionCatalog,
           versionPayloads,
+          rasterGrid: payload.raster_grid,
         },
       }));
       setEditMode(initialEditMode());
@@ -757,6 +781,13 @@ export function DatasetEditorPage({
   useEffect(() => {
     void loadScene(datasetKey, annotationName);
   }, [annotationName, datasetKey, loadScene]);
+
+  useEffect(() => {
+    if (!testSampleId) return;
+    const selection = detail?.scene.test_source ? "annotation_zone" : selectedDataset?.object_types[0]?.slug || "positive";
+    roleRef.current = selection;
+    setRole(selection);
+  }, [detail?.scene.annotation_name, testSampleId, selectedDataset?.task]);
 
   const saveDraftNow = useCallback((name: string): Promise<boolean> => {
     const key = datasetKey;
@@ -828,7 +859,7 @@ export function DatasetEditorPage({
               base_revision: draft.baseRevision,
               geojson: sent.geojson,
               deleted: Boolean(sent.deleted),
-              ...(!testSampleId ? { annotation_versions: sent.annotationVersions || null } : {}),
+              annotation_versions: sent.annotationVersions || null,
             },
           },
         );
@@ -1220,6 +1251,7 @@ export function DatasetEditorPage({
       layers: [vectorLayer],
       condition: gesture.allowsSelection,
       filter: (feature) => visibleMarkup(feature as Feature<Geometry>)
+        && (!detail.scene.test_source || feature.get(ROLE_PROPERTY) === "annotation_zone")
         && (feature.get(ROLE_PROPERTY) === "annotation_zone") === isZoneSelection(roleRef.current),
       style: (feature) => displayedClassStyles(
         feature as Feature<Geometry>,
@@ -1297,6 +1329,11 @@ export function DatasetEditorPage({
         (editModeRef.current !== "hole" || select.getFeatures().getLength() === 1),
     });
     draw.setActive(false);
+    const squareDraw = detail.scene.test_source && detail.raster_grid ? new Draw({
+      type: "Point", condition: (event) => noModifierKeys(event) && primaryAction(event),
+      geometryFunction: (coordinates) => squareTestRegion(coordinates as number[], regionSizeRef.current, detail.raster_grid!),
+    }) : null;
+    squareDraw?.setActive(false);
     const geometryBackups = new Map<Feature<Geometry>, Geometry>();
     let drawBefore: DraftSnapshot | null = null;
     let modifyBefore: DraftSnapshot | null = null;
@@ -1392,7 +1429,8 @@ export function DatasetEditorPage({
     });
     vertexBox.on("boxend", () => {
       const extent = vertexBox.getGeometry().getExtent();
-      const selections = vectorSource.getFeatures().filter(visibleMarkup).flatMap((feature) =>
+      const selections = vectorSource.getFeatures().filter(visibleMarkup)
+        .filter((feature) => !detail.scene.test_source || feature.get(ROLE_PROPERTY) === "annotation_zone").flatMap((feature) =>
         editableVerticesInExtent(feature.getGeometry(), extent).map((vertex) => ({
           feature,
           vertex,
@@ -1405,19 +1443,19 @@ export function DatasetEditorPage({
       setSelectedVertices(selections);
       syncRoleFromFeature(features[0]);
     });
-    draw.on("drawstart", () => {
+    const onDrawStart = () => {
       drawBefore = captureActiveSnapshot();
       holeTarget = editModeRef.current === "hole"
         ? select.getFeatures().item(0) as Feature<Geometry>
         : null;
       setDrawingState(true);
-    });
-    draw.on("drawabort", () => {
+    };
+    const onDrawAbort = () => {
       drawBefore = null;
       holeTarget = null;
       setDrawingState(false);
-    });
-    draw.on("drawend", (event) => {
+    };
+    const onDrawEnd = (event: DrawEvent) => {
       setDrawingState(false);
       const before = drawBefore;
       const target = holeTarget;
@@ -1436,11 +1474,11 @@ export function DatasetEditorPage({
         return;
       }
       if (event.feature.getId() === undefined) event.feature.setId(crypto.randomUUID());
-      applyObjectSelection(event.feature, roleRef.current, selectedDataset);
+      applyObjectSelection(event.feature, detail.scene.test_source ? "annotation_zone" : roleRef.current, selectedDataset);
       try {
         const clipped = clipEditorGeometry(event.feature.getGeometry(), rasterFootprintRef.current);
         if (!clipped) { setGeometryNotice("Полигон целиком вне снимка и не добавлен. Нарисуйте его на снимке."); return; }
-        event.feature.setGeometry(clipped);
+        if (!detail.scene.test_source) event.feature.setGeometry(clipped);
         setGeometryNotice(editorGeometryNeedsUntangling(clipped)
           ? "Контур пересекает сам себя. Он сохранён без разбиения на части: распутайте вершины, после этого автоподрезка сработает."
           : "");
@@ -1448,7 +1486,12 @@ export function DatasetEditorPage({
       newFeaturesRef.current.add(event.feature);
       vectorSource.addFeature(event.feature);
       if (before) recordCurrentChange(before);
-    });
+    };
+    for (const interaction of [draw, squareDraw]) {
+      interaction?.on("drawstart", onDrawStart);
+      interaction?.on("drawabort", onDrawAbort);
+      interaction?.on("drawend", onDrawEnd);
+    }
     modify.on("modifystart", (event) => {
       modifyBefore = captureActiveSnapshot();
       geometryBackups.clear();
@@ -1462,7 +1505,7 @@ export function DatasetEditorPage({
         const clipped = event.features.getArray().map((feature) => ({ feature,
           geometry: clipEditorGeometry(feature.getGeometry(), rasterFootprintRef.current) }));
         if (clipped.some((item) => !item.geometry)) throw new Error("Полигон оказался целиком вне снимка. Эта правка отменена; оставьте часть контура на изображении.");
-        clipped.forEach(({ feature, geometry }) => feature.setGeometry(geometry!));
+        if (!detail.scene.test_source) clipped.forEach(({ feature, geometry }) => feature.setGeometry(geometry!));
         setGeometryNotice(clipped.some(({ geometry }) => editorGeometryNeedsUntangling(geometry))
           ? "Самопересечение пока осталось. Правка сохранена без новых вершин в пересечениях; продолжайте распутывать контур."
           : "");
@@ -1505,6 +1548,7 @@ export function DatasetEditorPage({
     map.addInteraction(vertexBox);
     map.addInteraction(modify);
     map.addInteraction(draw);
+    if (squareDraw) map.addInteraction(squareDraw);
     map.addInteraction(snap);
     map.on("click", gesture.registerClick);
     map.on("singleclick", selectCurrentModifyVertexAfterInteractions);
@@ -1519,6 +1563,8 @@ export function DatasetEditorPage({
     vertexBoxRef.current = vertexBox;
     modifyRef.current = modify;
     drawRef.current = draw;
+    freeDrawRef.current = draw;
+    squareDrawRef.current = squareDraw;
 
     return () => {
       if (vertexSelectionTimer !== null) window.clearTimeout(vertexSelectionTimer);
@@ -1543,6 +1589,8 @@ export function DatasetEditorPage({
       vertexBoxRef.current = null;
       modifyRef.current = null;
       drawRef.current = null;
+      freeDrawRef.current = null;
+      squareDrawRef.current = null;
       rasterFootprintRef.current = null;
       selectedVerticesRef.current = [];
       setSelectedFeatureCount(0);
@@ -1623,7 +1671,10 @@ export function DatasetEditorPage({
       && pseudoMarkup?.status === "ready"
       && !sceneDeleted
       && editMode === "pseudo";
-    drawRef.current?.setActive(drawing);
+    const square = testSource && regionSize > 0 && editMode === "draw";
+    drawRef.current = square ? squareDrawRef.current : freeDrawRef.current;
+    freeDrawRef.current?.setActive(drawing && !square);
+    squareDrawRef.current?.setActive(drawing && square);
     selectRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
     vertexBoxRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
     modifyRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
@@ -1644,6 +1695,8 @@ export function DatasetEditorPage({
     editMode,
     pseudoMarkup?.status,
     pseudoVisible,
+    regionSize,
+    testSource,
     setSelectedVertices,
   ]);
 
@@ -2189,6 +2242,14 @@ export function DatasetEditorPage({
         >
           <Plus size={16} /><span className="compact-control-label">Добавить снимки</span>
         </button>
+        {testSampleId ? <button className="secondary" type="button" disabled={busy || !datasetKey || drawInProgress}
+          aria-label="Добавить из класса" title="Показать снимки и версии разметки из всех датасетов текущего класса"
+          onClick={async () => {
+            includeClassSourcesRef.current = true;
+            setUnusedHidden(false);
+            setBusy(true);
+            try { await loadScenes(datasetKey); } finally { setBusy(false); }
+          }}><Layers size={16} /><span className="compact-control-label">Добавить из класса</span></button> : null}
         <button
           className="secondary"
           type="button"
@@ -2258,7 +2319,7 @@ export function DatasetEditorPage({
             <div className="dataset-editor-scenes-header">
               <div>
                 <h2>Снимки</h2>
-                <p>{scenes.length} шт.</p>
+                <p>{sortedScenes.length} шт.</p>
                 <div className="dataset-editor-scenes-totals">
                   {selectedDataset?.task === "multiclass"
                     ? objectTypeChoices.map((item) => (
@@ -2298,6 +2359,19 @@ export function DatasetEditorPage({
             >
               <CloudUpload size={16} /> Опубликовать
             </button>
+            {testSampleId ? <button className="ghost dataset-editor-unused" type="button" disabled={busy || drawInProgress}
+              title="Скрыть исходные снимки без тестовых областей. Отдельно загруженные тестовые снимки останутся."
+              onClick={() => {
+                setUnusedHidden(true); setVersionMenu(null);
+                const used = scenes.filter((scene) => !scene.test_source || (
+                  !(drafts[scene.annotation_name]?.current.deleted ?? scene.draft?.deleted) && (drafts[scene.annotation_name]
+                    ? testRegions(drafts[scene.annotation_name].current.geojson).length
+                    : scene.draft?.annotation_zone_count ?? scene.annotation_zone_count ?? 0) > 0));
+                if (!used.some((scene) => scene.annotation_name === annotationName)) {
+                  if (used[0]) selectScene(used[0].annotation_name);
+                  else { activeAnnotationRef.current = ""; setAnnotationName(""); setDetail(null); }
+                }
+              }}><Trash2 size={15} />Убрать неиспользуемые</button> : null}
             <div className="button-row dataset-editor-draft-actions">
               <button
                 className="ghost"
@@ -2347,11 +2421,12 @@ export function DatasetEditorPage({
                   >
                     <span className="dataset-editor-scene-name">
                       <strong>{scene.image_name}</strong>
-                      {scene.revision === NEW_SCENE_REVISION ? <span className="badge warning">новый · черновик</span> : null}
+                      {scene.revision === NEW_SCENE_REVISION && !scene.test_source ? <span className="badge warning">новый · черновик</span> : null}
                       {deleted ? <span className="badge warning">к удалению</span> : null}
                       {changed ? <i className="dataset-editor-dirty-dot" aria-label="Есть неопубликованные изменения" /> : null}
                     </span>
                     <span className="dataset-editor-scene-counts" aria-hidden={deleted}>
+                      {scene.test_source ? <i>Тестовых областей: <strong>{deleted ? 0 : draft ? testRegions(draft.current.geojson).length : summary?.annotation_zone_count ?? scene.annotation_zone_count ?? 0}</strong></i> : null}
                       {selectedDataset?.task === "multiclass"
                         ? objectTypeChoices.map((item) => (
                           <i key={item.slug} style={{ color: item.color }}>
@@ -2370,12 +2445,13 @@ export function DatasetEditorPage({
                   </button>
                   {versionCount ? <button type="button" className="badge annotation-version-count" aria-label={`Версии снимка ${scene.image_name}: ${versionCount}`}
                     aria-expanded={versionMenu?.name === scene.annotation_name} disabled={busy || drawInProgress || deleted}
-                    title="Выбрать, создать или удалить версию разметки" onClick={(event) => {
+                    title={scene.test_source ? "Выбрать версию разметки для тестовых областей" : "Выбрать, создать или удалить версию разметки"} onClick={(event) => {
                       selectScene(scene.annotation_name);
                       setVersionMenu(versionMenu?.name === scene.annotation_name ? null : { name: scene.annotation_name, anchor: event.currentTarget });
                     }}>Версий: {versionCount}<ChevronDown size={12} /></button> : null}
                   {versionMenu?.name === scene.annotation_name && draft?.versionCatalog && draft.current.annotationVersions ? (
                     <DatasetAnnotationVersions key={`${datasetKey}:${scene.annotation_name}`} catalog={draft.versionCatalog}
+                      selectionOnly={scene.test_source}
                       snapshot={draft.current} publishedGeojson={draft.baseline.geojson} publishedVersions={draft.versionPayloads}
                       disabled={busy || drawInProgress || deleted || detail?.scene.annotation_name !== scene.annotation_name}
                       anchor={versionMenu.anchor} onClose={() => setVersionMenu(null)}
@@ -2424,7 +2500,9 @@ export function DatasetEditorPage({
                   ) : null}
                   <span className="source-lines">
                     <strong>{activeDraft.scene.image_name}</strong>
-                    <small className="muted">{activeDraft.scene.annotation_name}</small>
+                    <small className="muted">{testSource
+                      ? activeDraft.versionCatalog?.versions.find((version) => version.id === activeDraft.current.annotationVersions?.selected_id)?.name || activeDraft.scene.annotation_version_name
+                      : activeDraft.scene.annotation_name}</small>
                     <small className={`dataset-editor-draft-status ${activeDraftSaveStatus || "saved"}`}>
                       {activeDraftSaveStatus === "saving"
                         ? "Черновик сохраняется…"
@@ -2509,7 +2587,12 @@ export function DatasetEditorPage({
                       <button type="button" className={!zoneMode ? "active" : ""} aria-pressed={!zoneMode} onClick={() => switchAnnotationTool(false)}>Объекты</button>
                       <button type="button" className={zoneMode ? "active" : ""} aria-pressed={zoneMode} onClick={() => switchAnnotationTool(true)} title="Нарисовать территорию с полной разметкой. Контур автоматически обрезается по снимку">Размеченная зона</button>
                     </div> : null}
-                    {zoneMode ? (
+                    {testSource ? <label className="dataset-editor-zone-target">Тестовая область
+                      <select aria-label="Размер тестовой области" value={regionSize} disabled={drawInProgress} onChange={(event) => setRegionSize(Number(event.target.value))}>
+                        {TEST_REGION_SIZES.map((size) => <option key={size} value={size}>{size} × {size} пикселей</option>)}
+                        <option value={0}>Свободный контур</option>
+                      </select>
+                    </label> : zoneMode ? (
                       selectedDataset?.managed ? <select className="dataset-editor-zone-target" aria-label="Классы размеченной зоны" value={role} onChange={(event) => changeRole(event.target.value)}>
                         <option value="annotation_zone">Все классы</option>
                         {objectTypeChoices.map((item) => <option key={item.slug} value={`annotation_zone:${item.slug}`}>{item.name}</option>)}
@@ -2616,10 +2699,12 @@ export function DatasetEditorPage({
                     : editMode === "pseudo"
                     ? "Клик — выбрать объект сети, Shift+клик — выбрать несколько; укажите назначение и добавьте их в черновик. Del снимает выбор."
                     : editMode === "hole" ? "Нарисуйте отверстие внутри выбранного полигона, не касаясь его границ и других отверстий. Двойной клик — вырезать, Esc — отменить, Ctrl+Z / Ctrl+Я — убрать последнюю вершину."
+                    : editMode === "draw" && testSource && regionSize > 0 ? "Кликните в центре тестовой области: квадрат привяжется к пиксельной сетке. Вышедшая за снимок часть станет nodata."
                     : editMode === "draw" ? "Ставьте вершины кликами; двойной клик — завершить контур. Для изменения вершин готового контура переключитесь на выбор и правку."
                     : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон. Отверстие удаляется целиком, если остаётся меньше трёх вершин; вынесенная отдельная часть удаляется так же, если остаются другие части объекта. Клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}
                 </div>
                 {geometryNotice ? <p className="muted" role="status">{geometryNotice}</p> : null}
+                {testSource ? <p className="muted" role="status">Тестовых областей: {activeZoneCount}. Объекты взяты из выбранной версии и здесь не редактируются. {activeZoneCount ? "После публикации каждая область станет отдельным тестовым снимком." : "Нарисуйте область, чтобы включить снимок в набор."}</p> : null}
                 {!testSampleId ? <div className="dataset-editor-legend dataset-editor-zone-legend" role="group" aria-label="Размеченные зоны">
                   <button type="button" className={`dataset-editor-class-chip${hiddenClasses.has("annotation_zone") ? " is-hidden" : ""}`}
                     style={{ "--object-color": "#A855F7" } as CSSProperties}

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" viewBox="0 0 1440 760" role="img" aria-labelledby="title desc">
+ <title id="title">Тестовые области из разметки класса</title>
+ <desc id="desc">Условная схема. Из всех датасетов класса выбираются снимок и версия. На снимке рисуются области. Публикация создаёт вырезки для выгрузки и расчёта F1.</desc>
+ <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101e35"/><stop offset="1" stop-color="#183c43"/></linearGradient><pattern id="nodata" width="18" height="18" patternUnits="userSpaceOnUse"><rect width="18" height="18" fill="#34475b"/><path d="M0 0h9v9H0zM9 9h9v9H9z" fill="#405469"/></pattern></defs>
+ <rect width="1440" height="760" rx="28" fill="url(#bg)"/>
+ <g font-family="Arial, sans-serif" fill="#f1f6fc">
+  <text x="48" y="62" font-size="17" letter-spacing="3" fill="#77dacc">СХЕМА РАБОТЫ · ГРОВИКА</text>
+  <text x="48" y="113" font-size="37" font-weight="700">Выберите эталон. Отметьте территорию. Опубликуйте.</text>
+  <rect x="48" y="158" width="300" height="470" rx="18" fill="#20354c"/>
+  <text x="72" y="196" font-size="24" font-weight="700">1. Снимки класса</text>
+  <text x="72" y="225" font-size="18" fill="#c1d1e1">Из всех его датасетов</text>
+  <rect x="68" y="248" width="260" height="98" rx="12" fill="#34566d" stroke="#69d8c5" stroke-width="2"/>
+  <text x="85" y="281" font-size="19">Снимок А</text><text x="85" y="317" font-size="18" fill="#8de5d7">Версий: 3 ▾</text>
+  <rect x="68" y="358" width="260" height="132" rx="10" fill="#142a40"/>
+  <text x="86" y="390" font-size="18">Разметка «main»</text><text x="86" y="423" font-size="18" fill="#8de5d7">✓ Уточнённая версия</text><text x="86" y="456" font-size="16" fill="#c1d1e1">Даты и использование</text>
+  <text x="72" y="531" font-size="18">Снимок Б · без областей</text><text x="72" y="587" font-size="17" fill="#aebfcf">Убрать неиспользуемые</text>
+  <path d="M365 390h35m-11-10 11 10-11 10" stroke="#8de5d7" stroke-width="3" fill="none"/>
+  <rect x="418" y="158" width="520" height="470" rx="18" fill="#20354c"/>
+  <text x="442" y="196" font-size="24" font-weight="700">2. Тестовые области</text>
+  <text x="442" y="225" font-size="18" fill="#c1d1e1">512…8192 пикселей или свободный контур</text>
+  <rect x="440" y="250" width="476" height="290" rx="10" fill="#4a6958"/>
+  <path d="m440 285 140 30 30 100 170-24 136 63v86H440z" fill="#6e7958"/><path d="m440 460 86-67 98 46 77-98 98 23 117-70" fill="none" stroke="#9ebbae" stroke-width="18"/>
+  <path d="m478 284 90 16-18 74-80-17zm161 176 89-52 41 42-24 60-105-9zm126-168 100 18-12 64-103-4z" fill="#d3c174" fill-opacity=".5" stroke="#edda8c" stroke-width="2"/>
+  <path d="M470 278h166v166H470zM709 324l132-48 43 162-83 71-98-48z" fill="#b99aff" fill-opacity=".12" stroke="#c6adff" stroke-width="4" stroke-dasharray="9 5"/>
+  <text x="444" y="577" font-size="18">Объекты берутся из выбранной версии.</text><text x="444" y="604" font-size="18" fill="#c1d1e1">При переключении рамки сохраняются.</text>
+  <path d="M953 390h35m-11-10 11 10-11 10" stroke="#8de5d7" stroke-width="3" fill="none"/>
+  <rect x="1007" y="158" width="385" height="470" rx="18" fill="#20354c"/>
+  <text x="1031" y="196" font-size="24" font-weight="700">3. Готовые вырезки</text><text x="1031" y="225" font-size="18" fill="#c1d1e1">Один эталон для ZIP и F1</text>
+  <rect x="1032" y="267" width="145" height="160" rx="4" fill="#5b765d"/><path d="m1032 302 95 17-17 69-78-17z" fill="#d3c174" fill-opacity=".5" stroke="#edda8c" stroke-width="2"/>
+  <rect x="1202" y="267" width="165" height="160" rx="4" fill="url(#nodata)"/><path d="m1213 306 117-33 31 111-69 38-84-42z" fill="#657b5f" stroke="#c6adff" stroke-width="2"/>
+  <text x="1032" y="465" font-size="18">TIFF + полигоны + маска</text><text x="1032" y="500" font-size="18" fill="#c1d1e1">Вне контура — nodata</text><text x="1032" y="553" font-size="18" fill="#8de5d7">Редакция зафиксирована</text><text x="1032" y="585" font-size="17" fill="#c1d1e1">Обновление — только явно</text>
+  <text x="48" y="693" font-size="21">Канопус и орто · Смешанные наборы · Повторное редактирование областей</text>
+  <text x="48" y="728" font-size="16" fill="#aebfcf">Условные изображения и полигоны: схема объясняет действия, а не показывает результат распознавания.</text>
+ </g>
+</svg>

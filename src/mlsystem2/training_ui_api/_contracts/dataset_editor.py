@@ -101,6 +101,7 @@ class AnnotationVersionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
     catalog_revision: str = Field(min_length=1, max_length=128)
     selected_id: UUID
+    selected_revision: int | None = Field(default=None, ge=1)
     edits: list[AnnotationVersionEdit] = Field(default_factory=list, max_length=100)
     replacements: dict[UUID, UUID] = Field(default_factory=dict)
 
@@ -179,6 +180,8 @@ class DatasetEditorSceneInfo(BaseModel):
     annotation_version_id: UUID | None = None
     annotation_version_name: str | None = None
     annotation_version_count: int = Field(default=0, ge=0)
+    annotation_version_revision: int | None = None
+    test_source: bool = False
 
 
 class DatasetEditorSceneListResponse(BaseModel):
@@ -196,6 +199,7 @@ class DatasetEditorSceneDetail(BaseModel):
     valid_data_footprint: dict[str, Any]
     draft: DatasetEditorDraftInfo | None = None
     annotation_versions: AnnotationVersionCatalog | None = None
+    raster_grid: list[float] | None = Field(default=None, min_length=6, max_length=6)
 
 
 class DatasetEditorPseudoMarkupInfo(BaseModel):

@@ -4,6 +4,23 @@ import importlib
 from pathlib import Path
 
 
+def test_test_region_editor_contract(monkeypatch):
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import AnnotationVersionDraft, DatasetEditorSceneInfo, DatasetEditorSceneDetail, TestSampleDetail
+
+    assert DatasetEditorSceneInfo.model_fields["test_source"].default is False
+    assert DatasetEditorSceneInfo.model_fields["annotation_version_revision"].default is None
+    assert DatasetEditorSceneDetail.model_fields["raster_grid"].default is None
+    assert AnnotationVersionDraft.model_fields["selected_revision"].default is None
+    assert TestSampleDetail.model_fields["has_region_sources"].default is False
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    paths = get_openapi_schema()["paths"]
+    scene_path = "/api/v1/test-samples/{sample_id}/editor/scenes"
+    assert any(p["name"] == "include_class_sources" for p in paths[scene_path]["get"]["parameters"])
+    assert (scene_path + "/{name}/versions/{version_id}") in paths
+
+
 def test_annotation_version_exposes_last_published_change_date():
     from datetime import datetime
     from mlsystem2.training_ui_api.contracts import AnnotationVersionInfo
@@ -83,7 +100,7 @@ def test_annotation_version_contracts(monkeypatch) -> None:
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import AnnotationVersionDraft, DatasetEditorSaveDraftRequest, DatasetEditorSceneInfo
 
-    assert set(AnnotationVersionDraft.model_fields) == {"catalog_revision", "selected_id", "edits", "replacements"}
+    assert set(AnnotationVersionDraft.model_fields) == {"catalog_revision", "selected_id", "selected_revision", "edits", "replacements"}
     assert "annotation_versions" in DatasetEditorSaveDraftRequest.model_fields
     assert {"image_id", "annotation_version_id", "annotation_version_name", "annotation_version_count"} <= set(DatasetEditorSceneInfo.model_fields)
     path = "/api/v1/dataset-editor/datasets/{dataset_key}/scenes/{annotation_name}/versions/{version_id}"

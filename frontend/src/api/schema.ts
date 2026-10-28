@@ -862,6 +862,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-samples/{sample_id}/editor/scenes/{name}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Editor Source Version */
+        get: operations["editor_source_version_api_v1_test_samples__sample_id__editor_scenes__name__versions__version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-samples/{sample_id}/editor/scenes/{name}": {
         parameters: {
             query?: never;
@@ -2314,6 +2331,8 @@ export interface components {
              * Format: uuid
              */
             selected_id: string;
+            /** Selected Revision */
+            selected_revision?: number | null;
             /** Edits */
             edits?: components["schemas"]["AnnotationVersionEdit"][];
             /** Replacements */
@@ -3091,6 +3110,8 @@ export interface components {
             };
             draft?: components["schemas"]["DatasetEditorDraftInfo"] | null;
             annotation_versions?: components["schemas"]["AnnotationVersionCatalog"] | null;
+            /** Raster Grid */
+            raster_grid?: number[] | null;
         };
         /** DatasetEditorSceneInfo */
         DatasetEditorSceneInfo: {
@@ -3131,6 +3152,13 @@ export interface components {
              * @default 0
              */
             annotation_version_count: number;
+            /** Annotation Version Revision */
+            annotation_version_revision?: number | null;
+            /**
+             * Test Source
+             * @default false
+             */
+            test_source: boolean;
         };
         /** DatasetEditorSceneListResponse */
         DatasetEditorSceneListResponse: {
@@ -5121,6 +5149,11 @@ export interface components {
             pseudo_markup: components["schemas"]["TestSamplePseudoMarkupInfo"];
             /** Tile Width */
             tile_width: number;
+            /**
+             * Has Region Sources
+             * @default false
+             */
+            has_region_sources: boolean;
             /** Tile Height */
             tile_height: number;
             /** Requested Object Count */
@@ -7525,7 +7558,9 @@ export interface operations {
     };
     editor_scenes_api_v1_test_samples__sample_id__editor_scenes_get: {
         parameters: {
-            query?: never;
+            query?: {
+                include_class_sources?: boolean;
+            };
             header?: never;
             path: {
                 sample_id: string;
@@ -7576,6 +7611,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    editor_source_version_api_v1_test_samples__sample_id__editor_scenes__name__versions__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+                name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnotationVersionDetail"];
                 };
             };
             /** @description Validation Error */

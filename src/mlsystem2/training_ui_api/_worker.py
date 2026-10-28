@@ -1328,6 +1328,7 @@ def _build_test_sample_f1_config(
                 {
                     "index": len(tiles) + 1 if target is not None else tile.tile_index,
                     "source_tile_index": tile.tile_index,
+                    **({"clip_to_valid_data": True} if tile.source_scene_id is not None else {}),
                     "test_sample_id": str(target_sample.id),
                     "test_sample_name": target_sample.name,
                     "test_sample_revision": target_sample.content_revision,

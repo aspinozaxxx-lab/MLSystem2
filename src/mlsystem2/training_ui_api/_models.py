@@ -735,6 +735,26 @@ class TestSampleRow(Base):
         cascade="all, delete-orphan",
         order_by="TestSampleTileRow.tile_index",
     )
+    sources: Mapped[list["TestSampleSourceRow"]] = relationship(
+        cascade="all, delete-orphan", order_by="TestSampleSourceRow.created_at",
+    )
+
+
+class TestSampleSourceRow(Base):
+    """Опубликованный снимок выбранной разметки и областей на исходном TIFF."""
+
+    __tablename__ = "test_sample_sources"
+    __table_args__ = (UniqueConstraint("test_sample_id", "image_id", name="uq_test_sample_source_image"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    test_sample_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("test_samples.id", ondelete="CASCADE"))
+    image_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("annotation_images.id", ondelete="RESTRICT"))
+    version_info: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    geojson: Mapped[dict[str, Any]] = mapped_column(_json_type())
+    revision: Mapped[str] = mapped_column(String(64))
+    raster_revision: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class TestSampleTileRow(Base):
@@ -751,6 +771,8 @@ class TestSampleTileRow(Base):
     )
     tile_index: Mapped[int] = mapped_column(Integer)
     source_name: Mapped[str] = mapped_column(String(512))
+    source_scene_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    source_region_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     territory: Mapped[str] = mapped_column(String(512))
     object_count: Mapped[int] = mapped_column(Integer)
     class_object_counts: Mapped[dict[str, int]] = mapped_column(_json_type(), default=dict)

@@ -31,6 +31,7 @@ from ._markup_export import _write_png
 from ._markup_lock import test_sample_storage_lock
 from ._models import DatasetEditorDraftRow, TestSampleRow, TestSampleTileRow
 from ._raster_valid_data import editor_clipping_footprint
+from . import _test_sample_sources as sources
 from ._test_samples import (
     _clear_test_sample_tile_f1, _mark_test_sample_evaluation_stale,
     _refresh_training_metrics_after_primary_change, _sample_root, _sample_row, _utc_now,
@@ -80,6 +81,8 @@ def _tile(sample, name):
 
 def sample_editor_raster(session, config, sample_id, name, username):
     sample = _sample_row(session, sample_id)
+    if sources.is_source(name):
+        return sources.source_path(_dataset(session, config, sample), sources.source_image(session, sample, name))
     tile = _tile(sample, name)
     if tile is not None:
         path = _sample_root(config, sample.id) / Path(_tile_name(tile)).with_suffix(".tif")
@@ -91,7 +94,7 @@ def sample_editor_raster(session, config, sample_id, name, username):
     raise TrainingUIAPIError("Снимок не входит в эту тестовую разметку или ваши черновики.")
 
 
-def sample_editor_scenes(session, config, sample_id, username):
+def sample_editor_scenes(session, config, sample_id, username, *, include_class_sources=False):
     with test_sample_storage_lock(config, sample_id):
         sample = _sample_row(session, sample_id)
         dataset = _dataset(session, config, sample)
@@ -99,6 +102,8 @@ def sample_editor_scenes(session, config, sample_id, username):
         drafts = {draft.annotation_name: draft for draft in _drafts(session, sample_id, username)}
         scenes = []
         for tile in sample.tiles:
+            if tile.source_scene_id is not None:
+                continue
             name = _tile_name(tile)
             revision = _file_revision(root / name)
             draft = drafts.pop(name, None)
@@ -110,6 +115,7 @@ def sample_editor_scenes(session, config, sample_id, username):
                 class_counts=dict(tile.class_object_counts or {}),
                 draft=_draft_summary(draft, dataset, revision) if draft else None,
             ))
+        scenes.extend(sources.source_scenes(session, config, sample, dataset, drafts, include_class_sources=include_class_sources))
         for name, draft in drafts.items():
             scenes.append(DatasetEditorSceneInfo(
                 scene_id=name, annotation_name=name, image_name=name,
@@ -136,8 +142,15 @@ def sample_editor_detail(session, config, sample_id, name, username):
         dataset = _dataset(session, config, sample)
         scenes = sample_editor_scenes(session, config, sample_id, username).scenes
         scene = next((scene for scene in scenes if scene.annotation_name == name), None)
+        if scene is None and sources.is_source(name):
+            sources.source_image(session, sample, name)
+            scenes = sources.source_scenes(session, config, sample, dataset, {name: None})
+            scene = next((scene for scene in scenes if scene.annotation_name == name), None)
         if scene is None:
             raise TrainingUIAPIError("Снимок тестовой разметки не найден.")
+        draft = next((draft for draft in _drafts(session, sample_id, username) if draft.annotation_name == name), None)
+        if scene.test_source:
+            return sources.source_detail(session, config, sample, dataset, scene, draft)
         image = sample_editor_raster(session, config, sample_id, name, username)
         payload = (_read_geojson(_sample_root(config, sample_id) / name)
                    if _tile(sample, name) else _empty_annotation_payload(image, dataset))
@@ -183,14 +196,19 @@ def sample_editor_save_draft(session, config, sample_id, name, request, username
         sample = _sample_row(session, sample_id)
         dataset = _dataset(session, config, sample)
         image = sample_editor_raster(session, config, sample_id, name, username)
-        normalized = _normalize(request.geojson, detail.geojson, dataset, image, allow_invalid=True)
-        _validate_preserved_properties(detail.geojson, normalized)
         row = next((draft for draft in _drafts(session, sample_id, username) if draft.annotation_name == name), None)
+        version_state = None
+        if detail.scene.test_source:
+            normalized, version_state = sources.prepare_source_draft(session, config, sample, dataset, name, request, row)
+        else:
+            normalized = _normalize(request.geojson, detail.geojson, dataset, image, allow_invalid=True)
+            _validate_preserved_properties(detail.geojson, normalized)
         if row is None:
             row = DatasetEditorDraftRow(dataset_key=_draft_key(sample_id), annotation_name=name, username=username)
             session.add(row)
         row.base_revision = request.base_revision
         row.geojson = normalized
+        row.annotation_versions = version_state.model_dump(mode="json") if version_state else None
         row.deleted = request.deleted
         row.updated_at = _utc_now()
         session.flush()
@@ -303,6 +321,7 @@ def _write_mask(root, tile, payload, schema):
         mask = (rasterize(shapes, out_shape=raster.shape, transform=raster.transform, dtype="uint8")
                 if shapes else np.zeros(raster.shape, dtype="uint8"))
         mask[raster.dataset_mask() == 0] = 0
+    path.unlink(missing_ok=True)
     _write_png(path, mask[None])
     # Производные изображения следующего запроса строятся по новой разметке.
     for preview in root.glob(f"tile_{tile.tile_index:03d}*"):
@@ -317,7 +336,7 @@ def sample_editor_publish(session, config, sample_id, username, *, images=None):
         session.execute(select(TestSampleRow).where(TestSampleRow.id == sample_id).with_for_update()
                         .execution_options(populate_existing=True))
         sample = _sample_row(session, sample_id)
-        session.expire(sample, ["tiles"])
+        session.expire(sample, ["tiles", "sources"])
         dataset = _dataset(session, config, sample)
         root = _sample_root(config, sample_id)
         stage = root.with_name(f".editing-{sample_id}-{uuid.uuid4().hex}")
@@ -329,7 +348,15 @@ def sample_editor_publish(session, config, sample_id, username, *, images=None):
             changes = [(draft.annotation_name, draft.base_revision, draft.geojson, draft.deleted)
                        for draft in _drafts(session, sample_id, username)] if images is None else images
             next_index = max((tile.tile_index for tile in sample.tiles), default=0) + 1
+            content_changed = False
             for name, revision, payload, deleted in changes:
+                if sources.is_source(name):
+                    draft = next(d for d in _drafts(session, sample_id, username) if d.annotation_name == name)
+                    content_changed |= revision != "new" or (not deleted and any(
+                        f.get("properties", {}).get("_mlsystem2_role") == "annotation_zone" for f in payload.get("features", [])))
+                    next_index = sources.publish_source(session, config, sample, dataset, stage, draft, next_index)
+                    continue
+                content_changed = True
                 tile = _tile(sample, name)
                 if tile:
                     if _file_revision(root / name) != revision:
@@ -340,7 +367,7 @@ def sample_editor_publish(session, config, sample_id, username, *, images=None):
                         raise DatasetEditorConflict("Снимок тестовой разметки удалён.")
                     source = _image_path_for_annotation(dataset, name)
                     relative = source.relative_to(_dataset_images_root(dataset)).as_posix()
-                    if any(tile.source_name == relative for tile in sample.tiles):
+                    if any(tile.source_name == relative and tile.source_scene_id is None for tile in sample.tiles):
                         raise DatasetEditorConflict("Снимок уже добавлен в тестовую разметку.")
                     if deleted:
                         continue
@@ -367,7 +394,7 @@ def sample_editor_publish(session, config, sample_id, username, *, images=None):
                 tile.updated_at = _utc_now()
                 with rasterio.open(image) as raster:
                     sample.tile_width, sample.tile_height = raster.width, raster.height
-            if changes:
+            if content_changed:
                 sample.image_count = len(sample.tiles)
                 sample.actual_object_count = sum(tile.object_count for tile in sample.tiles)
                 sample.territory_count = len({tile.territory for tile in sample.tiles})

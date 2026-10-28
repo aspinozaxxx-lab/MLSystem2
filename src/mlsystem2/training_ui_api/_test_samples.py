@@ -4530,6 +4530,7 @@ def _detail(
     return TestSampleDetail(
         **summary.model_dump(),
         tile_width=row.tile_width,
+        has_region_sources=any(tile.source_scene_id is not None for tile in row.tiles),
         tile_height=row.tile_height,
         requested_object_count=row.requested_object_count,
         territory_count=row.territory_count,

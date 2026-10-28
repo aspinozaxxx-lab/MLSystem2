@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { cloneSnapshot, snapshotsEqual, type DraftSnapshot, type JsonObject } from "./utils/datasetEditor";
 import { formatDateTime } from "./utils/format";
+import { replaceTestRegionLabels } from "./utils/testRegions";
 import "./styles/annotation-versions.css";
 
 export function retainVersionEdit(snapshot: DraftSnapshot, catalog: AnnotationVersionCatalog, baseline?: JsonObject): AnnotationVersionDraft {
@@ -34,9 +35,10 @@ type Props = {
   onChange: (snapshot: DraftSnapshot, previous: DraftSnapshot) => void;
   anchor?: HTMLElement;
   onClose?: () => void;
+  selectionOnly?: boolean;
 };
 
-export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson, publishedVersions, disabled, loadVersion, onChange, anchor, onClose }: Props) {
+export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson, publishedVersions, disabled, loadVersion, onChange, anchor, onClose, selectionOnly = false }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const payloads = useRef(publishedVersions || new Map<string, JsonObject>(catalog.selected_id ? [[catalog.selected_id, publishedGeojson]] : []));
@@ -96,10 +98,22 @@ export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson,
   };
 
   const select = async (id: string, removedId?: string) => {
-    if (unavailable || (!removedId && id === state.selected_id)) return;
+    if (unavailable || (!selectionOnly && !removedId && id === state.selected_id)) return;
     setPending(true);
     setError("");
     try {
+      if (selectionOnly) {
+        const response = await loadVersion(id);
+        const info = response?.catalog.versions.find((version) => version.id === id);
+        if (!response || !info) return;
+        const next = cloneSnapshot(snapshot);
+        next.annotationVersions = { catalog_revision: response.catalog.revision, selected_id: id, selected_revision: info.revision, edits: [], replacements: {} };
+        next.geojson = replaceTestRegionLabels(next.geojson, response.geojson as JsonObject);
+        next.newFeatureIndexes = [];
+        onChange(next, snapshot);
+        onClose?.();
+        return;
+      }
       const nextId = removedId && state.selected_id !== removedId ? state.selected_id : id;
       const payload = nextId === state.selected_id ? snapshot.geojson : await payloadFor(nextId);
       if (!payload) return;
@@ -141,7 +155,7 @@ export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson,
 
   const menu = <div ref={menuRef} className="annotation-versions-menu" role="dialog" aria-label="Версии разметки снимка"
     style={anchor ? { position: "fixed", ...position, maxHeight: `calc(100dvh - ${position.top + 8}px)` } : undefined}>
-    <header><strong>Версии разметки · {versions.length}</strong><small>Выбор и удаления применяются после публикации.</small></header>
+    <header><strong>Версии разметки · {versions.length}</strong><small>{selectionOnly ? "Выбранная разметка фиксируется при публикации тестового набора. Области сохраняются при переключении." : "Выбор и удаления применяются после публикации."}</small></header>
     <div className="annotation-version-cards">
       {versions.map((version) => <div key={version.id} className={`annotation-version-card${version.id === state.selected_id ? " selected" : ""}`}>
         <button type="button" className="annotation-version-choice" disabled={unavailable} aria-pressed={version.id === state.selected_id}
@@ -151,14 +165,15 @@ export function DatasetAnnotationVersions({ catalog, snapshot, publishedGeojson,
           {version.updated_at ? <small>Изменена: {formatDateTime(version.updated_at)}</small> : null}
           <small>{version.usages?.length ? `Используется: ${version.usages.map((usage) => usage.dataset_name + (usage.indirect ? " (через источник)" : "")).join(", ")}` : "Пока не используется в опубликованных датасетах"}</small>
         </button>
-        <button type="button" className="annotation-version-delete secondary icon-button" disabled={unavailable || versions.length < 2}
+        {!selectionOnly ? <button type="button" className="annotation-version-delete secondary icon-button" disabled={unavailable || versions.length < 2}
           aria-label={`Удалить версию «${version.name}»`} title={versions.length < 2 ? "Сначала создайте другую версию для замены" : "Удалить с заменой во всех использующих датасетах"}
-          onClick={() => { setDeletingId(version.id); setReplacement(versions.find((candidate) => candidate.id !== version.id)?.id || ""); setDialog("delete"); }}><Trash2 size={14} /></button>
+          onClick={() => { setDeletingId(version.id); setReplacement(versions.find((candidate) => candidate.id !== version.id)?.id || ""); setDialog("delete"); }}><Trash2 size={14} /></button> : null}
       </div>)}
     </div>
-    <button type="button" className="secondary annotation-version-create" disabled={unavailable} onClick={() => {
+    {!selectionOnly ? <button type="button" className="secondary annotation-version-create" disabled={unavailable} onClick={() => {
       setName(`Версия ${entries.size + 1}`); setEmpty(false); setDialog("create");
-    }}><Plus size={15} />Создать версию</button>
+    }}><Plus size={15} />Создать версию</button> : <button type="button" className="secondary" disabled={unavailable} onClick={() => void select(state.selected_id)}>Обновить из выбранной версии</button>}
+    {selectionOnly ? <small>Зафиксированная редакция: {state.selected_revision ?? "текущая"}. Обновление применяется после публикации.</small> : null}
     {selected ? <small>Выбрана: {selected.name}</small> : null}
     {error ? <small role="alert">{error}</small> : null}
     {dialog ? createPortal(<div className="modal-backdrop" role="presentation">

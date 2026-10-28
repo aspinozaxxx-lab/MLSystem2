@@ -1622,7 +1622,7 @@ function TestSampleEditorPage({
           <Metric label="Тайлы, включено / всего" value={`${enabledTiles.length} / ${sample.image_count}`} />
           <Metric label="Объекты, включено / всего" value={`${enabledObjectCount} / ${sample.actual_object_count}`} />
           <Metric label="Объекты, цель / факт" value={`${sample.requested_object_count} / ${sample.actual_object_count}`} />
-          <Metric label="Размер тайла" value={`${sample.tile_width} × ${sample.tile_height}`} />
+          <Metric label="Размер тайла" value={sample.has_region_sources ? "По тестовым областям" : `${sample.tile_width} × ${sample.tile_height}`} />
           <Metric label="Территории" value={sample.territory_count} />
           {sample.quality_metric === "objects" ? (
             <Metric

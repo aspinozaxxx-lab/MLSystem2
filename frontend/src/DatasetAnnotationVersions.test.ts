@@ -16,6 +16,16 @@ const baseline: DraftSnapshot = {
 };
 
 describe("выбор версии входит в черновик и историю", () => {
+  it("в тестовом источнике предлагает обновить эталон и не редактировать общие версии", () => {
+    const html = renderToStaticMarkup(createElement(DatasetAnnotationVersions, {
+      catalog, snapshot: baseline, publishedGeojson: baseline.geojson, disabled: false, selectionOnly: true,
+      loadVersion: async () => undefined, onChange: () => {},
+    }));
+    expect(html).toContain("Обновить из выбранной версии");
+    expect(html).not.toContain("Удалить версию");
+    expect(html).not.toContain("Создать версию");
+    expect(html).toContain("Области сохраняются при переключении");
+  });
   it("показывает даты каждой опубликованной версии и выбранной разметки", () => {
     const html = renderToStaticMarkup(createElement(DatasetAnnotationVersions, {
       catalog, snapshot: baseline, publishedGeojson: baseline.geojson, disabled: false,
