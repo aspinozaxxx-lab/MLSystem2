@@ -39,6 +39,7 @@ import Draw from "ol/interaction/Draw";
 import Modify from "ol/interaction/Modify";
 import Select from "ol/interaction/Select";
 import Snap from "ol/interaction/Snap";
+import Translate from "ol/interaction/Translate";
 import WebGLTileLayer, { type Style as WebGLTileStyle } from "ol/layer/WebGLTile";
 import VectorLayer from "ol/layer/Vector";
 import OLMap from "ol/Map";
@@ -53,7 +54,7 @@ import "ol/ol.css";
 import { ApiError, apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
-import { squareTestRegion, testRegions, TEST_REGION_SIZES } from "./utils/testRegions";
+import { resizeTestRegion, squareTestRegion, testRegions, testRegionSize, translateTestRegion, TEST_REGION_SIZES } from "./utils/testRegions";
 import { DatasetPolygonHistory, type PolygonHistoryPreview } from "./DatasetPolygonHistory";
 import { useRememberedClass } from "./ClassNavigation";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
@@ -381,6 +382,8 @@ export function DatasetEditorPage({
   const selectRef = useRef<Select | null>(null);
   const vertexBoxRef = useRef<DragBox | null>(null);
   const modifyRef = useRef<Modify | null>(null);
+  const translateRef = useRef<Translate | null>(null);
+  const snapRef = useRef<Snap | null>(null);
   const drawRef = useRef<Draw | null>(null);
   const freeDrawRef = useRef<Draw | null>(null);
   const squareDrawRef = useRef<Draw | null>(null);
@@ -1243,6 +1246,7 @@ export function DatasetEditorPage({
           fillEnabledRef.current,
           newFeaturesRef.current,
           objectTypeChoices,
+          Boolean(detail.scene.test_source && feature.get(ROLE_PROPERTY) === "annotation_zone"),
         ),
       ),
     });
@@ -1263,6 +1267,8 @@ export function DatasetEditorPage({
           newFeaturesRef.current,
           objectTypeChoices,
           selectedVerticesRef.current,
+          !detail.scene.test_source || regionSizeRef.current === 0,
+          Boolean(detail.scene.test_source),
         ),
       ),
     });
@@ -1357,6 +1363,7 @@ export function DatasetEditorPage({
     }
 
     const selectCurrentModifyVertex = () => {
+      if (!modify.getActive()) { setSelectedVertices([]); return; }
       const coordinate = modify.getPoint();
       if (!coordinate || !modify.canRemovePoint()) {
         setSelectedVertices([]);
@@ -1405,6 +1412,11 @@ export function DatasetEditorPage({
     select.on("select", (event) => {
       setSelectedVertices([]);
       syncRoleFromFeature(event.selected[0] as Feature<Geometry> | undefined);
+      if (detail.scene.test_source && detail.raster_grid && select.getFeatures().getLength() === 1 && event.selected.length) {
+        const size = testRegionSize(select.getFeatures().item(0).getGeometry(), detail.raster_grid);
+        regionSizeRef.current = size;
+        setRegionSize(size);
+      }
     });
     select.getFeatures().on("change:length", () => {
       setSelectedFeatureCount(select.getFeatures().getLength());
@@ -1522,6 +1534,51 @@ export function DatasetEditorPage({
       selectCurrentModifyVertex();
     });
 
+    const translate = detail.scene.test_source && detail.raster_grid ? new Translate({
+      features: select.getFeatures(), hitTolerance: 4,
+      condition: event => {
+        if (!noModifierKeys(event) || !primaryAction(event)) return false;
+        if (regionSizeRef.current > 0) return true;
+        // В свободном контуре вершины и рёбра остаются у Modify, внутренность двигает всю область.
+        const point = modify.getPoint();
+        if (!point) return true;
+        const pixel = event.map.getPixelFromCoordinate(point);
+        return Math.hypot(pixel[0] - event.pixel[0], pixel[1] - event.pixel[1]) > 10;
+      },
+    }) : null;
+    let translateBefore: DraftSnapshot | null = null;
+    const translatedGeometries = new Map<Feature<Geometry>, Geometry>();
+    translate?.on("translatestart", event => {
+      translateBefore = captureActiveSnapshot();
+      translatedGeometries.clear();
+      event.features.forEach(feature => {
+        const geometry = feature.getGeometry();
+        if (geometry) translatedGeometries.set(feature, geometry.clone());
+      });
+      setSelectedVertices([]);
+      snap.setActive(false);
+    });
+    translate?.on("translateend", event => {
+      try {
+        const delta = event.coordinate.map((value, index) => value - event.startCoordinate[index]);
+        const moved = [...translatedGeometries].map(([feature, geometry]) => ({ feature,
+          geometry: translateTestRegion(geometry, delta, detail.raster_grid!) }));
+        if (moved.some(item => !clipEditorGeometry(item.geometry, rasterFootprintRef.current))) {
+          throw new Error("Область целиком вне снимка. Перенос отменён; оставьте часть рамки на изображении.");
+        }
+        moved.forEach(({ feature, geometry }) => feature.setGeometry(geometry));
+        setGeometryNotice("");
+        if (translateBefore) recordCurrentChange(translateBefore);
+      } catch (error) {
+        translatedGeometries.forEach((geometry, feature) => feature.setGeometry(geometry));
+        setGeometryNotice(error instanceof Error ? error.message : "Не удалось перенести тестовую область.");
+      } finally {
+        translateBefore = null;
+        translatedGeometries.clear();
+        snap.setActive(regionSizeRef.current === 0);
+      }
+    });
+
     const historySource = new VectorSource<Feature<Geometry>>();
     const historyLayer = new VectorLayer({ source: historySource, zIndex: 100 });
     historySourceRef.current = historySource;
@@ -1547,6 +1604,7 @@ export function DatasetEditorPage({
     map.addInteraction(pseudoSelect);
     map.addInteraction(vertexBox);
     map.addInteraction(modify);
+    if (translate) map.addInteraction(translate);
     map.addInteraction(draw);
     if (squareDraw) map.addInteraction(squareDraw);
     map.addInteraction(snap);
@@ -1562,6 +1620,8 @@ export function DatasetEditorPage({
     selectRef.current = select;
     vertexBoxRef.current = vertexBox;
     modifyRef.current = modify;
+    translateRef.current = translate;
+    snapRef.current = snap;
     drawRef.current = draw;
     freeDrawRef.current = draw;
     squareDrawRef.current = squareDraw;
@@ -1588,6 +1648,8 @@ export function DatasetEditorPage({
       selectRef.current = null;
       vertexBoxRef.current = null;
       modifyRef.current = null;
+      translateRef.current = null;
+      snapRef.current = null;
       drawRef.current = null;
       freeDrawRef.current = null;
       squareDrawRef.current = null;
@@ -1676,8 +1738,13 @@ export function DatasetEditorPage({
     freeDrawRef.current?.setActive(drawing && !square);
     squareDrawRef.current?.setActive(drawing && square);
     selectRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
-    vertexBoxRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
-    modifyRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
+    const verticesEditable = !testSource || regionSize === 0;
+    vertexBoxRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select" && verticesEditable);
+    modifyRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select" && verticesEditable);
+    translateRef.current?.setActive(annotationsVisible && !sceneDeleted && editMode === "select");
+    snapRef.current?.setActive(verticesEditable);
+    if (!verticesEditable) setSelectedVertices([]);
+    vectorLayerRef.current?.changed();
     pseudoSelectRef.current?.setActive(selectingPseudo);
     vectorLayerRef.current?.setVisible(annotationsVisible && !sceneDeleted);
     if ((editMode !== "select" && editMode !== "hole") || !annotationsVisible || sceneDeleted) {
@@ -1869,6 +1936,32 @@ export function DatasetEditorPage({
     selected.clear();
     if (before) recordCurrentChange(before);
   }, [captureActiveSnapshot, recordCurrentChange, setSelectedVertices]);
+
+  const changeRegionSize = (size: number) => {
+    const grid = activeDraft?.rasterGrid;
+    const selected = selectRef.current?.getFeatures().getArray() || [];
+    if (size > 0 && grid && selected.length) {
+      const before = captureActiveSnapshot();
+      try {
+        const resized = selected.map(feature => ({ feature, geometry: resizeTestRegion(feature.getGeometry()!, size, grid) }));
+        if (resized.some(item => !clipEditorGeometry(item.geometry, rasterFootprintRef.current))) {
+          throw new Error("Рамка нового размера целиком вне снимка. Сначала переместите область на изображение.");
+        }
+        resized.forEach(({ feature, geometry }) => feature.setGeometry(geometry));
+        if (before) recordCurrentChange(before);
+        setGeometryNotice("");
+      } catch (error) {
+        setGeometryNotice(error instanceof Error ? error.message : "Не удалось изменить размер тестовой области.");
+        return;
+      }
+    }
+    regionSizeRef.current = size;
+    setRegionSize(size);
+    setSelectedVertices([]);
+    if (size > 0 && editMode === "hole") setEditMode("select");
+    vectorLayerRef.current?.changed();
+    mapRef.current?.render();
+  };
 
   const restoreActiveSnapshot = useCallback((snapshot: DraftSnapshot) => {
     const source = vectorSourceRef.current;
@@ -2540,7 +2633,7 @@ export function DatasetEditorPage({
                         disabled={Boolean(activeDraft.current.deleted)}
                         aria-label="Выбор и правка полигонов"
                         aria-pressed={editMode === "select"}
-                        title="Выбор и правка: протяните рамку левой кнопкой, затем удалите выбранные вершины клавишей Del"
+                        title={testSource ? "Выберите область и перетащите её за внутреннюю часть. Вершины редактируются только в режиме «Свободный контур»." : "Выбор и правка: протяните рамку левой кнопкой, затем удалите выбранные вершины клавишей Del"}
                         onClick={() => setEditMode("select")}
                       >
                         <MousePointer2 size={17} />
@@ -2559,10 +2652,10 @@ export function DatasetEditorPage({
                       <button
                         className={`${editMode === "hole" ? "primary" : "secondary"} icon-button dataset-editor-icon-button`}
                         type="button"
-                        disabled={!annotationsVisible || Boolean(activeDraft.current.deleted) || selectedFeatureCount !== 1}
+                        disabled={!annotationsVisible || Boolean(activeDraft.current.deleted) || selectedFeatureCount !== 1 || (testSource && regionSize > 0)}
                         aria-label="Вырезать отверстие в полигоне"
                         aria-pressed={editMode === "hole"}
-                        title={selectedFeatureCount === 1
+                        title={testSource && regionSize > 0 ? "Для отверстий выберите «Свободный контур» в размере тестовой области" : selectedFeatureCount === 1
                           ? "Вырезать отверстие: нарисуйте контур внутри выбранного полигона; двойной клик — завершить, Esc — отменить"
                           : "Сначала выберите один полигон инструментом выбора и правки"}
                         onClick={() => setEditMode(editMode === "hole" ? "select" : "hole")}
@@ -2588,7 +2681,7 @@ export function DatasetEditorPage({
                       <button type="button" className={zoneMode ? "active" : ""} aria-pressed={zoneMode} onClick={() => switchAnnotationTool(true)} title="Нарисовать территорию с полной разметкой. Контур автоматически обрезается по снимку">Размеченная зона</button>
                     </div> : null}
                     {testSource ? <label className="dataset-editor-zone-target">Тестовая область
-                      <select aria-label="Размер тестовой области" value={regionSize} disabled={drawInProgress} onChange={(event) => setRegionSize(Number(event.target.value))}>
+                      <select aria-label="Размер тестовой области" value={regionSize} disabled={drawInProgress} onChange={(event) => changeRegionSize(Number(event.target.value))}>
                         {TEST_REGION_SIZES.map((size) => <option key={size} value={size}>{size} × {size} пикселей</option>)}
                         <option value={0}>Свободный контур</option>
                       </select>
@@ -2701,6 +2794,8 @@ export function DatasetEditorPage({
                     : editMode === "hole" ? "Нарисуйте отверстие внутри выбранного полигона, не касаясь его границ и других отверстий. Двойной клик — вырезать, Esc — отменить, Ctrl+Z / Ctrl+Я — убрать последнюю вершину."
                     : editMode === "draw" && testSource && regionSize > 0 ? "Кликните в центре тестовой области: квадрат привяжется к пиксельной сетке. Вышедшая за снимок часть станет nodata."
                     : editMode === "draw" ? "Ставьте вершины кликами; двойной клик — завершить контур. Для изменения вершин готового контура переключитесь на выбор и правку."
+                    : testSource && regionSize > 0 ? "Клик — выбрать рамку. Перетаскивайте её целиком за внутреннюю часть или границу; размер меняется в списке «Тестовая область». Для изменения вершин выберите «Свободный контур». Del — удалить рамку, Ctrl+Z — отменить."
+                    : testSource ? "Перетаскивайте выделенную область за внутреннюю часть для переноса целиком. Вершины и рёбра меняют свободный контур. Числовой размер заменяет его квадратом вокруг текущего центра. Del — удалить выбранное, Ctrl+Z — отменить."
                     : "Левая кнопка — рамка выбора вершин; Del — удалить выбранные вершины или, если их нет, выделенный полигон. Отверстие удаляется целиком, если остаётся меньше трёх вершин; вынесенная отдельная часть удаляется так же, если остаются другие части объекта. Клик по ребру — новая вершина, зажатое колесо — перемещение, Ctrl+Z / Ctrl+Я — отмена."}
                 </div>
                 {geometryNotice ? <p className="muted" role="status">{geometryNotice}</p> : null}
@@ -3442,6 +3537,7 @@ function featureStyle(
   filled: boolean,
   newFeatures: WeakSet<Feature<Geometry>>,
   objectTypes: EditorObjectType[],
+  frameOnly = false,
 ): Style {
   const role = feature.get(ROLE_PROPERTY) || "positive";
   const classSlug = typeof feature.get(CLASS_PROPERTY) === "string" ? String(feature.get(CLASS_PROPERTY)) : "";
@@ -3449,14 +3545,15 @@ function featureStyle(
     ? HARD_NEGATIVE_COLOR
     : objectTypes.find((item) => item.slug === classSlug)?.color || POSITIVE_COLOR;
   const isNew = newFeatures.has(feature);
-  const key = `${selected ? "selected" : role}:${semanticColor}:${isNew ? "new" : "saved"}:${filled ? "filled" : "outline"}`;
+  const key = `${selected ? "selected" : role}:${semanticColor}:${isNew ? "new" : "saved"}:${frameOnly ? "frame" : filled ? "filled" : "outline"}`;
   const cached = styleCache.get(key);
   if (cached) return cached;
   const strokeColor = selected ? "#38BDF8" : semanticColor;
   const fillColor = hexToRgba(semanticColor, role === "annotation_zone" ? 0.07 : selected ? 0.28 : 0.22);
   const style = new Style({
     stroke: new Stroke({ color: strokeColor, width: selected ? 4 : role === "annotation_zone" ? 2 : 3, lineDash: isNew ? [8, 5] : role === "annotation_zone" ? [10, 4] : undefined }),
-    fill: filled ? new Fill({ color: fillColor }) : undefined,
+    // Прозрачная заливка сохраняет захват внутренности рамки для переноса.
+    fill: frameOnly ? new Fill({ color: "rgba(0, 0, 0, 0)" }) : filled ? new Fill({ color: fillColor }) : undefined,
     zIndex: selected ? 10 : role === "annotation_zone" ? 0 : 1,
   });
   styleCache.set(key, style);
@@ -3469,11 +3566,14 @@ function selectedFeatureStyles(
   newFeatures: WeakSet<Feature<Geometry>>,
   objectTypes: EditorObjectType[],
   selectedVertices: VertexSelection[],
+  showVertices = true,
+  frameOnly = false,
 ): Style[] {
   const styles = [
-    featureStyle(feature, true, filled, newFeatures, objectTypes),
-    EDITABLE_VERTICES_STYLE,
+    featureStyle(feature, true, filled, newFeatures, objectTypes, frameOnly),
   ];
+  if (!showVertices) return styles;
+  styles.push(EDITABLE_VERTICES_STYLE);
   const coordinates = selectedVertices
     .filter((selection) => selection.feature === feature)
     .map((selection) => selection.vertex.coordinate);
