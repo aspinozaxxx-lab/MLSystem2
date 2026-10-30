@@ -140,22 +140,14 @@ def test_pseudo_and_test_f1_use_eval_threshold_without_changing_checkpoint_metri
     image, _ = _scene(tmp_path, channels=channels)
     model = _eval_model()
     reference = _eval_notebook_functions()
+    # Меняем только координаты последнего полного окна в независимом эталоне.
+    # Саму формулу нормализации, предсказания и Gaussian берём из ноутбука.
+    def edge_range(*values):
+        return [0, 16, 32, 48, 64, 68] if values == (0, 69, 16) else range(*values)
+    reference["sliding_window_inference"].__globals__["range"] = edge_range
+    expected_mask, _ = reference["sliding_window_inference"](model, image, 32, 16, 8)
     with rasterio.open(image) as source:
-        valid = _pseudo_runner.valid_data_mask(source)
-        # Исходный ноутбук принимает только полные окна. Дополняем его вход
-        # до той же полной сетки, сохраняя независимую формулу эталонного слияния.
-        height, width = source.height, source.width
-        padded_height = ((height - 1) // 16) * 16 + 32
-        padded_width = ((width - 1) // 16) * 16 + 32
-        padded = np.zeros((channels, padded_height, padded_width), dtype=np.uint8)
-        padded[:, :height, :width] = source.read() * valid
-        profile = {**source.profile, "height": padded_height, "width": padded_width}
-    padded_image = tmp_path / "padded-reference.tif"
-    with rasterio.open(padded_image, "w", **profile) as output:
-        output.write(padded)
-    expected_mask, _ = reference["sliding_window_inference"](model, padded_image, 32, 16, 8)
-    expected_mask = expected_mask[:height, :width].copy()
-    expected_mask[~valid] = 0
+        expected_mask[~_pseudo_runner.valid_data_mask(source)] = 0
     checkpoint_metadata = {"pipeline_variant": "next_gen2", "confidence_threshold": 0.5,
                            "val_best_threshold": 0.5, "sample_size": 32, "inference_context": 0}
     loaded = SimpleNamespace(model=_factory._wrap_next_gen(_spec(channels), model),

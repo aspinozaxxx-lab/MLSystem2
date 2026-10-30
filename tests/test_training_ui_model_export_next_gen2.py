@@ -112,11 +112,12 @@ def test_archive_uses_eval_profile_and_consistent_float_output(monkeypatch, over
         assert segmentation["window_size"] == tile_size and segmentation["stride"] == tile_size // 2
         assert segmentation["adapter"]["output_dtype"] == "float32"
         assert segmentation["pad_edges"] is True
+        assert segmentation.get("shift_edges", False) is (variant in {"next_gen2", "next_gen3"})
         assert threshold["_class"] == "MultiThresholding"
         assert threshold["thresholds"] == [expected_threshold] and threshold["strict_more"]
         assert vectorize["value_property_name"] == "class_id"
         assert clip == {"_class": "ClipToRasterValidData", "input_raster": "input", "vectors": vectorize["output_fcs"]}
-        assert info["inference_profile"] == ("notebook_valid_data_full_coverage_v3"
+        assert info["inference_profile"] == ("notebook_valid_data_full_windows_v4"
                                              if variant in {"next_gen2", "next_gen3"} else "notebook_valid_data_v2")
     finally:
         archive.cleanup()

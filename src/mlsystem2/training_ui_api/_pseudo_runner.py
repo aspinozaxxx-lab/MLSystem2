@@ -446,7 +446,9 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     device=device,
                     postprocess_profile=profile,
                     object_types=list(config.get("object_types") or []),
-                    **({"notebook": True, "batch_size": int(config["batch_size"]), "pad_edges": True} if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else {}),
+                    **({"notebook": True, "batch_size": int(config["batch_size"]), "pad_edges": True,
+                        "shift_edges": config.get("pipeline_variant") in {"next_gen2", "next_gen3"}}
+                       if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else {}),
                 )
                 predicted_instances = None
             with warnings.catch_warnings():
@@ -1606,6 +1608,7 @@ def _infer_native_tile(request):
         threshold=configuration["threshold"], device=request.device,
         postprocess_profile=_postprocess_profile_from_config(_POSTPROCESS_NONE, request.postprocess_config),
         context=0, notebook=True, batch_size=configuration["batch_size"], pad_edges=True,
+        shift_edges=variant in {"next_gen2", "next_gen3"},
     )
     return NativeTileInferenceResult(mask=mask, effective_config=configuration)
 
@@ -1953,6 +1956,7 @@ def _infer_scene(
                 torch=torch, model=model, tile_size=tile_size, stride=stride,
                 batch_size=batch_size, threshold=threshold, device=device, metrics=performance,
                 pad_edges=True,
+                shift_edges=config.get("pipeline_variant") in {"next_gen2", "next_gen3"},
             )
         elif aoi_wgs84 is not None:
             if dataset.crs is None:
@@ -2039,6 +2043,7 @@ def _infer_notebook_scene_mask(
     *, dataset, input_indexes: tuple[int, ...], input_channels: int,
     torch, model, tile_size: int, stride: int, batch_size: int,
     threshold: float, device: str, metrics: dict[str, Any] | None = None, pad_edges: bool = False,
+    shift_edges: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Полные окна и порог после гауссова усреднения, как в eval-ноутбуке."""
     _validate_window_grid(tile_size, stride)
@@ -2051,9 +2056,11 @@ def _infer_notebook_scene_mask(
     gaussian = np.exp(-((axis - tile_size / 2) ** 2) / (2 * (tile_size / 4) ** 2))
     weight = np.outer(gaussian, gaussian).astype(np.float32)
     valid = valid_data_mask(dataset, indexes=input_indexes)
-    windows = [Window(x, y, tile_size, tile_size)
-               for y in range(0, dataset.height if pad_edges else dataset.height - tile_size + 1, stride)
-               for x in range(0, dataset.width if pad_edges else dataset.width - tile_size + 1, stride)]
+    from ._geoalert_notebook import _probability_window_origins
+
+    rows = _probability_window_origins(dataset.height, tile_size, stride, pad_edges=pad_edges, shift_edges=shift_edges)
+    columns = _probability_window_origins(dataset.width, tile_size, stride, pad_edges=pad_edges, shift_edges=shift_edges)
+    windows = [Window(x, y, tile_size, tile_size) for y in rows for x in columns]
     index = 0
     while index < len(windows):
         pending = windows[index:index + int(performance["effective_batch_size"])]
@@ -2608,6 +2615,7 @@ def _infer_test_tile_mask(
     notebook: bool = False,
     batch_size: int | None = None,
     pad_edges: bool = False,
+    shift_edges: bool = False,
 ) -> np.ndarray:
     with rasterio.open(image_path) as dataset:
         input_indexes = _validate_raster_input_channels(dataset, image_path, input_channels)
@@ -2620,6 +2628,7 @@ def _infer_test_tile_mask(
                 torch=torch, model=model, tile_size=tile_size, stride=stride,
                 batch_size=batch_size or next_gen2_inference_batch_size(tile_size), threshold=threshold, device=device,
                 pad_edges=pad_edges,
+                shift_edges=shift_edges,
             )
         windows = [] if notebook else _windows(dataset.width, dataset.height, tile_size, stride, context)
         for window in windows:

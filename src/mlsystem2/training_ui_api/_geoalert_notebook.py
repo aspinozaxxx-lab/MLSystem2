@@ -37,12 +37,14 @@ def register_notebook_bricks() -> None:
         stride: int = Field(gt=0)
         sigma_scale: float = Field(default=0.25, gt=0)
         pad_edges: bool = False
+        shift_edges: bool = False
 
         def __call__(self, path):
             _sliding_window_probabilities(
                 Path(path), self.input_rasters, self.output_labels, self.adapter,
                 self.window_size, self.stride, self.sigma_scale,
                 pad_edges=self.pad_edges,
+                shift_edges=self.shift_edges,
             )
 
     class ObjectF1Segmentation(ModelBrick):
@@ -152,7 +154,21 @@ def _split_unmasked(source_path: Path, directory: Path, labels: list[str]) -> No
                 output.write_mask(valid.astype("uint8") * 255, window=window)
 
 
-def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, stride, sigma_scale, *, pad_edges=False):
+def _probability_window_origins(length, size, stride, *, pad_edges=False, shift_edges=False):
+    """Полный реальный контекст у края; нули нужны только снимку меньше окна."""
+    if shift_edges:
+        if not pad_edges:
+            raise ValueError("Сдвиг краевых окон требует полного покрытия снимка")
+        if length <= size:
+            return [0]
+        positions = list(range(0, length - size + 1, stride))
+        if positions[-1] != length - size:
+            positions.append(length - size)
+        return positions
+    return range(0, length if pad_edges else length - size + 1, stride)
+
+
+def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, stride, sigma_scale, *, pad_edges=False, shift_edges=False):
     """Объединить полные окна как в ноутбуке, храня в RAM только одну полосу."""
     if not 0 < stride <= size or not np.isfinite(sigma_scale) or sigma_scale <= 0:
         raise ValueError("Некорректные шаг или Gaussian sigma оконного инференса.")
@@ -171,10 +187,11 @@ def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, str
         weight = np.outer(gaussian, gaussian).astype(np.float32)
         sums = np.zeros((len(outputs), size, width), dtype=np.float32)
         weights = np.zeros((size, width), dtype=np.float32)
-        rows = range(0, height if pad_edges else height - size + 1, stride) if width >= size or pad_edges else range(0)
+        rows = _probability_window_origins(height, size, stride, pad_edges=pad_edges, shift_edges=shift_edges) if width >= size or pad_edges else range(0)
+        columns = _probability_window_origins(width, size, stride, pad_edges=pad_edges, shift_edges=shift_edges)
         written = 0
-        for y in rows:
-            for x in range(0, width if pad_edges else width - size + 1, stride):
+        for row_index, y in enumerate(rows):
+            for x in columns:
                 w, h = min(size, width-x), min(size, height-y)
                 window = Window(x, y, w, h)
                 image = np.zeros((len(sources), size, size), dtype=np.float32)
@@ -191,7 +208,8 @@ def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, str
                 current_weight = weight[:h, :w] * valid
                 sums[:, :h, x:x+w] += probabilities[:, :h, :w] * current_weight
                 weights[:h, x:x+w] += current_weight
-            count = min(size if y == rows[-1] else stride, height-y)
+            step = rows[row_index + 1] - y if row_index + 1 < len(rows) else size
+            count = min(step, height-y)
             denominator = np.maximum(weights[:count], 1e-6)
             window = Window(0, y, width, count)
             valid_output = weights[:count] > 0
@@ -200,10 +218,10 @@ def _sliding_window_probabilities(directory, inputs, outputs, adapter, size, str
                 target.write_mask(valid_output.astype("uint8") * 255, window=window)
             written = y + count
             if y != rows[-1]:
-                sums[:, :size - stride] = sums[:, stride:].copy()
-                sums[:, size - stride:] = 0
-                weights[:size - stride] = weights[stride:].copy()
-                weights[size - stride:] = 0
+                sums[:, :size - step] = sums[:, step:].copy()
+                sums[:, size - step:] = 0
+                weights[:size - step] = weights[step:].copy()
+                weights[size - step:] = 0
         # Непокрытые края и снимки меньше окна остаются нулевыми, без padding.
         for y in range(written, height, size):
             count = min(size, height - y)

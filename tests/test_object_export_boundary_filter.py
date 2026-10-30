@@ -274,7 +274,7 @@ def test_export_metadata_distinguishes_current_algorithm_from_checkpoint(profile
             assert current["object_separation"] == separation
         else:
             if profile == "next_gen2":
-                assert current["inference_profile"] == "notebook_valid_data_full_coverage_v3"
+                assert current["inference_profile"] == "notebook_valid_data_full_windows_v4"
             else:
                 assert "inference_profile" not in current
             assert "object_separation_algorithm" not in current

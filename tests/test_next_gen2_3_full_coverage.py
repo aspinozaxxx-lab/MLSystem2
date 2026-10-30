@@ -33,8 +33,10 @@ def test_native_scene_covers_every_valid_pixel_including_remainders(tmp_path, mo
     image = tmp_path / "input.tif"
     _raster(image, height, width)
     before = image.read_bytes()
+    seen = []
 
     def predict(torch, model, images, **kwargs):
+        seen[:] = [images[-1].copy()]
         return None, np.full((len(images), size, size), .99, np.float32)
 
     monkeypatch.setattr(_pseudo_runner, "_predict_tiles", predict)
@@ -50,6 +52,8 @@ def test_native_scene_covers_every_valid_pixel_including_remainders(tmp_path, mo
     np.testing.assert_array_equal(actual > 0, valid)
     assert actual[-1, -1] == 1 and actual.shape == (height, width)
     assert image.read_bytes() == before
+    if min(height, width) >= size:
+        assert np.all(seen[-1] == 80), "Полное краевое окно не должно дополняться нулями"
 
 
 @pytest.mark.parametrize("channels", [1, 3])
@@ -69,7 +73,7 @@ def test_native_and_portable_gaussian_cover_same_pixels_and_exclude_nodata(tmp_p
         native, _ = _pseudo_runner._infer_notebook_scene_mask(
             dataset=source, input_indexes=(1, 2, 3, 4), input_channels=4,
             torch=None, model=None, tile_size=size, stride=16, batch_size=2,
-            threshold=.9, device="cpu", pad_edges=True,
+            threshold=.9, device="cpu", pad_edges=True, shift_edges=True,
         )
         valid = valid_data_mask(source)
     _geoalert_notebook._split_unmasked(image, tmp_path, ["r", "g", "b", "n"])
@@ -77,7 +81,7 @@ def test_native_and_portable_gaussian_cover_same_pixels_and_exclude_nodata(tmp_p
     _geoalert_notebook._sliding_window_probabilities(
         tmp_path, ["r", "g", "b", "n"], names,
         lambda image: probabilities(1).reshape(channels, size, size),
-        size, 16, .25, pad_edges=True,
+        size, 16, .25, pad_edges=True, shift_edges=True,
     )
     with rasterio.open(tmp_path / f"p{0 if channels == 1 else 1}.tif") as source:
         portable = source.read(1) > .9
@@ -155,6 +159,42 @@ def test_geoalert_rebuilds_old_pipeline_but_keeps_identical_onnx(tmp_path, monke
     assert actual.pipeline_path != old_pipeline
     bricks = yaml.safe_load(actual.pipeline_path.read_text(encoding="utf-8"))["config"]["bricks"]
     assert next(brick for brick in bricks if brick["_class"] == "SlidingWindowSegmentation")["pad_edges"] is True
+    assert next(brick for brick in bricks if brick["_class"] == "SlidingWindowSegmentation")["shift_edges"] is True
     assert model_path.read_bytes() == "неизменённый ONNX".encode("utf-8") and model_path.stat().st_mtime_ns == model_mtime
     assert marker.read_bytes() == marker_bytes and old_pipeline.read_text(encoding="utf-8") == "version: 0.1.4\n"
     assert _geoalert_runner._ensure_runtime_export(config, checkpoint, external_manifest=None, postprocess_config={}) == actual
+
+
+@pytest.mark.parametrize("length,size,stride,expected", [
+    (2048, 768, 384, [0, 384, 768, 1152, 1280]), (64, 32, 16, [0, 16, 32]),
+    (65, 32, 16, [0, 16, 32, 33]), (27, 32, 16, [0]),
+])
+def test_edge_origins_keep_full_real_context(length, size, stride, expected):
+    assert _geoalert_notebook._probability_window_origins(
+        length, size, stride, pad_edges=True, shift_edges=True) == expected
+    assert list(_geoalert_notebook._probability_window_origins(length, size, stride, pad_edges=True)) == list(range(0, length, stride))
+    assert list(_geoalert_notebook._probability_window_origins(length, size, stride)) == list(range(0, length-size+1, stride))
+
+
+def test_portable_nonuniform_last_row_matches_native_pixel_probabilities(tmp_path, monkeypatch):
+    image = tmp_path / "input.tif"
+    _raster(image, 65, 77)
+    yy, xx = np.indices((65, 77))
+    values = ((yy * 13 + xx * 7) % 200 + 40).astype(np.uint8)
+    with rasterio.open(image, "r+") as target:
+        target.write(values, 1)
+    monkeypatch.setattr(_pseudo_runner, "_predict_tiles", lambda torch, model, images, **kwargs:
+                        (None, images[:, 0] / 255.))
+    with rasterio.open(image) as source:
+        valid = valid_data_mask(source)
+        _, confidence = _pseudo_runner._infer_notebook_scene_mask(
+            dataset=source, input_indexes=(1, 2, 3, 4), input_channels=4,
+            torch=None, model=None, tile_size=32, stride=16, batch_size=2,
+            threshold=.9, device="cpu", pad_edges=True, shift_edges=True)
+    _geoalert_notebook._split_unmasked(image, tmp_path, ["r", "g", "b", "n"])
+    _geoalert_notebook._sliding_window_probabilities(tmp_path, ["r", "g", "b", "n"], ["p"],
+        lambda window: window[:1] / 255., 32, 16, .25, pad_edges=True, shift_edges=True)
+    expected = values.astype(np.float32) / 255. * valid
+    with rasterio.open(tmp_path / "p.tif") as actual:
+        np.testing.assert_allclose(actual.read(1), expected, atol=2e-7, rtol=1e-6)
+    np.testing.assert_allclose(confidence, expected, atol=2e-7, rtol=1e-6)

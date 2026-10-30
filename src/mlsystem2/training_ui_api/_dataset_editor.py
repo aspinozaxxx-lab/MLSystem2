@@ -939,7 +939,7 @@ def editor_scene_pseudo_markup(
         else None
     )
     if source_job is not None and (source_job.config or {}).get("train.pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
-        inference_profile = ("notebook_valid_data_full_coverage_v3"
+        inference_profile = ("notebook_valid_data_full_windows_v4"
                              if source_job.config["train.pipeline_variant"] in {"next_gen2", "next_gen3"}
                              else "notebook_valid_data_v2")
     inference_config_hash = _editor_pseudo_inference_config_hash(

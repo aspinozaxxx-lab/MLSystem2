@@ -580,6 +580,7 @@ def _ensure_runtime_export(
                 external_manifest=external_manifest,
                 probability_output=model_marker.get("output_kind") in {"probabilities", "object_probabilities"},
                 pad_edges=model_marker.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"},
+                shift_edges=model_marker.get("pipeline_variant") in {"next_gen2", "next_gen3"},
                 object_output=model_marker.get("output_kind") == "object_probabilities",
                 object_separation=model_marker.get("object_separation"),
                 threshold=(
