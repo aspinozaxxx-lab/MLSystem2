@@ -13,6 +13,7 @@ from urllib.parse import unquote
 import numpy as np
 import pytest
 import rasterio
+from affine import Affine
 from fastapi.testclient import TestClient
 from PIL import Image
 from pyproj import CRS, Transformer
@@ -21,6 +22,7 @@ from rasterio.features import rasterize
 from rasterio.shutil import copy as raster_copy
 from rasterio.transform import from_origin
 from shapely.geometry import Polygon, box, mapping, shape
+from shapely.affinity import affine_transform
 from shapely.ops import transform as transform_geometry
 from sqlalchemy import select
 
@@ -1435,6 +1437,56 @@ def test_clip_geometries_to_valid_data_uses_native_pixel_mask(tmp_path: Path) ->
 
     assert len(clipped) == 1
     assert clipped[0].equals(box(8, 16, 40, 48))
+
+
+@pytest.mark.parametrize("transform", [
+    Affine(3.480438167639287, 0, 11439650.779011795, 0, -3.480438167639337, 6884403.934065378),
+    Affine(3.4664974190703672, 0, 11461182.881692966, 0, -3.4664974190703233, 6854285.599007218),
+    Affine(2.595238513183676, 0, 11856650.943282438, 0, -2.595238513183676, 7088036.303334176),
+    Affine(3.480438167639287, .2, 11439650.779011795, .1, -3.480438167639337, 6884403.934065378),
+])
+def test_native_mask_clipping_keeps_connected_objects_across_blocks(tmp_path: Path, transform) -> None:
+    """Границы блоков не разрезают цельный объект даже при больших дробных координатах."""
+    image_path = tmp_path / "цельные_объекты.tif"
+    with rasterio.open(image_path, "w", driver="GTiff", width=3072, height=768, count=1,
+                       dtype="uint8", crs="EPSG:3857", transform=transform, nodata=0,
+                       tiled=True, blockxsize=256, blockysize=256) as image:
+        image.write(np.ones((1, 768, 3072), dtype=np.uint8))
+    pixel_object = Polygon([(70, 40), (2990, 90), (2950, 710), (110, 680)],
+                           holes=[[(1950, 280), (2180, 280), (2180, 460), (1950, 460)]])
+    geometry = affine_transform(pixel_object, [transform.a, transform.b, transform.d,
+                                               transform.e, transform.c, transform.f])
+    with rasterio.open(image_path) as image:
+        clipped = clip_geometries_to_valid_data(image, (geometry,))
+    assert len(clipped) == 1
+    assert clipped[0].geom_type == "Polygon", "Техническая сетка разделила один исходный полигон"
+    assert len(clipped[0].interiors) == 1
+    assert clipped[0].equals(geometry)
+
+
+def test_native_mask_clipping_preserves_real_nodata_separation(tmp_path: Path) -> None:
+    """Настоящий разрыв маски сохраняется; пиксели и отверстия не заполняются."""
+    transform = Affine(3.480438167639287, 0, 11439650.779011795,
+                       0, -3.480438167639337, 6884403.934065378)
+    image_path = tmp_path / "разрыв_полезных_пикселей.tif"
+    valid = np.ones((768, 3072), dtype=np.uint8)
+    valid[:, 1800:1802] = 0
+    valid[270:300, 2050:2080] = 0
+    with rasterio.open(image_path, "w", driver="GTiff", width=3072, height=768, count=1,
+                       dtype="uint8", crs="EPSG:3857", transform=transform, nodata=0,
+                       tiled=True, blockxsize=256, blockysize=256) as image:
+        image.write(valid, 1)
+    pixel_object = box(60, 40, 3000, 710)
+    geometry = affine_transform(pixel_object, [transform.a, transform.b, transform.d,
+                                               transform.e, transform.c, transform.f])
+    with rasterio.open(image_path) as image:
+        result = clip_geometries_to_valid_data(image, (geometry,))[0]
+    assert result.geom_type == "MultiPolygon"
+    assert len(result.geoms) == 2, "Разрезы допускаются только там, где их требует маска"
+    assert sum(len(part.interiors) for part in result.geoms) == 1
+    actual_mask = rasterize([(result, 1)], out_shape=valid.shape, transform=transform, dtype="uint8")
+    expected_mask = rasterize([(geometry, 1)], out_shape=valid.shape, transform=transform, dtype="uint8") & valid
+    assert np.array_equal(actual_mask, expected_mask)
 
 
 def test_scene_list_export_returns_empty_txt_without_matches(

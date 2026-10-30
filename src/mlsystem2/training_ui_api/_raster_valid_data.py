@@ -12,7 +12,6 @@ from rasterio.enums import ColorInterp, Resampling
 import numpy as np
 import rasterio
 from rasterio.features import shapes
-from rasterio.windows import transform as window_transform
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.affinity import affine_transform
@@ -178,7 +177,7 @@ def clip_geometries_to_valid_data(
 ) -> tuple[BaseGeometry, ...]:
     """Обрезать геометрии по нативной ``dataset_mask`` без полной загрузки растра."""
 
-    results: list[list[BaseGeometry]] = [[] for _ in geometries]
+    pixel_footprints: list[list[BaseGeometry]] = [[] for _ in geometries]
     indexed_geometries: list[BaseGeometry] = []
     source_positions: list[int] = []
     for position, geometry in enumerate(geometries):
@@ -199,17 +198,6 @@ def clip_geometries_to_valid_data(
         if not tree_positions:
             continue
 
-        candidates: list[tuple[int, BaseGeometry]] = []
-        for tree_position in tree_positions:
-            clipped_to_block = _polygonal_geometry(
-                indexed_geometries[tree_position].intersection(block_footprint)
-            )
-            if clipped_to_block.is_empty or clipped_to_block.area <= 0:
-                continue
-            candidates.append((tree_position, clipped_to_block))
-        if not candidates:
-            continue
-
         mask = dataset.dataset_mask(window=window)
         expected_shape = (int(window.height), int(window.width))
         if mask.shape != expected_shape:
@@ -220,42 +208,48 @@ def clip_geometries_to_valid_data(
         valid_pixels = mask != 0
         if not bool(np.any(valid_pixels)):
             continue
+        x, y = int(window.col_off), int(window.row_off)
+        width, height = int(window.width), int(window.height)
         valid_footprint = (
-            block_footprint
+            Polygon(((x, y), (x + width, y), (x + width, y + height), (x, y + height)))
             if bool(np.all(valid_pixels))
             else _valid_pixels_footprint(
                 valid_pixels,
-                transform=window_transform(window, dataset.transform),
+                transform=Affine.translation(x, y),
             )
         )
         if valid_footprint.is_empty:
             continue
 
-        for tree_position, clipped_to_block in candidates:
-            clipped_to_valid_data = _polygonal_geometry(
-                clipped_to_block.intersection(valid_footprint)
-            )
-            if clipped_to_valid_data.is_empty or clipped_to_valid_data.area <= 0:
-                continue
-            results[source_positions[tree_position]].append(clipped_to_valid_data)
+        for tree_position in tree_positions:
+            pixel_footprints[source_positions[tree_position]].append(valid_footprint)
 
-    return tuple(
-        _polygonal_geometry(unary_union(parts)) if parts else GeometryCollection()
-        for parts in results
-    )
+    # Общие границы блоков совпадают точно в целочисленных координатах пикселей.
+    # Объединяем маску до перехода в CRS и обрезаем исходный объект один раз:
+    # округление больших мировых координат не создаёт щели между его частями.
+    native = dataset.transform
+    coefficients = [native.a, native.b, native.d, native.e, native.c, native.f]
+    results: list[BaseGeometry] = [GeometryCollection() for _ in geometries]
+    for geometry, position in zip(indexed_geometries, source_positions):
+        footprints = pixel_footprints[position]
+        if footprints:
+            valid_footprint = affine_transform(unary_union(footprints), coefficients)
+            results[position] = _polygonal_geometry(geometry.intersection(valid_footprint))
+    return tuple(results)
 
 
 def _window_footprint(
     dataset: rasterio.io.DatasetReader,
     window: rasterio.windows.Window,
 ) -> Polygon:
-    transform = window_transform(window, dataset.transform)
+    transform = dataset.transform
+    x, y = window.col_off, window.row_off
     return Polygon(
         (
-            transform * (0, 0),
-            transform * (window.width, 0),
-            transform * (window.width, window.height),
-            transform * (0, window.height),
+            transform * (x, y),
+            transform * (x + window.width, y),
+            transform * (x + window.width, y + window.height),
+            transform * (x, y + window.height),
         )
     )
 
