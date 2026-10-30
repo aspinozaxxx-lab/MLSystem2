@@ -40,6 +40,8 @@ _BOUNDARY_TAG = "_touches_raster_boundary"
 
 def _object_inference_metadata(variant: object) -> dict[str, str]:
     """Версия текущей CPU-постобработки, независимая от весов checkpoint."""
+    if variant in {"next_gen2", "next_gen3"}:
+        return {"inference_profile": "notebook_valid_data_full_coverage_v3"}
     if variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
         return {"inference_profile": "notebook_valid_data_v2"}
     if variant != "object_f1_v2":
@@ -207,7 +209,7 @@ def build_triton_model_export_zip(
                 object_output=object_f1,
                 object_separation=separation.model_dump() if separation is not None else None,
                 batch_size=inference_batch_size,
-                pad_edges=variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"},
+                pad_edges=next_gen2,
             ),
         )
         if object_f1 or next_gen2:

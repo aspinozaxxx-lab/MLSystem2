@@ -776,7 +776,9 @@ def test_geoalert_report_identifies_current_postprocessing(tmp_path, monkeypatch
             "object_separation_algorithm": "interior_geodesic_v1",
             "object_simplification_algorithm": "shared_edges_v1", "inference_precision": "fp32_no_tf32",
         }
-    elif profile in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
+    elif profile in {"next_gen2", "next_gen3"}:
+        assert result == {**report, "inference_profile": "notebook_valid_data_full_coverage_v3"}
+    elif profile in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
         assert result == {**report, "inference_profile": "notebook_valid_data_v2"}
     else:
         assert result == report

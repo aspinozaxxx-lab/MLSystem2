@@ -27,6 +27,8 @@ def _digest(payload: dict) -> str:
         ("next_gen", None),
         ("next_gen2", "next_gen2_eval_v1"),
         ("next_gen3", "next_gen2_eval_v1"),
+        ("next_gen2", "notebook_valid_data_v2"),
+        ("next_gen3", "notebook_valid_data_v2"),
         ("next_gen4", None),
         ("object_f1", "object_f1_instances_v1"),
         ("object_f1_v2", "object_f1_instances_v2"),
@@ -57,7 +59,10 @@ def test_f1_revision_changes_only_affected_profiles(variant, previous_profile, m
     if variant == "object_f1_v2":
         assert current != _digest(previous_payload)
         assert current == _digest({**previous_payload, "inference_profile": _V2_PROFILE})
-    elif variant in {"next_gen2", "next_gen3", "next_gen4"}:
+    elif variant in {"next_gen2", "next_gen3"}:
+        assert current != _digest(previous_payload)
+        assert current == _digest({**previous_payload, "inference_profile": "notebook_valid_data_full_coverage_v3"})
+    elif variant == "next_gen4":
         assert current != _digest(previous_payload)
         assert current == _digest({**previous_payload, "inference_profile": "notebook_valid_data_v2"})
     else:
@@ -163,7 +168,10 @@ def test_editor_scene_job_uses_source_variant_and_records_only_v2_revision(
     if variant == "object_f1_v2":
         assert snapshot["inference_profile"] == _V2_PROFILE
         expected_hash = _digest({**previous_payload, "inference_profile": _V2_PROFILE})
-    elif variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
+    elif variant in {"next_gen2", "next_gen3"}:
+        assert snapshot["inference_profile"] == "notebook_valid_data_full_coverage_v3"
+        expected_hash = _digest({**previous_payload, "inference_profile": "notebook_valid_data_full_coverage_v3"})
+    elif variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4"}:
         assert snapshot["inference_profile"] == "notebook_valid_data_v2"
         expected_hash = _digest({**previous_payload, "inference_profile": "notebook_valid_data_v2"})
     else:

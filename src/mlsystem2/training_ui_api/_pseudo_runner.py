@@ -446,7 +446,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                     device=device,
                     postprocess_profile=profile,
                     object_types=list(config.get("object_types") or []),
-                    **({"notebook": True, "batch_size": int(config["batch_size"]), "pad_edges": config.get("pipeline_variant") in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}} if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else {}),
+                    **({"notebook": True, "batch_size": int(config["batch_size"]), "pad_edges": True} if config.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else {}),
                 )
                 predicted_instances = None
             with warnings.catch_warnings():
@@ -1952,7 +1952,7 @@ def _infer_scene(
                 dataset=dataset, input_indexes=input_indexes, input_channels=input_channels,
                 torch=torch, model=model, tile_size=tile_size, stride=stride,
                 batch_size=batch_size, threshold=threshold, device=device, metrics=performance,
-                pad_edges=config.get("pipeline_variant") in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"},
+                pad_edges=True,
             )
         elif aoi_wgs84 is not None:
             if dataset.crs is None:
