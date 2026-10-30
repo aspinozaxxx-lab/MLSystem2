@@ -6,8 +6,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
+from pyproj import Transformer
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping, shape
+from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
 
 from mlsystem2.dataset_preparing.contracts import (
@@ -15,6 +17,7 @@ from mlsystem2.dataset_preparing.contracts import (
     DatasetManifest,
     DatasetSourceRevision,
 )
+from mlsystem2.dataset_preparing.api import per_image_annotation_name
 from mlsystem2.training_ui_api import _combined_dataset
 from mlsystem2.training_ui_api._dataset_editor import (
     _local_rebuild_changes,
@@ -25,6 +28,51 @@ from mlsystem2.training_ui_api._dataset_editor import (
 from mlsystem2.training_ui_api._combined_dataset import build_combined_dataset
 from mlsystem2.training_ui_api._markup_export import IntersectingImage, IntersectingImages
 from mlsystem2.training_ui_api.contracts import DatasetInfo
+
+
+@pytest.mark.parametrize(
+    ("crs", "left", "bottom", "source_crs"),
+    [("EPSG:3857", 11476000.123456789, 6806000.7654321, None),
+     ("EPSG:32648", 500000.123456789, 6806000.7654321, None),
+     ("EPSG:3857", 11476000.123456789, 6806000.7654321, "EPSG:4326")],
+)
+def test_per_image_combined_preserves_native_coordinates_and_holes(
+    tmp_path: Path, monkeypatch, crs: str, left: float, bottom: float, source_crs: str | None,
+) -> None:
+    repo = tmp_path / "markup"
+    first, second = repo / "first" / "main", repo / "second" / "main"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    images = tmp_path / "images"
+    image = images / "native" / "scene.tif"
+    image.parent.mkdir(parents=True)
+    with rasterio.open(
+        image, "w", driver="GTiff", width=64, height=64, count=1,
+        dtype="uint8", crs=crs,
+        transform=from_origin(left - 10, bottom + 100, 2, 2), nodata=0,
+    ) as raster:
+        raster.write(np.ones((1, 64, 64), dtype=np.uint8))
+    geometry = box(left, bottom, left + 70.123456789, bottom + 70.987654321).difference(
+        box(left + 20.123456789, bottom + 20.234567891, left + 30.345678912, bottom + 30.456789123)
+    )
+    source_geometry = geometry
+    if source_crs is not None:
+        source_geometry = transform_geometry(Transformer.from_crs(crs, source_crs, always_xy=True).transform, geometry)
+        geometry = transform_geometry(Transformer.from_crs(source_crs, crs, always_xy=True).transform, source_geometry)
+    source_crs = source_crs or crs
+    name = per_image_annotation_name(image)
+    (first / name).write_text(json.dumps({
+        "type": "FeatureCollection", "crs": {"type": "name", "properties": {"name": source_crs}},
+        "features": [_feature("native", source_geometry)],
+    }), encoding="utf-8")
+    manifest = _rebuild_manifest({}).model_copy(update={"managed": True})
+    monkeypatch.setattr(_combined_dataset, "_git_head", lambda _root: "git-test")
+
+    build = build_combined_dataset(manifest=manifest, repo_root=repo, images_root=images)
+
+    actual = shape(build.files[name]["features"][0]["geometry"])
+    assert actual.equals(geometry)
+    assert len(actual.interiors) == 1
 
 
 def test_combined_builder_applies_priority_background_and_stable_ids(

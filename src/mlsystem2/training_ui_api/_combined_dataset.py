@@ -51,6 +51,8 @@ class _SourceFeature:
     source_origin_key: str | None = None
     source_identity: str | None = None
     priority: int = 0
+    geometry_native: BaseGeometry | None = None
+    native_crs: PyprojCRS | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,9 +339,17 @@ def _build_per_image_combined_dataset(
                 raise TrainingUIAPIError(f"У TIFF отсутствует CRS: {image_path}")
             footprint = valid_data_footprint(image_path)
             transformer = Transformer.from_crs("EPSG:4326", dataset.crs, always_xy=True)
+            target_crs = PyprojCRS.from_user_input(dataset.crs)
             transformed_features: list[tuple[_SourceFeature, BaseGeometry]] = []
             for item in features_by_annotation.get(annotation_name, []):
-                transformed = transform_geometry(transformer.transform, item.geometry_wgs84)
+                if item.geometry_native is not None and item.native_crs is not None:
+                    if item.native_crs == target_crs:
+                        transformed = item.geometry_native
+                    else:
+                        direct = Transformer.from_crs(item.native_crs, target_crs, always_xy=True)
+                        transformed = transform_geometry(direct.transform, item.geometry_native)
+                else:
+                    transformed = transform_geometry(transformer.transform, item.geometry_wgs84)
                 clipped = transformed if item.role == "annotation_zone" else _polygonal(transformed.intersection(footprint))
                 if clipped.is_empty or clipped.area <= 0:
                     continue
@@ -520,6 +530,8 @@ def _load_per_image_source_features(
                 source_origin_key=source_origin,
                 source_identity=source_identity,
                 priority=source.priority,
+                geometry_native=geometry,
+                native_crs=crs,
             )
         )
     return output
