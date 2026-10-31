@@ -15,6 +15,39 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [
 {
+  slug: "test-markup-zip-import",
+  date: "2026-10-31",
+  title: "Готовые тестовые разметки можно загрузить одним архивом",
+  summary: "Переносите проверочные наборы из тестера и внешних редакторов в Гровику: TIFF с отдельными GeoJSON или с одной общей разметкой. После загрузки доступны карта, правка контуров, удаление снимков и расчёт F1.",
+  image: {
+    src: "/news/test-markup-zip-import.svg",
+    alt: "Схема: пары TIFF и GeoJSON или снимки с одним общим GeoJSON загружаются через ZIP в редактируемую тестовую разметку Гровики.",
+    caption: "Схема загрузки. Оба формата становятся обычной тестовой разметкой с отдельными снимками и объектами.",
+  },
+  sections: [{
+    title: "Для готовых наборов из тестера и внешней разметки",
+    paragraphs: [
+      "Если проверочные снимки уже подготовлены, больше не нужно отдельно переносить TIFF на сервер и подбирать разметку к каждому из них. Соберите ZIP и загрузите его прямо в редактор тестового набора. Это удобно для уточнённых эталонов, наборов от коллег и сравнения одной выборки в тестере и Гровике.",
+      "Поддерживаются два варианта: отдельный одноимённый GeoJSON к каждому TIFF либо один общий GeoJSON со всеми объектами. В общем файле каждый снимок получает пересекающие его объекты, обрезанные по полезным пикселям. Отверстия сохраняются, соседние объекты не объединяются. Снимки без объектов остаются в наборе как отрицательные примеры.",
+    ],
+  }, {
+    title: "Где найти и как загрузить",
+    steps: [
+      "Откройте «Тестовые разметки», выберите класс и существующий набор. Для нового набора сначала создайте пустую разметку вручную.",
+      "Перейдите в редактор и нажмите «Загрузить готовую тестовую разметку» над списком снимков.",
+      "Выберите ZIP и нажмите «Загрузить разметку». Допустимы подпапки; в варианте с отдельными файлами имена TIFF и GeoJSON должны совпадать без расширения.",
+      "После проверки снимки сразу добавятся к опубликованному набору. Выберите снимок слева, проверьте полигоны и при необходимости исправьте их. Правки и удаление снимков сохраняются в черновиках и применяются кнопкой «Опубликовать».",
+    ],
+  }, {
+    title: "Тот же эталон для просмотра, выгрузки и F1",
+    paragraphs: [
+      "Загрузка сохраняет исходную пиксельную сетку и геопривязку. TIFF должен быть подготовлен в EPSG:3857 и uint8: четыре канала для Канопуса или RGB для ортофото. Прозрачность ортофото превращается в маску полезных пикселей. Если CRS разметки не указан, её координаты считаются в проекции TIFF; явно указанный другой CRS преобразуется.",
+      "В архиве может быть до 100 снимков размером до 8192 × 8192 пикселя, сам ZIP — до 8 ГиБ, распакованные данные — до 16 ГиБ, все GeoJSON вместе — до 50 МиБ. Превью и маски строятся заново по загруженным полигонам. При ошибке архив отклоняется целиком, уже существующие снимки и черновики сохраняются.",
+      "После изменения состава прежняя метрика помечается устаревшей. Откройте состав набора и явно запустите пересчёт F1 нужной сетью. Импорт не запускает обучение и не назначает набор основным автоматически.",
+    ],
+  }],
+},
+{
   slug: "test-region-live-object-count",
   date: "2026-10-31",
   title: "Число объектов в тестовой области прямо на снимке",
@@ -1879,6 +1912,6 @@ export function NewsPage({ slug }: { slug?: string }) {
       {section.steps ? <ol>{section.steps.map((text) => <li key={text}>{text}</li>)}</ol> : null}
       {section.image ? <NewsFigure image={section.image} /> : null}
     </section>)}
-    <a className="primary" href={article.slug === "training-continuation-dataset-source" ? "#/results" : ["fast-test-markup-catalog", "test-regions-from-class-annotations"].includes(article.slug) ? "#/test-markups" : article.slug === "shared-inference-templates" ? "#/templates/inference" : ["test-markup-creation-queue", "manual-test-markup-editor"].includes(article.slug) ? "#/test-markups/create" : "#/dataset-editor"}>{article.slug === "training-continuation-dataset-source" ? "Открыть результаты обучения" : ["fast-test-markup-catalog", "test-regions-from-class-annotations"].includes(article.slug) ? "Открыть каталог тестовых разметок" : article.slug === "shared-inference-templates" ? "Открыть шаблоны инференса" : ["test-markup-creation-queue", "manual-test-markup-editor"].includes(article.slug) ? "Создать тестовую разметку" : "Открыть редактор датасетов"} <ArrowUpRight size={16} /></a>
+    <a className="primary" href={article.slug === "training-continuation-dataset-source" ? "#/results" : ["fast-test-markup-catalog", "test-regions-from-class-annotations", "test-markup-zip-import"].includes(article.slug) ? "#/test-markups" : article.slug === "shared-inference-templates" ? "#/templates/inference" : ["test-markup-creation-queue", "manual-test-markup-editor"].includes(article.slug) ? "#/test-markups/create" : "#/dataset-editor"}>{article.slug === "training-continuation-dataset-source" ? "Открыть результаты обучения" : ["fast-test-markup-catalog", "test-regions-from-class-annotations", "test-markup-zip-import"].includes(article.slug) ? "Открыть каталог тестовых разметок" : article.slug === "shared-inference-templates" ? "Открыть шаблоны инференса" : ["test-markup-creation-queue", "manual-test-markup-editor"].includes(article.slug) ? "Создать тестовую разметку" : "Открыть редактор датасетов"} <ArrowUpRight size={16} /></a>
   </article>;
 }

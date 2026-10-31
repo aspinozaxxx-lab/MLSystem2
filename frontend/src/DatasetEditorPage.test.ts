@@ -1,15 +1,27 @@
 import Feature from "ol/Feature";
 import Polygon from "ol/geom/Polygon";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { Stroke, Style } from "ol/style";
 import { describe, expect, it } from "vitest";
 
 import {
   clonePseudoFeatureForDraft,
+  DatasetEditorPage,
   displayedClassStyles,
   isEditorFeatureVisible,
   pseudoMarkupStyle,
 } from "./DatasetEditorPage";
 import { clipEditorGeometry, featureCounts, featureClassCounts } from "./utils/datasetEditor";
+
+it("предлагает ZIP с готовыми снимками только в редакторе тестовой разметки", () => {
+  const props = { run: async <T,>(operation: () => Promise<T>) => operation(), registerRouteGuard: () => {} };
+  const testEditor = renderToStaticMarkup(createElement(DatasetEditorPage, { ...props, testSampleId: "тестовый-набор" }));
+  const datasetEditor = renderToStaticMarkup(createElement(DatasetEditorPage, props));
+  expect(testEditor).toContain('aria-label="Загрузить готовую тестовую разметку"');
+  expect(datasetEditor).not.toContain('aria-label="Загрузить готовую тестовую разметку"');
+  expect(testEditor).toContain('aria-label="Загрузить GeoJSON"');
+});
 
 
 describe("размеченные зоны", () => {

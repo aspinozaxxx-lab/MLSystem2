@@ -3,6 +3,8 @@
 import hashlib
 import json
 import uuid
+import zipfile
+from io import BytesIO
 from threading import Event, Thread
 
 import pytest
@@ -64,6 +66,204 @@ def test_empty_manual_sample_and_editor_are_available_without_jobs(manual_client
     factory = create_session_factory(config)
     with factory() as session:
         assert session.scalars(select(JobRow)).all() == []
+
+
+def _archive(config, annotations, *, images=("region_a/scene_a.tif", "region_b/scene_b.tif"), extras=None):
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in images:
+            archive.write(config.images_root / "kanopus" / name, "Выборка/" + name)
+        for name, payload in annotations.items():
+            archive.writestr("Выборка/" + name, json.dumps(payload, ensure_ascii=False))
+        for name, content in (extras or {}).items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def _upload_archive(client, sample, content):
+    return client.post(f"/api/v1/test-samples/{sample['id']}/editor/import-archive",
+                       files={"archive": ("Готовая разметка.zip", content, "application/zip")})
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_archive_import_preserves_pixels_polygons_holes_and_editor_lifecycle(manual_client, shared):
+    client, config, sample = manual_client
+    base = f"/api/v1/test-samples/{sample['id']}/editor"
+    geometries = [box(10, 30, 30, 50).difference(box(15, 35, 25, 45)), box(111, 49, 113, 51)]
+    annotations = {f"scene_{letter}.geojson": _annotation(geometry) for letter, geometry in zip("ab", geometries)}
+    if shared:
+        payload = _annotation(geometries[0])
+        payload["features"].append({**_annotation(geometries[1])["features"][0], "id": "контур-2"})
+        annotations = {"Общая.geojson": payload}
+    uploaded = _upload_archive(client, sample, _archive(config, annotations, extras={"Выборка/preview.jpg": "не используется".encode("utf-8")}))
+    assert uploaded.status_code == 200, uploaded.text
+    scenes = uploaded.json()["scenes"]
+    assert len(scenes) == 2
+    root = config.stored_files_root / "test-samples" / sample["id"]
+    for i, scene in enumerate(scenes):
+        detail = client.get(base + f"/scenes/{scene['annotation_name']}").json()
+        assert len(detail["geojson"]["features"]) == 1
+        assert shape(detail["geojson"]["features"][0]["geometry"]).equals(geometries[i])
+        assert client.get(scene["raster_url"], headers={"Range": "bytes=0-15"}).status_code == 206
+        with rasterio.open(root / f"tile_{i + 1:03d}.tif") as imported, rasterio.open(config.images_root / "kanopus" / f"region_{'ab'[i]}/scene_{'ab'[i]}.tif") as source:
+            assert imported.transform == source.transform and imported.crs == source.crs
+            np.testing.assert_array_equal(imported.read(), source.read())
+            np.testing.assert_array_equal(imported.dataset_mask(), source.dataset_mask())
+    with rasterio.open(root / "tile_001_mask.png") as mask:
+        assert np.count_nonzero(mask.read(1)) == 300
+    duplicate = _upload_archive(client, sample, _archive(config, annotations))
+    assert duplicate.status_code == 409, duplicate.text
+    first = scenes[0]
+    request = {"base_revision": first["revision"], "geojson": _annotation(box(11, 49, 13, 51))}
+    assert client.put(base + f"/drafts/{first['annotation_name']}", json=request).status_code == 200
+    second = scenes[1]
+    request = {"base_revision": second["revision"], "geojson": client.get(base + f"/scenes/{second['annotation_name']}").json()["geojson"], "deleted": True}
+    assert client.put(base + f"/drafts/{second['annotation_name']}", json=request).status_code == 200
+    assert client.post(base + "/drafts/publish").status_code == 200
+    updated = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    assert updated["image_count"] == updated["actual_object_count"] == 1
+    assert client.get(updated["tiles"][0]["thumbnail_url"]).status_code == 200
+    download = client.get(updated["download_url"])
+    assert download.status_code == 200
+    with zipfile.ZipFile(BytesIO(download.content)) as archive:
+        assert len([name for name in archive.namelist() if name.endswith(".tif")]) == 1
+    assert not list(config.scratch_root.glob("test-sample-import-*"))
+    with create_session_factory(config)() as session:
+        assert session.scalars(select(JobRow)).all() == []
+
+
+@pytest.mark.parametrize("failure", ["path", "missing_pair", "extra_annotation", "invalid_json", "invalid_geometry", "invalid_tiff", "features_null", "duplicate_path", "symlink", "size_limit"])
+def test_invalid_archives_leave_sample_and_drafts_unchanged(manual_client, failure, monkeypatch):
+    client, config, sample = manual_client
+    scene = _add_image(client, sample)
+    base = f"/api/v1/test-samples/{sample['id']}/editor"
+    assert client.put(base + f"/drafts/{scene['annotation_name']}", json={"base_revision": scene["revision"], "geojson": _annotation()}).status_code == 200
+    before = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    annotations = {"scene_a.geojson": _annotation(), "scene_b.geojson": _annotation()}
+    extras = {}
+    if failure == "path":
+        extras["../чужой.tif"] = "нет".encode("utf-8")
+    if failure == "missing_pair":
+        annotations["чужой.geojson"] = annotations.pop("scene_b.geojson")
+    if failure == "extra_annotation":
+        annotations["лишний.geojson"] = _annotation()
+    if failure == "invalid_json":
+        annotations["scene_b.geojson"] = []
+    if failure == "invalid_geometry":
+        annotations["scene_b.geojson"] = _annotation(Polygon([(0, 0), (20, 20), (0, 20), (20, 0), (0, 0)]))
+    if failure == "invalid_tiff":
+        extras["не-тифф.tif"] = "не изображение".encode("utf-8")
+        annotations = {"общая.geojson": _annotation()}
+    if failure == "features_null":
+        annotations["scene_b.geojson"] = {"type": "FeatureCollection", "features": None}
+    if failure == "duplicate_path":
+        extras["выборка/region_a/SCENE_A.TIF"] = "дубликат".encode("utf-8")
+    if failure == "size_limit":
+        monkeypatch.setattr("mlsystem2.training_ui_api._test_sample_editor._ARCHIVE_MAX_BYTES", 10)
+    if failure == "symlink":
+        info = zipfile.ZipInfo("ссылка.tif")
+        info.external_attr = 0o120777 << 16
+        extras[info] = b"/etc/passwd"
+    response = _upload_archive(client, sample, _archive(config, annotations, extras=extras))
+    assert response.status_code == 400, response.text
+    if failure in {"path", "symlink"}:
+        assert "небезопасный путь" in response.text
+    if failure == "size_limit":
+        assert "8 ГиБ" in response.text
+    after = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    assert after["content_revision"] == before["content_revision"] and after["tiles"] == before["tiles"]
+    assert client.get(base + f"/scenes/{scene['annotation_name']}").json()["draft"] is not None
+    assert not list(config.scratch_root.glob("test-sample-import-*"))
+
+
+def test_archive_common_annotation_clips_exactly_and_keeps_negative_image(manual_client):
+    client, config, sample = manual_client
+    path = config.images_root / "kanopus/region_a/scene_a.tif"
+    with rasterio.open(path, "r+", IGNORE_COG_LAYOUT_BREAK="YES") as image:
+        mask = np.full(image.shape, 255, dtype=np.uint8)
+        # Зубчатая граница и отверстие: упрощение контура меняло бы эталонные пиксели.
+        mask[12:19, 11:23] = 0
+        mask[::2, :9] = 0
+        image.write_mask(mask)
+    payload = _annotation(box(0, 0, 64, 64))
+    payload.pop("crs")
+    response = _upload_archive(client, sample, _archive(config, {"общая.geojson": payload}))
+    assert response.status_code == 200, response.text
+    assert [item["positive_count"] for item in response.json()["scenes"]] == [1, 0]
+    root = config.stored_files_root / "test-samples" / sample["id"]
+    with rasterio.open(root / "tile_001_mask.png") as truth:
+        np.testing.assert_array_equal(truth.read(1) > 0, mask > 0)
+
+
+def test_archive_keeps_other_drafts_and_rolls_back_failed_commit(manual_client):
+    from mlsystem2.training_ui_api._test_sample_editor import sample_editor_import_archive
+
+    client, config, sample = manual_client
+    scene = _add_image(client, sample)
+    base = f"/api/v1/test-samples/{sample['id']}/editor"
+    assert client.put(base + f"/drafts/{scene['annotation_name']}", json={"base_revision": scene["revision"], "geojson": _annotation()}).status_code == 200
+    content = _archive(config, {"общая.geojson": _annotation()}, images=("region_b/scene_b.tif",))
+    root = config.stored_files_root / "test-samples" / sample["id"]
+    before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in root.iterdir() if path.is_file()}
+    with create_session_factory(config)() as session:
+        with pytest.raises(RuntimeError, match="Ошибка транзакции"):
+            with sample_editor_import_archive(session, config, uuid.UUID(sample["id"]), "mluser", BytesIO(content)):
+                raise RuntimeError("Ошибка транзакции")
+        session.rollback()
+    assert before == {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in root.iterdir() if path.is_file()}
+    assert _upload_archive(client, sample, content).status_code == 200
+    assert client.get(base + f"/scenes/{scene['annotation_name']}").json()["draft"] is not None
+
+
+def test_archive_late_invalid_channels_roll_back_already_copied_image(manual_client):
+    client, config, sample = manual_client
+    path = config.images_root / "kanopus/region_b/scene_b.tif"
+    with rasterio.open(path) as source:
+        pixels, profile = source.read()[:3], source.profile
+    profile.update(driver="GTiff", count=3)
+    with rasterio.open(path, "w", **profile) as target:
+        target.write(pixels)
+    response = _upload_archive(client, sample, _archive(config, {"общая.geojson": _annotation()}))
+    assert response.status_code == 400, response.text
+    root = config.stored_files_root / "test-samples" / sample["id"]
+    assert not list(root.glob("*.tif"))
+    updated = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    assert updated["image_count"] == 0 and updated["content_revision"] == sample["content_revision"]
+
+
+def test_archive_ortho_alpha_and_geographic_geojson(manual_client, monkeypatch, tmp_path):
+    from pyproj import Transformer
+    from shapely.ops import transform
+    from mlsystem2.training_ui_api import _test_sample_editor as editor
+
+    client, config, sample = manual_client
+    original_dataset = editor._dataset
+    monkeypatch.setattr(editor, "_dataset", lambda *args: original_dataset(*args).model_copy(update={"imagery_type": ImageryType.ORTHO}))
+    path = tmp_path / "орто.tif"
+    pixels = np.full((4, 32, 32), 128, dtype=np.uint8)
+    pixels[3] = 255
+    pixels[3, :4] = 0
+    with rasterio.open(path, "w", driver="GTiff", width=32, height=32, count=4, dtype="uint8", crs="EPSG:3857", transform=from_origin(1000000, 6000000, 1, 1)) as image:
+        image.write(pixels)
+        image.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
+    geometry = box(1000000, 5999968, 1000032, 6000000)
+    payload = _annotation(transform(Transformer.from_crs(3857, 4326, always_xy=True).transform, geometry))
+    payload["crs"]["properties"]["name"] = "EPSG:4326"
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.write(path, "орто.tif")
+        archive.writestr("общая.geojson", json.dumps(payload))
+    response = _upload_archive(client, sample, buffer.getvalue())
+    assert response.status_code == 200, response.text
+    root = config.stored_files_root / "test-samples" / sample["id"]
+    with rasterio.open(root / "tile_001.tif") as image, rasterio.open(root / "tile_001_mask.png") as mask:
+        assert image.count == 3
+        np.testing.assert_array_equal(image.read(), pixels[:3])
+        np.testing.assert_array_equal(image.dataset_mask(), pixels[3])
+        np.testing.assert_array_equal(mask.read(1) > 0, pixels[3] > 0)
+    detail = client.get(f"/api/v1/test-samples/{sample['id']}/editor/scenes/tile_001.geojson")
+    assert detail.status_code == 200
+    assert shape(detail.json()["geojson"]["features"][0]["geometry"]).symmetric_difference(box(1000000, 5999968, 1000032, 5999996)).area < 1e-6
 
 
 def test_manual_annotations_draft_publish_and_archive_do_not_change_source(manual_client):

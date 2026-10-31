@@ -999,6 +999,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/test-samples/{sample_id}/editor/import-archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Editor Import Archive */
+        post: operations["editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/test-sample-batches": {
         parameters: {
             query?: never;
@@ -2457,6 +2474,14 @@ export interface components {
             models: components["schemas"]["ModelInfo"][];
             /** Rules */
             rules: components["schemas"]["AutomationRuleInfo"][];
+        };
+        /** Body_editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post */
+        Body_editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post: {
+            /**
+             * Archive
+             * Format: binary
+             */
+            archive: string;
         };
         /** Body_post_custom_dataset_api_v1_custom_datasets_post */
         Body_post_custom_dataset_api_v1_custom_datasets_post: {
@@ -7902,6 +7927,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetEditorMutationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sample_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

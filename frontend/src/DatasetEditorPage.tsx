@@ -9,6 +9,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FileArchive,
   Folder,
   FolderOpen,
   Hand,
@@ -51,7 +52,7 @@ import type { ViewOptions } from "ol/View";
 import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 
-import { ApiError, apiDownloadGet, apiJson, downloadBlob } from "./api/client";
+import { ApiError, apiDownloadGet, apiForm, apiJson, downloadBlob } from "./api/client";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
 import { createTestRegionObjectCounter, resizeTestRegion, squareTestRegion, testRegionObjectCountStyle, testRegions, testRegionSize, translateTestRegion, TEST_REGION_SIZES } from "./utils/testRegions";
@@ -363,6 +364,9 @@ export function DatasetEditorPage({
   const [importMessage, setImportMessage] = useState("");
   const [importError, setImportError] = useState("");
   const [importClippingRequired, setImportClippingRequired] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [archiveError, setArchiveError] = useState("");
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
   const [selectedRasters, setSelectedRasters] = useState<Set<string>>(new Set());
   const [publication, setPublication] = useState<PublicationInfo | null>(null);
@@ -2161,7 +2165,9 @@ export function DatasetEditorPage({
   const discardAllDrafts = async () => {
     if (!datasetKey || !hasDirtyDrafts) return;
     if (!window.confirm(
-      "Удалить все ваши черновики этого датасета и вернуться к опубликованной разметке MLMarkup?",
+      testSampleId
+        ? "Удалить все ваши черновики и вернуться к опубликованной тестовой разметке?"
+        : "Удалить все ваши черновики этого датасета и вернуться к опубликованной разметке MLMarkup?",
     )) return;
     setBusy(true);
     draftSaveTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -2226,7 +2232,7 @@ export function DatasetEditorPage({
     if (deleting && !window.confirm(
       draft.baseRevision === NEW_SCENE_REVISION
         ? `Отменить добавление снимка ${draft.scene.image_name} при публикации? Сейчас это только ваш черновик, действие можно отменить.`
-        : `Пометить снимок ${draft.scene.image_name} на удаление? Файл останется в MLMarkup до публикации, действие можно отменить.`,
+        : `Пометить снимок ${draft.scene.image_name} на удаление? ${testSampleId ? "Снимок останется в тестовой разметке" : "Файл останется в MLMarkup"} до публикации, действие можно отменить.`,
     )) return;
     const before = captureActiveSnapshot() || cloneSnapshot(draft.current);
     updateDraft(draft.scene.annotation_name, (current) => ({
@@ -2262,6 +2268,37 @@ export function DatasetEditorPage({
       } else if (datasetKeyRef.current === key) {
         setImportError(error instanceof Error ? error.message : "Не удалось загрузить разметку.");
         setImportClippingRequired(error instanceof ApiError && error.code === "annotation_outside_footprint");
+      }
+    } finally { setBusy(false); }
+  };
+
+  const importArchive = async () => {
+    const key = datasetKey;
+    if (!key || !testSampleId || !archiveFile || busy) return;
+    setArchiveError("");
+    if (!archiveFile.name.toLowerCase().endsWith(".zip") || archiveFile.size > 8 * 1024 ** 3) {
+      setArchiveError("Выберите ZIP размером до 8 ГиБ.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append("archive", archiveFile);
+      const before = new Set(scenes.map((scene) => scene.annotation_name));
+      const result = await apiForm<MutationResult>(`${editorPath(key)}/import-archive`, form);
+      if (datasetKeyRef.current !== key) return;
+      const added = result.scenes.filter((scene) => !before.has(scene.annotation_name));
+      setArchiveOpen(false);
+      setArchiveFile(null);
+      setUnusedHidden(false);
+      setPublication({ commit: result.commit, live_commit: null, status: result.publication_status });
+      setImportMessage(`Готовая тестовая разметка загружена: добавлено снимков — ${added.length}. Можно редактировать полигоны и удалять снимки, затем публиковать правки. F1 пересчитывается вручную.`);
+      await loadScenes(key, added[0]?.annotation_name);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        await run(async () => { throw error; });
+      } else {
+        setArchiveError(error instanceof Error ? error.message : "Не удалось загрузить ZIP.");
       }
     } finally { setBusy(false); }
   };
@@ -2366,6 +2403,12 @@ export function DatasetEditorPage({
           title="Загрузить один или несколько GeoJSON новых снимков в личные черновики"
           onClick={() => { setImportFiles([]); setImportError(""); setImportClippingRequired(false); setImportOpen(true); }}
         ><CloudUpload size={16} /><span className="compact-control-label">Загрузить GeoJSON</span></button>
+        {testSampleId ? <button className="secondary" type="button"
+          disabled={busy || !datasetKey || drawInProgress}
+          aria-label="Загрузить готовую тестовую разметку"
+          title="Добавить TIFF и GeoJSON из ZIP в текущую тестовую разметку"
+          onClick={() => { setArchiveFile(null); setArchiveError(""); setArchiveOpen(true); }}
+        ><FileArchive size={16} /><span className="compact-control-label">Загрузить готовую тестовую разметку</span></button> : null}
         <button
           className="secondary"
           type="button"
@@ -3053,6 +3096,35 @@ export function DatasetEditorPage({
           </section>
         </section>
       )}
+
+      {archiveOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-card panel" role="dialog" aria-modal="true" aria-labelledby="test-archive-title">
+            <header className="modal-header">
+              <h2 id="test-archive-title">Загрузить готовую тестовую разметку</h2>
+              <button className="ghost" type="button" disabled={busy} onClick={() => setArchiveOpen(false)}>Закрыть</button>
+            </header>
+            <div className="modal-body">
+              <p>ZIP со снимками TIFF и разметкой в одном из двух вариантов:</p>
+              <ul><li>Отдельный одноимённый GeoJSON к каждому TIFF.</li><li>Один общий GeoJSON для всех снимков — объекты будут обрезаны по каждому снимку и его полезным пикселям.</li></ul>
+              <p>До 100 снимков, размером до 8192 × 8192 пикселя. TIFF: EPSG:3857, uint8, четыре канала Канопуса или RGB ортофото; прозрачность ортофото поддерживается. Без CRS в GeoJSON координаты считаются в проекции TIFF.</p>
+              <p>Снимки добавятся к текущему набору сразу после проверки всего архива. Существующие снимки и ваши черновики сохранятся. Затем можно править контуры и удалять снимки обычным способом.</p>
+              <label className="field"><span>Архив ZIP · до 8 ГиБ</span>
+                <input type="file" accept=".zip,application/zip" disabled={busy}
+                  onChange={(event) => { setArchiveFile(event.target.files?.[0] || null); setArchiveError(""); }} />
+              </label>
+              {archiveError ? <p className="error-box" role="alert" style={{ overflowWrap: "anywhere" }}>{archiveError}</p> : null}
+              {busy ? <p role="status">Загружаем архив, проверяем снимки и готовим разметку. Большой набор может занять несколько минут; не закрывайте страницу.</p> : null}
+            </div>
+            <footer className="modal-footer">
+              <button className="secondary" type="button" disabled={busy} onClick={() => setArchiveOpen(false)}>Отмена</button>
+              <button className="primary" type="button" disabled={busy || !archiveFile} onClick={() => void importArchive()}>
+                <FileArchive size={16} /> {busy ? "Загрузка и проверка…" : "Загрузить разметку"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       {importOpen ? (
         <div className="modal-backdrop" role="presentation">

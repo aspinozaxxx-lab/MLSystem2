@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
@@ -76,7 +76,7 @@ from mlsystem2.training_ui_api._markup_lock import test_sample_storage_lock
 from mlsystem2.training_ui_api._raster_http import raster_response
 from mlsystem2.training_ui_api._test_sample_editor import (
     sample_editor_add_images, sample_editor_browse, sample_editor_catalog, sample_editor_detail,
-    sample_editor_discard, sample_editor_import, sample_editor_publish, sample_editor_raster,
+    sample_editor_discard, sample_editor_import, sample_editor_import_archive, sample_editor_publish, sample_editor_raster,
     sample_editor_save_draft, sample_editor_scenes,
 )
 from mlsystem2.training_ui_api._test_sample_sources import source_version
@@ -167,6 +167,18 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
                 db.commit()
                 return result
         return editor_call(publish)
+
+    @app.post("/api/v1/test-samples/{sample_id}/editor/import-archive", response_model=DatasetEditorMutationResult)
+    def editor_import_archive(sample_id: uuid.UUID, archive: UploadFile = File(...),
+                              db: Session = Depends(ctx.get_db), username: str = Depends(ctx.authenticated)):
+        def upload():
+            with sample_editor_import_archive(db, ctx.config, sample_id, username, archive.file) as result:
+                db.commit()
+                return result
+        try:
+            return editor_call(upload)
+        finally:
+            archive.file.close()
 
     @app.post("/api/v1/test-samples/{sample_id}/editor/scenes", response_model=DatasetEditorMutationResult)
     def editor_add(sample_id: uuid.UUID, request: DatasetEditorAddScenesRequest,

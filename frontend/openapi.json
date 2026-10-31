@@ -2771,6 +2771,56 @@
         }
       }
     },
+    "/api/v1/test-samples/{sample_id}/editor/import-archive": {
+      "post": {
+        "summary": "Editor Import Archive",
+        "operationId": "editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post",
+        "parameters": [
+          {
+            "name": "sample_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Sample Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetEditorMutationResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/test-sample-batches": {
       "get": {
         "summary": "Get Creation Queue",
@@ -7003,6 +7053,20 @@
           "rules"
         ],
         "title": "AutomationSnapshot"
+      },
+      "Body_editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post": {
+        "properties": {
+          "archive": {
+            "type": "string",
+            "format": "binary",
+            "title": "Archive"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archive"
+        ],
+        "title": "Body_editor_import_archive_api_v1_test_samples__sample_id__editor_import_archive_post"
       },
       "Body_post_custom_dataset_api_v1_custom_datasets_post": {
         "properties": {

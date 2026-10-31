@@ -259,6 +259,9 @@ def test_manual_test_markup_reuses_editor_contracts(monkeypatch) -> None:
         assert "get" in paths[prefix + suffix]
     assert "put" in paths[prefix + "/drafts/{name}"]
     assert "post" in paths[prefix + "/drafts/publish"]
+    upload = paths[prefix + "/import-archive"]["post"]
+    assert "multipart/form-data" in upload["requestBody"]["content"]
+    assert upload["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("/DatasetEditorMutationResult")
     assert "post" in paths["/api/v1/results/training/{result_id}/test-f1"]
     diagram = Path("frontend/public/news/manual-test-markup-editor.svg").read_text(encoding="utf-8")
     assert "<title" in diagram and "пересчёт F1" in diagram

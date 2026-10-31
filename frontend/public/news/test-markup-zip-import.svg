@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title description">
+  <title id="title">Готовая тестовая разметка из ZIP</title>
+  <desc id="description">Схема двух вариантов: отдельные файлы разметки или один общий GeoJSON. Оба загружаются в редактор Гровики с возможностью редактирования, удаления снимков и расчёта F1.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1"><stop stop-color="#10243c"/><stop offset="1" stop-color="#173d45"/></linearGradient>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#5eead4" stroke-width="2"/></marker>
+  </defs>
+  <rect width="1200" height="640" rx="24" fill="url(#background)"/>
+  <g font-family="Arial, sans-serif" fill="#f1f5f9">
+    <text x="48" y="48" fill="#5eead4" font-size="17" letter-spacing="2">СХЕМА ВОЗМОЖНОСТИ</text>
+    <text x="48" y="94" font-size="34" font-weight="bold">Два формата — один редактор</text>
+    <rect x="48" y="132" width="380" height="184" rx="18" fill="#1e354d" stroke="#527086"/>
+    <text x="70" y="168" font-size="23" font-weight="bold">Разметка к каждому снимку</text>
+    <text x="70" y="213" font-size="21">Снимок 1.tif + Снимок 1.geojson</text>
+    <text x="70" y="253" font-size="21">Снимок 2.tif + Снимок 2.geojson</text>
+    <text x="70" y="290" fill="#b5cad8" font-size="18">Имена пары совпадают</text>
+    <rect x="48" y="344" width="380" height="184" rx="18" fill="#1e354d" stroke="#527086"/>
+    <text x="70" y="382" font-size="23" font-weight="bold">Общая разметка</text>
+    <text x="70" y="426" font-size="21">Снимок 1.tif · Снимок 2.tif · …</text>
+    <text x="70" y="466" font-size="21">Один GeoJSON со всеми объектами</text>
+    <text x="70" y="504" fill="#b5cad8" font-size="18">Обрезка по снимкам автоматически</text>
+    <g fill="none" stroke="#5eead4" stroke-width="3" marker-end="url(#arrow)">
+      <path d="M440 222H474Q493 222 493 242V309H517"/>
+      <path d="M440 436H474Q493 436 493 416V349H517"/>
+      <path d="M647 330H706"/>
+    </g>
+    <rect x="531" y="272" width="112" height="116" rx="17" fill="#0f766e" stroke="#5eead4"/>
+    <text x="587" y="337" text-anchor="middle" font-size="34" font-weight="bold">ZIP</text>
+    <rect x="726" y="132" width="426" height="396" rx="18" fill="#eff6f7"/>
+    <rect x="726" y="132" width="426" height="56" rx="18" fill="#d9e7eb"/>
+    <text x="748" y="168" fill="#173642" font-size="23" font-weight="bold">Тестовая разметка в Гровике</text>
+    <rect x="748" y="210" width="111" height="164" rx="10" fill="#d9e7eb"/>
+    <rect x="758" y="224" width="91" height="38" rx="6" fill="#0f766e"/>
+    <text x="771" y="248" font-size="16">Снимок 1</text>
+    <text x="771" y="293" fill="#173642" font-size="16">Снимок 2</text>
+    <text x="771" y="337" fill="#173642" font-size="16">Снимок 3</text>
+    <rect x="877" y="210" width="251" height="164" rx="10" fill="#c2d4bc"/>
+    <g fill="#14b8a64d" stroke="#0f766e" stroke-width="3">
+      <path fill-rule="evenodd" d="M896 229H991V292H896ZM920 247V274H963V247Z"/>
+      <path d="M997 229L1109 244L1093 307L997 292Z"/>
+      <path d="M896 307H991L1009 354H896Z"/>
+    </g>
+    <text x="748" y="414" fill="#173642" font-size="21">Править контуры и отверстия</text>
+    <text x="748" y="453" fill="#173642" font-size="21">Удалять снимки · выгружать набор</text>
+    <text x="748" y="492" fill="#173642" font-size="21">Считать F1 выбранной сетью</text>
+    <text x="48" y="588" fill="#c4d8df" font-size="21">Канопус и ортофото · без растяжения пикселей · отдельные объекты сохраняются</text>
+  </g>
+</svg>

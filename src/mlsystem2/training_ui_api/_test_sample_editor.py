@@ -5,15 +5,19 @@ from __future__ import annotations
 import copy
 import os
 import shutil
+import stat
 import uuid
+import zipfile
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import rasterio
 from rasterio.enums import ColorInterp, Resampling
 from rasterio.features import rasterize
-from shapely.geometry import mapping, shape
+from shapely.geometry import box, mapping, shape
+from shapely.strtree import STRtree
 from sqlalchemy import select
 
 from ._dataset_catalog import dataset_class_row, find_managed_dataset
@@ -30,7 +34,7 @@ from ._datasets import imagery_images_dir
 from ._markup_export import _write_png
 from ._markup_lock import test_sample_storage_lock
 from ._models import DatasetEditorDraftRow, TestSampleRow, TestSampleTileRow
-from ._raster_valid_data import editor_clipping_footprint
+from ._raster_valid_data import clip_geometries_to_valid_data, editor_clipping_footprint
 from . import _test_sample_sources as sources
 from ._test_samples import (
     _clear_test_sample_tile_f1, _mark_test_sample_evaluation_stale,
@@ -164,6 +168,8 @@ def sample_editor_detail(session, config, sample_id, name, username):
 
 def _normalize(payload, previous, dataset, image, *, clip=True, allow_invalid=False):
     candidate = copy.deepcopy(payload)
+    if candidate.get("type") != "FeatureCollection" or not isinstance(candidate.get("features"), list):
+        raise TrainingUIAPIError("GeoJSON должен быть FeatureCollection со списком features.")
     if dataset.task == "binary" and candidate.get("_mlsystem2_task", "binary") != "binary":
         raise TrainingUIAPIError("Многоклассовая разметка не подходит бинарной тестовой выборке.")
     for feature in candidate.get("features", []):
@@ -330,7 +336,7 @@ def _write_mask(root, tile, payload, schema):
 
 
 @contextmanager
-def sample_editor_publish(session, config, sample_id, username, *, images=None):
+def sample_editor_publish(session, config, sample_id, username, *, images=None, uploaded_images=None):
     """Публиковать файлы и БД вместе; при ошибке вернуть прежнюю версию."""
     with test_sample_storage_lock(config, sample_id, write=True):
         session.execute(select(TestSampleRow).where(TestSampleRow.id == sample_id).with_for_update()
@@ -365,18 +371,25 @@ def sample_editor_publish(session, config, sample_id, username, *, images=None):
                 else:
                     if revision != "new":
                         raise DatasetEditorConflict("Снимок тестовой разметки удалён.")
-                    source = _image_path_for_annotation(dataset, name)
-                    relative = source.relative_to(_dataset_images_root(dataset)).as_posix()
-                    if any(tile.source_name == relative and tile.source_scene_id is None for tile in sample.tiles):
+                    if uploaded_images is not None:
+                        source, relative = uploaded_images[name]
+                    else:
+                        source = _image_path_for_annotation(dataset, name)
+                        relative = source.relative_to(_dataset_images_root(dataset)).as_posix()
+                    if any(tile.source_name.casefold() == relative.casefold() and tile.source_scene_id is None for tile in sample.tiles):
                         raise DatasetEditorConflict("Снимок уже добавлен в тестовую разметку.")
                     if deleted:
                         continue
+                    territory = (PurePosixPath(relative).parent.name or "Загруженные снимки") if uploaded_images is not None else source.parent.name
                     tile = TestSampleTileRow(tile_index=next_index, source_name=relative,
-                        territory=source.parent.name, object_count=0, enabled=True)
+                        territory=territory, object_count=0, enabled=True)
                     next_index += 1
                     sample.tiles.append(tile)
                     image = stage / Path(_tile_name(tile)).with_suffix(".tif")
-                    _copy_image(source, image, dataset.imagery_type)
+                    try:
+                        _copy_image(source, image, dataset.imagery_type)
+                    except rasterio.errors.RasterioError as exc:
+                        raise TrainingUIAPIError(f"Не удалось прочитать TIFF {source.name} или его маску.") from exc
                 if deleted:
                     sample.tiles.remove(tile)
                     for path in stage.glob(f"tile_{tile.tile_index:03d}.*"):
@@ -384,7 +397,13 @@ def sample_editor_publish(session, config, sample_id, username, *, images=None):
                     for path in stage.glob(f"tile_{tile.tile_index:03d}_*"):
                         path.unlink()
                     continue
-                normalized = _normalize(payload, {}, dataset, image)
+                normalized = _normalize(payload, {}, dataset, image, clip=uploaded_images is None)
+                if uploaded_images is not None:
+                    # Для готового эталона нужна точная маска, а не упрощённый контур карты.
+                    with rasterio.open(image) as raster:
+                        clipped = clip_geometries_to_valid_data(raster, [shape(f["geometry"]) for f in normalized["features"]])
+                    normalized["features"] = [{**feature, "geometry": mapping(geometry)}
+                        for feature, geometry in zip(normalized["features"], clipped) if not geometry.is_empty]
                 _write_geojson_atomic(stage / _tile_name(tile), normalized)
                 _write_mask(stage, tile, normalized, sample.class_schema or [])
                 tile.object_count = len(normalized["features"])
@@ -442,3 +461,132 @@ def sample_editor_add_images(session, config, sample_id, request):
     if not paths or len(paths) > 100:
         raise TrainingUIAPIError("Выберите от 1 до 100 снимков.")
     return [(per_image_annotation_name(path), "new", _empty_annotation_payload(path, dataset), False) for path in paths]
+
+
+_ARCHIVE_MAX_BYTES = 8 * 1024**3
+_ARCHIVE_MAX_EXPANDED_BYTES = 16 * 1024**3
+_ARCHIVE_MAX_GEOJSON_BYTES = 50 * 1024**2
+
+
+def _extract_test_archive(stream, directory):
+    """Извлечь только TIFF, их маски и GeoJSON, не доверяя путям внутри ZIP."""
+    stream.seek(0, os.SEEK_END)
+    if stream.tell() > _ARCHIVE_MAX_BYTES:
+        raise TrainingUIAPIError("Размер ZIP не должен превышать 8 ГиБ.")
+    stream.seek(0)
+    images, annotations = [], []
+    try:
+        with zipfile.ZipFile(stream) as archive:
+            members = archive.infolist()
+            if len(members) > 2000 or sum(item.file_size for item in members) > _ARCHIVE_MAX_EXPANDED_BYTES:
+                raise TrainingUIAPIError("В ZIP допустимы до 2000 файлов и 16 ГиБ распакованных данных.")
+            seen = set()
+            selected = []
+            for member in members:
+                raw = member.filename.replace("\\", "/")
+                path = PurePosixPath(raw)
+                if (path.is_absolute() or ".." in path.parts or ":" in raw or "\x00" in raw
+                        or stat.S_ISLNK(member.external_attr >> 16)):
+                    raise TrainingUIAPIError("ZIP содержит небезопасный путь или символическую ссылку.")
+                if member.is_dir() or "__MACOSX" in path.parts or path.name.startswith("._"):
+                    continue
+                if len(raw) > 500 or any(part.endswith((".", " ")) for part in path.parts):
+                    raise TrainingUIAPIError("Имя файла в ZIP слишком длинное или некорректное.")
+                key = path.as_posix().casefold()
+                if key in seen:
+                    raise TrainingUIAPIError(f"В ZIP повторяется имя файла: {path.name}.")
+                seen.add(key)
+                if path.suffix.lower() in {".tif", ".tiff"}:
+                    images.append(path)
+                elif path.suffix.lower() == ".geojson":
+                    annotations.append(path)
+                elif not key.endswith((".tif.msk", ".tiff.msk")):
+                    # Превью, старые PNG-маски, пирамиды и статистика пересоздаются из эталона.
+                    continue
+                if member.flag_bits & 1:
+                    raise TrainingUIAPIError("ZIP с паролем не поддерживается.")
+                selected.append((member, path))
+            if not 1 <= len(images) <= 100 or not annotations:
+                raise TrainingUIAPIError("В ZIP нужны от 1 до 100 TIFF и GeoJSON: общий или отдельный к каждому снимку.")
+            if sum(member.file_size for member, path in selected if path.suffix.lower() == ".geojson") > _ARCHIVE_MAX_GEOJSON_BYTES:
+                raise TrainingUIAPIError("Общий размер GeoJSON не должен превышать 50 МиБ.")
+            for member, path in selected:
+                target = directory.joinpath(*path.parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target.open("xb") as output:
+                    shutil.copyfileobj(source, output, length=1024**2)
+    except TrainingUIAPIError:
+        raise
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, NotImplementedError, RuntimeError, OSError) as exc:
+        raise TrainingUIAPIError("Не удалось прочитать ZIP: архив повреждён или использует неподдерживаемое сжатие.") from exc
+    return sorted(images), annotations
+
+
+def _archive_annotation_pairs(images, annotations):
+    if len(annotations) == 1:
+        return [(image, annotations[0]) for image in images]
+    pairs = []
+    used = set()
+    for image in images:
+        candidates = [annotation for annotation in annotations
+                      if annotation.stem.casefold() == image.stem.casefold()]
+        local = [annotation for annotation in candidates if annotation.parent == image.parent]
+        candidates = local or candidates
+        if len(candidates) != 1:
+            raise TrainingUIAPIError(f"Для {image.name} нужен единственный одноимённый GeoJSON либо один общий GeoJSON для всего ZIP.")
+        annotation = candidates[0]
+        if annotation in used:
+            raise TrainingUIAPIError(f"Неоднозначная пара TIFF/GeoJSON: {image.name}.")
+        used.add(annotation)
+        pairs.append((image, annotation))
+    if used != set(annotations):
+        raise TrainingUIAPIError("В ZIP есть GeoJSON без соответствующего TIFF. Оставьте пары или один общий GeoJSON.")
+    return pairs
+
+
+@contextmanager
+def sample_editor_import_archive(session, config, sample_id, username, stream):
+    """Добавить готовую выборку через ту же атомарную публикацию, сохранив черновики."""
+    sample = _sample_row(session, sample_id)
+    dataset = _dataset(session, config, sample)
+    config.scratch_root.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="test-sample-import-", dir=config.scratch_root) as temporary:
+        directory = Path(temporary)
+        images, annotations = _extract_test_archive(stream, directory)
+        pairs = _archive_annotation_pairs(images, annotations)
+        payloads = {annotation: _read_geojson(directory.joinpath(*annotation.parts)) for annotation in annotations}
+        normalized_payloads = {}
+        changes, uploads = [], {}
+        for image, annotation in pairs:
+            source = directory.joinpath(*image.parts)
+            try:
+                # Расширение файла не гарантирует формат: VRT и внешние источники запрещены.
+                with rasterio.open(source, driver="GTiff") as raster:
+                    if max(raster.width, raster.height) > 8192:
+                        raise TrainingUIAPIError(f"{image.name}: размер TIFF не должен превышать 8192 × 8192 пикселя.")
+                    if raster.crs is None or raster.crs.to_epsg() != 3857:
+                        raise TrainingUIAPIError(f"{image.name}: нужен TIFF в EPSG:3857; пиксели тестовой выборки не перепроецируются.")
+                    bounds = box(*raster.bounds)
+                    external_mask = source.with_name(source.name + ".msk")
+                    if external_mask.exists():
+                        with rasterio.open(external_mask, driver="GTiff") as mask:
+                            if mask.shape != raster.shape or mask.count not in (1, raster.count):
+                                raise TrainingUIAPIError(f"{image.name}: внешняя маска не соответствует снимку.")
+                if annotation not in normalized_payloads:
+                    payload = dict(payloads[annotation])
+                    # Как в тестере: без явного CRS координаты разметки относятся к TIFF.
+                    if not payload.get("crs"):
+                        payload["crs"] = {"type": "name", "properties": {"name": "EPSG:3857"}}
+                    normalized = _normalize(payload, {}, dataset, source, clip=False)
+                    normalized_payloads[annotation] = (normalized, STRtree([shape(f["geometry"]) for f in normalized["features"]]))
+                normalized, tree = normalized_payloads[annotation]
+                # Общий GeoJSON проверяется один раз; не размножаем весь набор на каждый TIFF.
+                selected = sorted(tree.query(bounds, predicate="intersects"))
+                normalized = {**normalized, "features": [normalized["features"][index] for index in selected]}
+            except rasterio.errors.RasterioError as exc:
+                raise TrainingUIAPIError(f"Не удалось прочитать TIFF {image.name}.") from exc
+            name = f"upload_{uuid.uuid4().hex}.geojson"
+            changes.append((name, "new", normalized, False))
+            uploads[name] = (source, image.as_posix())
+        with sample_editor_publish(session, config, sample_id, username, images=changes, uploaded_images=uploads) as result:
+            yield result
