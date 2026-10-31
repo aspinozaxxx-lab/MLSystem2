@@ -54,7 +54,7 @@ import "ol/ol.css";
 import { ApiError, apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
-import { resizeTestRegion, squareTestRegion, testRegions, testRegionSize, translateTestRegion, TEST_REGION_SIZES } from "./utils/testRegions";
+import { createTestRegionObjectCounter, resizeTestRegion, squareTestRegion, testRegionObjectCountStyle, testRegions, testRegionSize, translateTestRegion, TEST_REGION_SIZES } from "./utils/testRegions";
 import { DatasetPolygonHistory, type PolygonHistoryPreview } from "./DatasetPolygonHistory";
 import { useRememberedClass } from "./ClassNavigation";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
@@ -1205,6 +1205,20 @@ export function DatasetEditorPage({
     newFeaturesRef.current = newFeatures;
     vectorSource.addFeatures(features);
     vectorSourceRef.current = vectorSource;
+    const regionCounter = detail.scene.test_source ? createTestRegionObjectCounter(vectorSource, rasterFootprintRef.current) : null;
+    const regionLabels = new WeakMap<Feature<Geometry>, { geometry: Geometry; revision: number; count: number; color: string; style: Style }>();
+    const withRegionCount = (feature: Feature<Geometry>, styles: Style | Style[]): Style | Style[] => {
+      const geometry = feature.getGeometry();
+      if (!regionCounter || feature.get(ROLE_PROPERTY) !== "annotation_zone" || !geometry) return styles;
+      const base = Array.isArray(styles) ? styles : [styles];
+      const count = regionCounter.count(geometry), color = String(base[0].getStroke()?.getColor() || "#A855F7");
+      let label = regionLabels.get(feature);
+      if (!label || label.geometry !== geometry || label.revision !== geometry.getRevision() || label.count !== count || label.color !== color) {
+        label = { geometry, revision: geometry.getRevision(), count, color, style: testRegionObjectCountStyle(geometry, count, color) };
+        regionLabels.set(feature, label);
+      }
+      return [...base, label.style];
+    };
 
     const rasterSource = new GeoTIFF({
       sources: [{ url: detail.scene.raster_url }],
@@ -1240,14 +1254,14 @@ export function DatasetEditorPage({
         feature as Feature<Geometry>,
         objectTypeChoices,
         classDisplayRef.current,
-        featureStyle(
+        withRegionCount(feature as Feature<Geometry>, featureStyle(
           feature as Feature<Geometry>,
           false,
           fillEnabledRef.current,
           newFeaturesRef.current,
           objectTypeChoices,
           Boolean(detail.scene.test_source && feature.get(ROLE_PROPERTY) === "annotation_zone"),
-        ),
+        )),
       ),
     });
     const gesture = createEditorGestureGuard();
@@ -1261,7 +1275,7 @@ export function DatasetEditorPage({
         feature as Feature<Geometry>,
         objectTypeChoices,
         classDisplayRef.current,
-        selectedFeatureStyles(
+        withRegionCount(feature as Feature<Geometry>, selectedFeatureStyles(
           feature as Feature<Geometry>,
           fillEnabledRef.current,
           newFeaturesRef.current,
@@ -1269,7 +1283,7 @@ export function DatasetEditorPage({
           selectedVerticesRef.current,
           !detail.scene.test_source || regionSizeRef.current === 0,
           Boolean(detail.scene.test_source),
-        ),
+        )),
       ),
     });
     const pseudoSelect = new Select({
@@ -1627,6 +1641,7 @@ export function DatasetEditorPage({
     squareDrawRef.current = squareDraw;
 
     return () => {
+      regionCounter?.dispose();
       if (vertexSelectionTimer !== null) window.clearTimeout(vertexSelectionTimer);
       target.removeEventListener("mousedown", preventMiddleButtonBrowserAction, true);
       target.removeEventListener("auxclick", preventMiddleButtonBrowserAction, true);
