@@ -100,17 +100,7 @@ pytestmark = pytest.mark.filterwarnings(
     "ignore:Dataset has no geotransform, gcps, or rpcs.*:rasterio.errors.NotGeoreferencedWarning"
 )
 
-_DOWNLOADED_TILE_SUFFIXES = {
-    ".tif",
-    ".geojson",
-    "_mask.png",
-    "_rgb.jpg",
-    "_rgb_markup.jpg",
-    "_nrg.jpg",
-    "_nrg_markup.jpg",
-    "_ngb.jpg",
-    "_ngb_markup.jpg",
-}
+_DOWNLOADED_TILE_SUFFIXES = {".tif", ".geojson"}
 
 
 def _downloaded_tile_names(base_name: str, *, folder: str | None = None) -> set[str]:
@@ -478,94 +468,6 @@ def test_multiclass_preview_colors_each_touching_object_boundary() -> None:
     assert np.array_equal(preview[4, 4], np.asarray([0, 255, 0]))
 
 
-def test_test_sample_jpeg_previews_keep_dimensions_channels_and_markup() -> None:
-    size = 128
-    rows, columns = np.mgrid[:size, :size]
-    image = np.stack(
-        [
-            columns * 2 + 1,
-            rows * 2 + 1,
-            np.clip(columns + rows + 1, 1, 255),
-            np.clip(255 - columns + rows // 2, 1, 255),
-        ],
-        axis=0,
-    ).astype(np.uint8)
-    labels = np.zeros((size, size), dtype=np.uint32)
-    labels[24:104, 24:64] = 1
-    labels[24:104, 64:104] = 2
-    mask = np.where(labels > 0, 255, 0).astype(np.uint8)
-    object_edge = _markup_export._label_edge(labels)
-
-    previews = _test_samples._test_sample_jpeg_previews(
-        image,
-        mask,
-        tile_name="tile001",
-        object_edge=object_edge,
-    )
-
-    assert set(previews) == {
-        "rgb",
-        "rgb_markup",
-        "nrg",
-        "nrg_markup",
-        "ngb",
-        "ngb_markup",
-    }
-    stretched = [_markup_export._stretch_channel(channel) for channel in image]
-    expected_channels = {
-        "rgb": (0, 1, 2),
-        "nrg": (3, 0, 1),
-        "ngb": (3, 1, 2),
-    }
-    decoded: dict[str, np.ndarray] = {}
-    for name, payload in previews.items():
-        assert len(payload) <= 300 * 1024
-        with Image.open(BytesIO(payload)) as preview:
-            assert preview.format == "JPEG"
-            assert preview.size == (size, size)
-            assert preview.info.get("progressive") == 1
-            decoded[name] = np.asarray(preview.convert("RGB"))
-
-    for name, indices in expected_channels.items():
-        expected = np.stack([stretched[index] for index in indices], axis=2)
-        mean_error = np.abs(decoded[name].astype(int) - expected.astype(int)).mean()
-        assert mean_error < 8.0
-
-    edge = object_edge
-    yellow = np.asarray([255, 255, 0])
-    edge_error = np.abs(decoded["rgb_markup"][edge].astype(int) - yellow).mean()
-    assert edge_error < 55.0
-    assert edge[64, 63]
-    assert edge[64, 64]
-    unchanged_error = np.abs(
-        decoded["rgb_markup"][:12, :12].astype(int) - decoded["rgb"][:12, :12].astype(int)
-    ).mean()
-    assert unchanged_error < 4.0
-
-
-def test_test_sample_jpeg_encoder_enforces_hard_size_limit(monkeypatch) -> None:
-    random_image = np.random.default_rng(7).integers(
-        0,
-        256,
-        size=(1024, 1024, 3),
-        dtype=np.uint8,
-    )
-    payload = _test_samples._encode_test_sample_jpeg(
-        random_image,
-        tile_name="tile001",
-        preview_name="rgb",
-    )
-    assert len(payload) <= 300 * 1024
-
-    monkeypatch.setattr(_test_samples, "_JPEG_PREVIEW_MAX_BYTES", 1)
-    with pytest.raises(TrainingUIAPIError, match="не помещается в 300 КБ"):
-        _test_samples._encode_test_sample_jpeg(
-            random_image[:16, :16],
-            tile_name="tile001",
-            preview_name="rgb",
-        )
-
-
 def test_test_sample_thumbnail_is_independent_and_native_preview_restores_resolution(tmp_path, monkeypatch):
     width, height = 800, 400
     image = np.broadcast_to(np.arange(width, dtype=np.uint16)[None, None, :], (4, height, width)).copy()
@@ -640,25 +542,6 @@ def test_test_f1_results_batch_avoids_queries_per_network(tmp_path, monkeypatch)
             assert infos[0] == training_result_test_f1_info(session, rows[0], config)
         finally:
             event.remove(session.bind, "before_cursor_execute", listener)
-
-
-def test_test_sample_jpeg_previews_for_rgb_have_no_nir_compositions() -> None:
-    previews = _test_samples._test_sample_jpeg_previews(
-        np.zeros((3, 16, 16), dtype=np.uint8),
-        np.zeros((16, 16), dtype=np.uint8),
-        tile_name="tile001",
-    )
-
-    assert set(previews) == {"rgb", "rgb_markup"}
-
-
-def test_test_sample_jpeg_previews_reject_unsupported_channel_count() -> None:
-    with pytest.raises(TrainingUIAPIError, match="найдено каналов: 2"):
-        _test_samples._test_sample_jpeg_previews(
-            np.zeros((2, 16, 16), dtype=np.uint8),
-            np.zeros((16, 16), dtype=np.uint8),
-            tile_name="tile001",
-        )
 
 
 def test_markup_export_reports_nearest_object_count(tmp_path: Path, monkeypatch) -> None:
@@ -2103,13 +1986,22 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert archive_response.status_code == 200
         with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
             names = set(archive.namelist())
-            assert names == _downloaded_tile_names("tile001")
-            for name in names:
-                if name.endswith(".jpg"):
-                    assert archive.getinfo(name).file_size <= 300 * 1024
+            assert names == {"tile001.tif", "markup.geojson"}
+            assert archive.read("tile001.tif") == (sample_root / "tile_002.tif").read_bytes()
+            assert json.loads(archive.read("markup.geojson"))["features"]
+        for query in ("per_image", "single"):
+            response = client.get(toggled["download_url"], params={"annotation_layout": query})
+            assert response.status_code == 200
+            with zipfile.ZipFile(BytesIO(response.content)) as archive:
+                annotation = "markup.geojson" if query == "single" else "tile001.geojson"
+                assert set(archive.namelist()) == {"tile001.tif", annotation}
+        assert client.get(toggled["download_url"], params={"annotation_layout": "ошибка"}).status_code == 422
+        assert client.post(toggled["download_url"], json={
+            "enabled_tile_indices": [2], "annotation_layout": "ошибка",
+        }).status_code == 422
         draft_archive_response = client.post(
             toggled["download_url"],
-            json={"enabled_tile_indices": [1, 2]},
+            json={"enabled_tile_indices": [1, 2], "annotation_layout": "per_image"},
         )
         assert draft_archive_response.status_code == 200
         with zipfile.ZipFile(BytesIO(draft_archive_response.content)) as archive:
@@ -2119,20 +2011,18 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
             assert (
                 archive.read("tile001.geojson") == (sample_root / "tile_001.geojson").read_bytes()
             )
-        draft_without_previews = client.post(
+        draft_single = client.post(
             toggled["download_url"],
             json={
                 "enabled_tile_indices": [1, 2],
-                "include_previews": False,
             },
         )
-        assert draft_without_previews.status_code == 200
-        with zipfile.ZipFile(BytesIO(draft_without_previews.content)) as archive:
+        assert draft_single.status_code == 200
+        with zipfile.ZipFile(BytesIO(draft_single.content)) as archive:
             assert set(archive.namelist()) == {
                 "tile001.tif",
-                "tile001.geojson",
                 "tile002.tif",
-                "tile002.geojson",
+                "markup.geojson",
             }
         second_sample_response = client.post(
             "/api/v1/test-samples",
@@ -2921,14 +2811,14 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         artifact = build_test_sample_download(session, sample_id, config)
         try:
             with zipfile.ZipFile(artifact.path) as archive:
-                assert set(archive.namelist()) == _downloaded_tile_names("tile001")
+                assert set(archive.namelist()) == {"tile001.tif", "markup.geojson"}
         finally:
             artifact.cleanup()
         artifact = build_test_sample_download(
             session,
             sample_id,
             config,
-            include_previews=False,
+            annotation_layout="per_image",
         )
         try:
             with zipfile.ZipFile(artifact.path) as archive:
@@ -4000,12 +3890,12 @@ def test_primary_sample_is_unique_and_single_zip_uses_enabled_tiles(
         artifact = build_test_sample_download(session, samples[1].id, config)
         try:
             with zipfile.ZipFile(artifact.path) as archive:
-                assert set(archive.namelist()) == _downloaded_tile_names("tile001")
+                assert set(archive.namelist()) == {"tile001.tif", "markup.geojson"}
         finally:
             artifact.cleanup()
 
 
-def test_test_sample_download_removes_partial_archive_when_jpeg_cannot_fit(
+def test_test_sample_download_removes_partial_archive_when_annotation_is_missing(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -4027,8 +3917,9 @@ def test_test_sample_download_removes_partial_archive_when_jpeg_cannot_fit(
             ),
             config,
         )
-        monkeypatch.setattr(_test_samples, "_JPEG_PREVIEW_MAX_BYTES", 1)
-        with pytest.raises(TrainingUIAPIError, match="не помещается в 300 КБ"):
+        root = config.stored_files_root / _test_samples.TEST_SAMPLE_ROOT_NAME / str(sample.id)
+        (root / "tile_001.geojson").unlink()
+        with pytest.raises(TrainingUIAPIError, match="Файл тестового тайла не найден"):
             build_test_sample_download(session, sample.id, config)
 
     download_root = config.scratch_root / _test_samples.TEST_SAMPLE_DOWNLOAD_ROOT_NAME
@@ -4513,7 +4404,7 @@ def test_annotations_merge_preserves_snapshot_and_is_idempotent(annotation_merge
     assert repeated.json()["id"] == updated["id"]
     assert queued == []
     archive_response = client.post(updated["download_url"], json={
-        "enabled_tile_indices": [1], "include_previews": False,
+        "enabled_tile_indices": [1], "annotation_layout": "per_image",
     })
     with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
         assert len(json.loads(archive.read("tile001.geojson"))["features"]) == 1

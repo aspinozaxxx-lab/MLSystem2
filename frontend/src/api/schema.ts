@@ -5197,10 +5197,11 @@ export interface components {
             /** Enabled Tile Indices */
             enabled_tile_indices: number[];
             /**
-             * Include Previews
-             * @default true
+             * Annotation Layout
+             * @default single
+             * @enum {string}
              */
-            include_previews: boolean;
+            annotation_layout: "per_image" | "single";
         };
         /** TestSampleDraftPreview */
         TestSampleDraftPreview: {
@@ -8878,7 +8879,9 @@ export interface operations {
     };
     download_test_sample_api_v1_test_samples__sample_id__download_get: {
         parameters: {
-            query?: never;
+            query?: {
+                annotation_layout?: "per_image" | "single";
+            };
             header?: never;
             path: {
                 sample_id: string;

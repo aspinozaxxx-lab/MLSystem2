@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -550,10 +551,13 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
     )
     def download_test_sample(
         sample_id: uuid.UUID,
+        annotation_layout: Literal["per_image", "single"] = "single",
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> FileResponse:
-        artifact = _sample_or_404(lambda: build_test_sample_download(db, sample_id, ctx.config))
+        artifact = _sample_or_404(lambda: build_test_sample_download(
+            db, sample_id, ctx.config, annotation_layout=annotation_layout,
+        ))
         return FileResponse(
             artifact.path,
             filename=artifact.filename,
@@ -583,7 +587,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
                 sample_id,
                 ctx.config,
                 enabled_tile_indices=request.enabled_tile_indices,
-                include_previews=request.include_previews,
+                annotation_layout=request.annotation_layout,
             )
         )
         return FileResponse(

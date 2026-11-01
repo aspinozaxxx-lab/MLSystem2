@@ -85,6 +85,40 @@ def _upload_archive(client, sample, content):
                        files={"archive": ("Готовая разметка.zip", content, "application/zip")})
 
 
+@pytest.mark.parametrize("layout", ["per_image", "single"])
+def test_download_can_be_imported_with_same_pixels_masks_and_coverage(manual_client, layout):
+    client, config, sample = manual_client
+    annotations = {"scene_a.geojson": _annotation(box(10, 30, 30, 50).difference(box(15, 35, 25, 45))),
+                   "scene_b.geojson": _annotation(box(111, 49, 113, 51))}
+    response = _upload_archive(client, sample, _archive(config, annotations))
+    assert response.status_code == 200, response.text
+    source = config.stored_files_root / "test-samples" / sample["id"]
+    before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in source.iterdir() if path.is_file()}
+    saved = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    params = {"annotation_layout": layout} if layout == "per_image" else {}
+    download = client.get(saved["download_url"], params=params)
+    assert download.status_code == 200, download.text
+    with zipfile.ZipFile(BytesIO(download.content)) as archive:
+        assert set(archive.namelist()) == ({"tile001.tif", "tile002.tif", "markup.geojson"}
+            if layout == "single" else {"tile001.tif", "tile002.tif", "tile001.geojson", "tile002.geojson"})
+    target = client.post("/api/v1/test-samples", json={
+        "dataset_key": "Вырубки\\main", "name": "Повторная загрузка выгрузки", "creation_mode": "manual",
+    }).json()
+    imported = _upload_archive(client, target, download.content)
+    assert imported.status_code == 200, imported.text
+    destination = source.with_name(target["id"])
+    for index in (1, 2):
+        for suffix in (".tif", "_mask.png"):
+            with rasterio.open(source / f"tile_{index:03d}{suffix}") as first, rasterio.open(destination / f"tile_{index:03d}{suffix}") as second:
+                assert first.transform == second.transform and first.crs == second.crs
+                np.testing.assert_array_equal(first.read(), second.read())
+                np.testing.assert_array_equal(first.dataset_mask(), second.dataset_mask())
+    assert client.get(f"/api/v1/test-samples/{sample['id']}").json() == saved
+    assert {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in source.iterdir() if path.is_file()} == before
+    with create_session_factory(config)() as session:
+        assert session.scalars(select(JobRow)).all() == []
+
+
 @pytest.mark.parametrize("shared", [False, True])
 def test_archive_import_preserves_pixels_polygons_holes_and_editor_lifecycle(manual_client, shared):
     client, config, sample = manual_client

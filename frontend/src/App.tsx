@@ -44,6 +44,7 @@ import {
 
 import { ApiError, apiDownload, apiDownloadJson, apiForm, apiJson, downloadBlob } from "./api/client";
 import { TestF1RefreshButton } from "./TestF1RefreshButton";
+import { TestSampleDownloadOptionsForm, type TestSampleAnnotationLayout } from "./TestSampleDownloadOptions";
 import type {
   AutomationRuleInfo,
   AutomationSnapshot,
@@ -1093,75 +1094,6 @@ function TestMarkupCatalogPage({ run, showModal, closeModal }: Pick<RoutedPagePr
   );
 }
 
-function TestSampleDownloadOptionsForm({
-  onCancel,
-  onSubmit,
-}: {
-  onCancel: () => void;
-  onSubmit: (includePreviews: boolean) => Promise<boolean>;
-}) {
-  const [includePreviews, setIncludePreviews] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSubmitting(true);
-    try {
-      if (await onSubmit(includePreviews)) onCancel();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <form className="form-stack" onSubmit={submit}>
-      <DownloadModeFields
-        includePreviews={includePreviews}
-        onChange={setIncludePreviews}
-      />
-      <div className="button-row download-dialog-actions">
-        <button className="secondary" type="button" disabled={submitting} onClick={onCancel}>Отмена</button>
-        <button className="primary" type="submit" disabled={submitting}>
-          <Download size={16} />
-          {submitting ? "Формирование..." : "Скачать ZIP"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function DownloadModeFields({
-  includePreviews,
-  onChange,
-}: {
-  includePreviews: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <fieldset className="download-mode-fieldset">
-      <legend>Состав архива</legend>
-      <label className="download-mode-choice">
-        <input
-          type="radio"
-          name="download-mode"
-          checked={includePreviews}
-          onChange={() => onChange(true)}
-        />
-        <span><strong>С превью</strong><small>TIFF, GeoJSON, PNG-маска и JPEG-превью</small></span>
-      </label>
-      <label className="download-mode-choice">
-        <input
-          type="radio"
-          name="download-mode"
-          checked={!includePreviews}
-          onChange={() => onChange(false)}
-        />
-        <span><strong>Без превью</strong><small>Только TIFF и GeoJSON</small></span>
-      </label>
-    </fieldset>
-  );
-}
-
 function TestSampleCatalog({
   samples,
   onDelete,
@@ -1395,11 +1327,11 @@ function TestSampleEditorPage({
     }
   };
 
-  const download = async (includePreviews: boolean): Promise<boolean> => {
+  const download = async (layout: TestSampleAnnotationLayout): Promise<boolean> => {
     if (!sample || !draft) return false;
     const request: TestSampleDownloadRequest = {
       enabled_tile_indices: draft.enabledTileIndices,
-      include_previews: includePreviews,
+      annotation_layout: layout,
     };
     setDownloading(true);
     try {

@@ -129,7 +129,7 @@ class TestSampleDownloadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled_tile_indices: list[int]
-    include_previews: bool = True
+    annotation_layout: Literal["per_image", "single"] = "single"
 
 
 class TestSampleMetric(BaseModel):

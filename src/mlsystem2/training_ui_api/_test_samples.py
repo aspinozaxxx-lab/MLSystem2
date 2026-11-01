@@ -15,11 +15,10 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from io import BytesIO
 from math import gcd
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import rasterio
@@ -33,7 +32,7 @@ from rasterio.errors import NotGeoreferencedWarning
 from rasterio.features import rasterize
 from scipy.optimize import Bounds, LinearConstraint
 from scipy.sparse import coo_matrix
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, shape
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as transform_geometry
 from shapely.ops import unary_union
@@ -43,7 +42,7 @@ from sqlalchemy import Integer, delete, func, select, text
 from sqlalchemy.orm import Session, joinedload, selectinload, sessionmaker
 
 from ._config import TrainingUIAPIConfig
-from ._markup_lock import markup_read_lock
+from ._markup_lock import markup_read_lock, test_sample_storage_lock
 from ._dataset_catalog import (
     dataset_class_row,
     dataset_training_result,
@@ -55,12 +54,10 @@ from ._datasets import resolve_scenes_file_images
 from ._markup_export import (
     _INSTANCE_BOUNDARY_PREVIEW_VERSION,
     _instance_edge_mask,
-    _mask_edge,
     _overlay_image,
     _preview_version_path,
     _run_milp,
     _single_constraint,
-    _stretch_channel,
     _write_png,
     _write_preview_version,
     generate_markup_files,
@@ -138,16 +135,6 @@ TEST_SAMPLE_F1_EVALUATOR_VERSION = 3
 TEST_SAMPLE_EVALUATION_TARGET = "test_sample"
 TRAINING_RESULT_TEST_METRIC_TARGET = "training_result"
 OBJECT_IOU_THRESHOLD = 0.5
-_DOWNLOAD_BASE_TILE_SUFFIXES = (".tif", ".geojson")
-_DOWNLOAD_PREVIEW_SOURCE_SUFFIXES = ("_mask.png",)
-_JPEG_PREVIEW_CHANNELS = {
-    "rgb": (0, 1, 2),
-    "nrg": (3, 0, 1),
-    "ngb": (3, 1, 2),
-}
-_JPEG_PREVIEW_MAX_BYTES = 300 * 1024
-_JPEG_QUALITY_MIN = 1
-_JPEG_QUALITY_MAX = 95
 _THUMBNAIL_MAX_SIZE = 384
 _THUMBNAIL_JPEG_QUALITY = 82
 _THUMBNAIL_RENDERER_VERSION = f"{_INSTANCE_BOUNDARY_PREVIEW_VERSION}-thumbnail-v2"
@@ -2051,186 +2038,101 @@ def build_test_sample_download(
     config: TrainingUIAPIConfig,
     *,
     enabled_tile_indices: list[int] | None = None,
-    include_previews: bool = True,
+    annotation_layout: Literal["per_image", "single"] = "single",
 ) -> TestSampleDownloadArtifact:
-    row = _sample_row(session, sample_id)
-    selected = (
-        _validated_tile_indices(row, enabled_tile_indices)
-        if enabled_tile_indices is not None
-        else {tile.tile_index for tile in row.tiles if tile.enabled}
-    )
-    enabled = sorted(
-        (tile for tile in row.tiles if tile.tile_index in selected),
-        key=lambda tile: tile.tile_index,
-    )
-    if not enabled:
-        raise TrainingUIAPIError("В тестовой разметке нет включённых тайлов.")
-    source_root = _sample_root(config, row.id)
-    download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
-    download_root.mkdir(parents=True, exist_ok=True)
-    archive_path = download_root / f"{row.id}-{uuid.uuid4()}.zip"
-    try:
-        with zipfile.ZipFile(
-            archive_path,
-            mode="w",
-            compression=zipfile.ZIP_DEFLATED,
-        ) as archive:
-            for download_index, tile in enumerate(enabled, start=1):
-                _write_test_sample_tile_to_archive(
-                    archive,
-                    source_root,
-                    tile.tile_index,
-                    download_index,
-                    include_previews=include_previews,
-                )
-    except Exception:
-        archive_path.unlink(missing_ok=True)
-        raise
-    return TestSampleDownloadArtifact(
-        path=archive_path,
-        filename=f"{_safe_name(row.class_name.casefold(), 'markup')}_test_markup.zip",
-    )
-
-
-def _test_sample_tile_download_entries(
-    source_root: Path,
-    tile_index: int,
-    download_index: int,
-    *,
-    include_previews: bool,
-) -> list[tuple[str, Path | bytes]]:
-    stored_base_name = f"tile_{tile_index:03d}"
-    archive_base_name = f"tile{download_index:03d}"
-    suffixes = list(_DOWNLOAD_BASE_TILE_SUFFIXES)
-    if include_previews:
-        suffixes.extend(_DOWNLOAD_PREVIEW_SOURCE_SUFFIXES)
-    paths = {suffix: source_root / f"{stored_base_name}{suffix}" for suffix in suffixes}
-    entries: list[tuple[str, Path | bytes]] = []
-    for suffix, path in paths.items():
-        if not path.is_file():
-            raise TrainingUIAPIError(f"Файл тестового тайла не найден: {path.name}")
-        entries.append((f"{archive_base_name}{suffix}", path))
-    if not include_previews:
-        return entries
-
-    image, mask, object_edge = _test_sample_tile_render_data(source_root, tile_index)
-    previews = _test_sample_jpeg_previews(
-        image,
-        mask,
-        tile_name=archive_base_name,
-        object_edge=object_edge,
-    )
-    entries.extend(
-        (
-            f"{archive_base_name}_{suffix}.jpg",
-            preview,
+    with test_sample_storage_lock(config, sample_id):
+        row = _sample_row(session, sample_id)
+        selected = (
+            _validated_tile_indices(row, enabled_tile_indices)
+            if enabled_tile_indices is not None
+            else {tile.tile_index for tile in row.tiles if tile.enabled}
         )
-        for suffix, preview in previews.items()
-    )
-    return entries
+        enabled = sorted(
+            (tile for tile in row.tiles if tile.tile_index in selected),
+            key=lambda tile: tile.tile_index,
+        )
+        if not enabled:
+            raise TrainingUIAPIError("В тестовой разметке нет включённых тайлов.")
+        source_root = _sample_root(config, row.id)
+        download_root = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
+        download_root.mkdir(parents=True, exist_ok=True)
+        archive_path = download_root / f"{row.id}-{uuid.uuid4()}.zip"
+        try:
+            with zipfile.ZipFile(
+                archive_path,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                for download_index, tile in enumerate(enabled, start=1):
+                    stored_base = source_root / f"tile_{tile.tile_index:03d}"
+                    for suffix in (".tif", ".geojson"):
+                        path = stored_base.with_suffix(suffix)
+                        if not path.is_file():
+                            raise TrainingUIAPIError(f"Файл тестового тайла не найден: {path.name}")
+                        if suffix == ".tif" or annotation_layout == "per_image":
+                            archive.write(path, f"tile{download_index:03d}{suffix}")
+                if annotation_layout == "single":
+                    payload = _single_test_sample_geojson(source_root, enabled)
+                    archive.writestr(
+                        "markup.geojson", json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    )
+        except Exception:
+            archive_path.unlink(missing_ok=True)
+            raise
+        return TestSampleDownloadArtifact(
+            path=archive_path,
+            filename=f"{_safe_name(row.class_name.casefold(), 'markup')}_test_markup.zip",
+        )
 
 
-def _write_test_sample_tile_to_archive(
-    archive: zipfile.ZipFile,
-    source_root: Path,
-    tile_index: int,
-    download_index: int,
-    *,
-    include_previews: bool,
-) -> None:
-    for archive_name, payload in _test_sample_tile_download_entries(
-        source_root,
-        tile_index,
-        download_index,
-        include_previews=include_previews,
-    ):
-        if isinstance(payload, Path):
-            archive.write(payload, archive_name)
-        else:
-            archive.writestr(archive_name, payload)
-
-
-def _test_sample_jpeg_previews(
-    image: np.ndarray,
-    mask: np.ndarray,
-    *,
-    tile_name: str,
-    object_edge: np.ndarray | None = None,
-) -> dict[str, bytes]:
-    channel_count = image.shape[0] if image.ndim == 3 else 0
-    if channel_count == 3:
-        preview_channels = {"rgb": (0, 1, 2)}
-    elif channel_count == 4:
-        preview_channels = _JPEG_PREVIEW_CHANNELS
-    else:
-        raise TrainingUIAPIError(
-            f"Для превью {tile_name} нужен RGB TIFF с 3 каналами либо "
-            f"RGB+NIR TIFF с 4 каналами; найдено каналов: {channel_count}."
-        )
-    if mask.ndim != 2 or image.shape[1:] != mask.shape:
-        raise TrainingUIAPIError(f"Размер маски {tile_name} не совпадает с размером TIFF.")
-
-    stretched = tuple(_stretch_channel(image[index]) for index in range(channel_count))
-    edge = _mask_edge(mask) if object_edge is None else np.asarray(object_edge, dtype=bool)
-    if edge.shape != mask.shape:
-        raise TrainingUIAPIError(
-            f"Размер контура объектов {tile_name} не совпадает с размером TIFF."
-        )
-    result: dict[str, bytes] = {}
-    for name, channel_indices in preview_channels.items():
-        preview = np.stack(
-            [stretched[index] for index in channel_indices],
-            axis=2,
-        )
-        result[name] = _encode_test_sample_jpeg(
-            preview,
-            tile_name=tile_name,
-            preview_name=name,
-        )
-        marked = preview.copy()
-        marked[edge] = np.asarray([255, 255, 0], dtype=np.uint8)
-        marked_name = f"{name}_markup"
-        result[marked_name] = _encode_test_sample_jpeg(
-            marked,
-            tile_name=tile_name,
-            preview_name=marked_name,
-        )
+def _single_test_sample_geojson(source_root: Path, tiles: list[TestSampleTileRow]) -> dict[str, Any]:
+    """Склеить покрытие одного типа в общей CRS без изменения опубликованного эталона."""
+    result: dict[str, Any] = {"type": "FeatureCollection", "features": []}
+    target_crs: PyprojCRS | None = None
+    groups: dict[tuple[Any, ...], list[tuple[BaseGeometry, dict[str, Any]]]] = defaultdict(list)
+    schema_keys = ("_mlsystem2_schema_version", "_mlsystem2_task", "_mlsystem2_classes")
+    schema: dict[str, Any] | None = None
+    for tile in tiles:
+        path = source_root / f"tile_{tile.tile_index:03d}.geojson"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("type") != "FeatureCollection":
+            raise TrainingUIAPIError(f"Разметка {path.name} должна быть FeatureCollection.")
+        current_schema = {key: payload[key] for key in schema_keys if key in payload}
+        if schema is not None and current_schema != schema:
+            raise TrainingUIAPIError("У снимков различается схема типов разметки.")
+        schema = current_schema
+        source_crs = _payload_crs(payload, "EPSG:4326")
+        if target_crs is None:
+            target_crs = source_crs
+            result["crs"] = {"type": "name", "properties": {"name": target_crs.to_string()}}
+            result.update(schema)
+        for feature in payload.get("features", []):
+            geometry = shape(feature["geometry"])
+            if (not isinstance(geometry, (Polygon, MultiPolygon)) or geometry.is_empty
+                    or not geometry.is_valid or not np.isfinite(geometry.area)):
+                raise TrainingUIAPIError(f"В {path.name} найден некорректный полигон.")
+            geometry = _transform_geometry(geometry, source_crs, target_crs)
+            properties = dict(feature.get("properties") or {})
+            key = (properties.get("_mlsystem2_role", "positive"),
+                   properties.get("_mlsystem2_class"), properties.get("object_type_id"))
+            groups[key].append((geometry, properties))
+    for items in groups.values():
+        geometries, properties = zip(*items)
+        merged = unary_union(geometries)
+        polygons = [merged] if isinstance(merged, Polygon) else list(merged.geoms)
+        tree = STRtree(geometries)
+        for polygon in polygons:
+            if not isinstance(polygon, Polygon) or polygon.is_empty or not polygon.is_valid:
+                raise TrainingUIAPIError("Склейка не дала корректный полигон.")
+            contributors = [properties[int(index)] for index in tree.query(polygon, predicate="intersects")
+                            if geometries[int(index)].intersection(polygon).area > 0]
+            common = {key: value for key, value in contributors[0].items()
+                      if all(key in item and item[key] == value for item in contributors[1:])}
+            result["features"].append({
+                "type": "Feature", "id": f"object{len(result['features']) + 1:03d}",
+                "geometry": mapping(polygon), "properties": common,
+            })
     return result
-
-
-def _encode_test_sample_jpeg(
-    image: np.ndarray,
-    *,
-    tile_name: str,
-    preview_name: str,
-) -> bytes:
-    source = Image.fromarray(np.ascontiguousarray(image))
-    minimum = _JPEG_QUALITY_MIN
-    maximum = _JPEG_QUALITY_MAX
-    best: bytes | None = None
-    while minimum <= maximum:
-        quality = (minimum + maximum) // 2
-        stream = BytesIO()
-        source.save(
-            stream,
-            format="JPEG",
-            quality=quality,
-            optimize=True,
-            progressive=True,
-            subsampling=2,
-        )
-        payload = stream.getvalue()
-        if len(payload) <= _JPEG_PREVIEW_MAX_BYTES:
-            best = payload
-            minimum = quality + 1
-        else:
-            maximum = quality - 1
-    if best is None:
-        raise TrainingUIAPIError(
-            f"Превью {tile_name}_{preview_name}.jpg не помещается в 300 КБ "
-            "даже при минимальном качестве JPEG."
-        )
-    return best
 
 
 def cleanup_test_sample_storage(

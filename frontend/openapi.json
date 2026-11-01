@@ -4018,6 +4018,20 @@
               "format": "uuid",
               "title": "Sample Id"
             }
+          },
+          {
+            "name": "annotation_layout",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "per_image",
+                "single"
+              ],
+              "type": "string",
+              "default": "single",
+              "title": "Annotation Layout"
+            }
           }
         ],
         "responses": {
@@ -14364,10 +14378,14 @@
             "type": "array",
             "title": "Enabled Tile Indices"
           },
-          "include_previews": {
-            "type": "boolean",
-            "title": "Include Previews",
-            "default": true
+          "annotation_layout": {
+            "type": "string",
+            "enum": [
+              "per_image",
+              "single"
+            ],
+            "title": "Annotation Layout",
+            "default": "single"
           }
         },
         "additionalProperties": false,

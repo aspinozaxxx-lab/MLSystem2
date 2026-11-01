@@ -55,6 +55,7 @@ import "ol/ol.css";
 import { ApiError, apiDownloadGet, apiForm, apiJson, downloadBlob } from "./api/client";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
+import { TestSampleDownloadOptionsForm, type TestSampleAnnotationLayout } from "./TestSampleDownloadOptions";
 import { createTestRegionObjectCounter, resizeTestRegion, squareTestRegion, testRegionObjectCountStyle, testRegions, testRegionSize, translateTestRegion, TEST_REGION_SIZES } from "./utils/testRegions";
 import { DatasetPolygonHistory, type PolygonHistoryPreview } from "./DatasetPolygonHistory";
 import { useRememberedClass } from "./ClassNavigation";
@@ -359,6 +360,7 @@ export function DatasetEditorPage({
   const [drawInProgress, setDrawInProgress] = useState(false);
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importMessage, setImportMessage] = useState("");
@@ -2149,14 +2151,15 @@ export function DatasetEditorPage({
     setBandMenuOpen(false);
   };
 
-  const downloadDataset = async () => {
-    if (!datasetKey || downloading) return;
+  const downloadDataset = async (layout: TestSampleAnnotationLayout = "single"): Promise<boolean> => {
+    if (!datasetKey || downloading) return false;
     setDownloading(true);
     try {
       const result = await run(() =>
-        apiDownloadGet(testSampleId ? `/test-samples/${testSampleId}/download` : `${editorPath(datasetKey)}/download`),
+        apiDownloadGet(testSampleId ? `/test-samples/${testSampleId}/download?annotation_layout=${layout}` : `${editorPath(datasetKey)}/download`),
       );
       if (result) downloadBlob(result.blob, result.filename || "датасет.zip");
+      return Boolean(result);
     } finally {
       setDownloading(false);
     }
@@ -2414,8 +2417,8 @@ export function DatasetEditorPage({
           type="button"
           disabled={busy || downloading || !datasetKey || Boolean(testSampleId && !scenes.length) || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
           aria-label={downloading ? "Скачивание разметки" : testSampleId ? "Скачать тестовую разметку" : "Скачать датасет"}
-          title={testSampleId ? "Скачать опубликованные TIFF, GeoJSON и маски тестовой разметки" : "Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"}
-          onClick={() => void downloadDataset()}
+          title={testSampleId ? "Скачать опубликованные TIFF и GeoJSON тестовой разметки" : "Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"}
+          onClick={() => testSampleId ? setDownloadOpen(true) : void downloadDataset()}
         >
           <Download size={16} /><span className="compact-control-label">{downloading ? "Скачивание…" : testSampleId ? "Скачать разметку" : "Скачать датасет"}</span>
         </button>
@@ -3097,6 +3100,16 @@ export function DatasetEditorPage({
         </section>
       )}
 
+      {downloadOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-card panel" role="dialog" aria-modal="true" aria-labelledby="test-download-title">
+            <header className="modal-header"><h2 id="test-download-title">Скачать тестовую разметку</h2></header>
+            <div className="modal-body">
+              <TestSampleDownloadOptionsForm onCancel={() => setDownloadOpen(false)} onSubmit={downloadDataset} />
+            </div>
+          </section>
+        </div>
+      ) : null}
       {archiveOpen ? (
         <div className="modal-backdrop" role="presentation">
           <section className="modal-card panel" role="dialog" aria-modal="true" aria-labelledby="test-archive-title">
