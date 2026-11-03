@@ -1,5 +1,12 @@
 import type { TestF1SceneInfo, TestF1ScoreInfo } from "../api/types";
 
+export function testF1PredictionDownloadUrl(resultId: string, scenes: Pick<TestF1SceneInfo, "id">[], layout: "per_image" | "single"): string {
+  const parameters = new URLSearchParams({ annotation_layout: layout });
+  const jobs = [...new Set(scenes.map(scene => scene.id.split("_tile-")[0]))].sort();
+  jobs.forEach(job => parameters.append("job", job));
+  return `/results/training/${encodeURIComponent(resultId)}/test-f1/download?${parameters}`;
+}
+
 export const TEST_F1_LAYERS = {
   tp: { color: "#00ff66", label: "TP · Совпадение" },
   fp: { color: "#ff1744", label: "FP · Лишнее" },

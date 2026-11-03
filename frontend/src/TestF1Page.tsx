@@ -1,10 +1,10 @@
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, Download, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiJson } from "./api/client";
+import { apiDownloadGet, apiJson, downloadBlob } from "./api/client";
 import type { PseudoMarkupViewInfo, TestF1SceneInfo, TestF1ViewInfo } from "./api/types";
 import { PseudoMap, type ViewerGeoJson } from "./PseudoMarkupPage";
 import { formatTestF1Percent } from "./utils/format";
-import { sceneF1Score } from "./utils/testF1Viewer";
+import { sceneF1Score, testF1PredictionDownloadUrl } from "./utils/testF1Viewer";
 import "./styles/testF1Viewer.css";
 
 const EMPTY_LAYERS: ViewerGeoJson = { type: "FeatureCollection", features: [] };
@@ -20,6 +20,9 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
   const [layerError, setLayerError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [preparing, setPreparing] = useState(false);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
   const endpoint = `/results/training/${encodeURIComponent(resultId)}/test-f1/view`;
   useEffect(() => {
     let active = true;
@@ -40,6 +43,7 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
   }, [endpoint, attempt]);
   useEffect(() => {
     setSceneId(""); setClassId(null); setSelectedMetric(null); layerCache.current.clear();
+    setDownloadOpen(false); setDownloadError("");
   }, [endpoint]);
   const scene = view?.scenes?.find((item) => item.id === sceneId) ?? view?.scenes?.[0];
   const effectiveClassId = scene?.target_class_id ?? (scene?.class_schema?.some((item) => Number(item.id) === classId) ? classId : null);
@@ -82,6 +86,16 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
     catch (reason) { setError(reason instanceof Error ? reason.message : "Не удалось подготовить визуализацию."); }
     finally { setPreparing(false); }
   };
+  const download = async (layout: "per_image" | "single") => {
+    if (!view || downloading) return;
+    setDownloading(true); setDownloadError("");
+    try {
+      const file = await apiDownloadGet(testF1PredictionDownloadUrl(resultId, view.scenes ?? [], layout));
+      downloadBlob(file.blob, file.filename || `псевдоразметка.${layout === "single" ? "geojson" : "zip"}`);
+      setDownloadOpen(false);
+    } catch (reason) { setDownloadError(reason instanceof Error ? reason.message : "Не удалось скачать псевдоразметку."); }
+    finally { setDownloading(false); }
+  };
   return <section className="panel pseudo-viewer test-f1-page">
     <a className="pseudo-back" href="#/results"><ArrowLeft size={16} /> К результатам</a>
     {error ? <div className="info-box" role="alert">{error} <button type="button" className="secondary compact-action" onClick={() => setAttempt((value) => value + 1)}>Повторить</button></div> : null}
@@ -96,6 +110,23 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
       {layerError ? <p className="info-box" role="alert">{layerError} <button type="button" className="secondary compact-action" onClick={() => setAttempt((value) => value + 1)}>Повторить</button></p> : null}
       {info && scene ? <PseudoMap info={info} geojson={loaded?.key === layerKey ? loaded.geojson : EMPTY_LAYERS} username={username} onRetry={() => setAttempt((value) => value + 1)} comparison={{
           title: "Тестовый F1", metric: quality,
+          titleActions: <button className="secondary compact-action test-f1-download" type="button"
+            aria-label="Скачать псевдоразметку" title="Скачать прогноз всех снимков сохранённого расчёта"
+            disabled={view.status !== "ready" || downloading}
+            onClick={() => { setDownloadError(""); setDownloadOpen(true); }}>
+            <Download size={16} /><span>Скачать псевдоразметку</span>
+          </button>,
+          dialog: downloadOpen ? <div className="modal-backdrop" role="presentation">
+            <section className="modal-card panel" role="dialog" aria-modal="true" aria-labelledby="test-f1-download-title">
+              <header className="modal-header"><h2 id="test-f1-download-title">Скачать псевдоразметку</h2>
+                <button className="ghost" type="button" disabled={downloading} onClick={() => setDownloadOpen(false)}>Закрыть</button></header>
+              <div className="modal-body">
+                <p>Предсказания всех тестовых снимков и типов объектов сохранённого расчёта F1.</p>
+                {downloadError ? <p className="error-box" role="alert">{downloadError}</p> : null}
+                <TestF1DownloadOptions busy={downloading} onCancel={() => setDownloadOpen(false)} onSubmit={download} />
+              </div>
+            </section>
+          </div> : null,
           layerControls: <>
             <div className="test-f1-metric-switch" role="group" aria-label="Режим подсветки F1">
               <button type="button" aria-label="Пиксельная F1" aria-pressed={quality === "pixel"} onClick={() => setSelectedMetric("pixel")}>Пиксельная</button>
@@ -123,6 +154,28 @@ export function TestF1Page({ resultId, username }: { resultId: string; username:
         }} /> : null}
     </> : null}
   </section>;
+}
+
+export function TestF1DownloadOptions({ busy, onCancel, onSubmit }: {
+  busy: boolean; onCancel: () => void; onSubmit: (layout: "per_image" | "single") => void;
+}) {
+  const [layout, setLayout] = useState<"per_image" | "single">("per_image");
+  return <form className="form-stack" onSubmit={event => { event.preventDefault(); if (!busy) onSubmit(layout); }}>
+    <fieldset className="download-mode-fieldset" disabled={busy}>
+      <legend>Формат выгрузки</legend>
+      <label className="download-mode-choice"><input type="radio" name="test-f1-download-mode" value="per_image"
+        checked={layout === "per_image"} onChange={() => setLayout("per_image")} />
+        <span><strong>По снимкам</strong><small>ZIP с отдельным GeoJSON прогноза для каждого тестового снимка</small></span></label>
+      <label className="download-mode-choice"><input type="radio" name="test-f1-download-mode" value="single"
+        checked={layout === "single"} onChange={() => setLayout("single")} />
+        <span><strong>Один общий GeoJSON</strong><small>Все предсказания в одном файле с указанием исходного снимка</small></span></label>
+    </fieldset>
+    <div className="button-row download-dialog-actions">
+      <button className="secondary" type="button" disabled={busy} onClick={onCancel}>Отмена</button>
+      <button className="primary" type="submit" disabled={busy}><Download size={16} />
+        {busy ? "Формирование…" : layout === "per_image" ? "Скачать ZIP" : "Скачать GeoJSON"}</button>
+    </div>
+  </form>;
 }
 
 function TestScenes({ scenes, selected, quality, onSelect }: {

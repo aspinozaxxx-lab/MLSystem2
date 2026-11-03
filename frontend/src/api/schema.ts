@@ -2016,6 +2016,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/training/{result_id}/test-f1/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Test F1 Prediction Download */
+        get: operations["get_test_f1_prediction_download_api_v1_results_training__result_id__test_f1_download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/training/{result_id}/test-f1/layers/{scene_id}": {
         parameters: {
             query?: never;
@@ -10226,6 +10243,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestF1ViewInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_test_f1_prediction_download_api_v1_results_training__result_id__test_f1_download_get: {
+        parameters: {
+            query?: {
+                annotation_layout?: "per_image" | "single";
+                job?: string[] | null;
+            };
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Псевдоразметка сохранённого расчёта тестового F1. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/geo+json": string;
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */

@@ -165,18 +165,70 @@ def test_f1_layers(
             # Подсветка пиксельных ошибок остаётся семантической; контуры объектов
             # берём из ID того же расчёта, не склеивая соприкасающиеся участки.
             labels = instances.get(layer)
-            values = mask.astype(np.uint8) if labels is None else labels.astype(np.int32, copy=False)
-            for geometry, value in shapes(values, mask=mask, transform=transform):
-                if value <= 0:
-                    continue
-                properties = {"test_f1_layer": layer}
-                if labels is not None:
-                    properties["instance_id"] = int(value)
-                features.append({
-                    "type": "Feature", "properties": properties,
-                    "geometry": transform_geom(crs, "EPSG:3857", geometry),
-                })
+            features.extend(_mask_features(mask, labels, transform, crs, {"test_f1_layer": layer}))
     return {"type": "FeatureCollection", "features": features}
+
+
+def _mask_features(mask, labels, transform, crs, properties):
+    """Единая точная векторизация просмотра и выгрузки, с сохранением отверстий и ID."""
+    values = mask.astype(np.uint8) if labels is None else labels.astype(np.int32, copy=False)
+    for geometry, value in shapes(values, mask=mask, transform=transform):
+        if value <= 0:
+            continue
+        current = dict(properties)
+        if labels is not None:
+            current["instance_id"] = int(value)
+        yield {"type": "Feature", "properties": current,
+               "geometry": transform_geom(crs, "EPSG:3857", geometry)}
+
+
+def test_f1_prediction_features(mask_path: Path, scene: dict[str, Any]):
+    """Выгрузить только сохранённый прогноз; текущий эталон, TIFF и сеть не нужны."""
+    from scipy.ndimage import label
+
+    schema = {int(item["id"]): item for item in scene.get("class_schema") or []}
+    target = scene.get("target_class_id")
+    classes = [int(target)] if target is not None else sorted(schema) if schema else [None]
+    with np.load(mask_path, allow_pickle=False) as masks, rasterio.Env():
+        prediction = masks["predicted"]
+        if prediction.ndim != 2:
+            raise ValueError("Неверная размерность сохранённого прогноза")
+        if schema and np.any((prediction > 0) & ~np.isin(prediction, list(schema))):
+            raise ValueError("Типы прогноза не совпадают с сохранённой схемой")
+        for class_id in classes:
+            mask = prediction == class_id if class_id is not None else prediction > 0
+            key = f"objects_{class_id if class_id is not None else 0}_predicted"
+            if key not in masks:
+                key = "objects_0_predicted"
+            instances = masks[key] if key in masks else label(mask, structure=np.ones((3, 3), np.uint8))[0]
+            if instances.shape != prediction.shape or np.any(mask & (instances <= 0)):
+                raise ValueError("ID объектов не соответствуют сохранённой маске")
+            properties = {"_mlsystem2_role": "positive", "test_f1_scene_id": scene["public_id"],
+                "test_sample_id": scene.get("sample_id"), "test_sample_name": scene["sample_name"],
+                "test_sample_revision": scene["sample_revision"], "source_tile_index": scene["source_tile_index"]}
+            if class_id is not None:
+                item = schema.get(class_id) or {"slug": scene.get("target_class_slug")}
+                properties["object_type_id"] = class_id
+                for field in ("slug", "name", "color"):
+                    if item.get(field) is not None:
+                        properties[f"object_type_{field}"] = item[field]
+                if item.get("slug"):
+                    properties["_mlsystem2_class"] = item["slug"]
+            # Несвязанные части одного ID остаются одним объектом MultiPolygon;
+            # соседние ID и прогнозы разных снимков не объединяются.
+            grouped = {}
+            for feature in _mask_features(mask, instances, Affine(*scene["transform"]), scene["crs"], properties):
+                identifier = feature["properties"]["instance_id"]
+                if identifier in grouped:
+                    current = grouped[identifier]["geometry"]
+                    if current["type"] == "Polygon":
+                        current = {"type": "MultiPolygon", "coordinates": [current["coordinates"]]}
+                        grouped[identifier]["geometry"] = current
+                    current["coordinates"].append(feature["geometry"]["coordinates"])
+                else:
+                    feature["id"] = f"{scene['public_id']}_{class_id or 0}_{identifier}"
+                    grouped[identifier] = feature
+            yield from grouped.values()
 
 
 _LAYER_CONTENT_CACHE: OrderedDict[tuple, bytes] = OrderedDict()

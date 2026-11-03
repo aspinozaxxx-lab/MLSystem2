@@ -33,6 +33,7 @@ type GeoJson = ViewerGeoJson;
 type LoadedView = { info: PseudoMarkupViewInfo; geojson: GeoJson };
 type Comparison = {
   sidebar: ReactNode; summary: ReactNode; title?: string; subtitle?: string; controls?: ReactNode;
+  titleActions?: ReactNode; dialog?: ReactNode;
   legend?: ReactNode; hint?: string; layerControls?: ReactNode;
   metric?: "pixel" | "objects";
   featureStyle?: (properties: PseudoProperties) => { color: string; fill: string; width: number; zIndex?: number } | null;
@@ -373,12 +374,13 @@ export function PseudoMap({ info, geojson, username, onRetry, comparison }: Load
   const visibleErrors = info.scenes.filter((scene) => rasterErrors[scene.id] && !hiddenSceneIds.has(scene.id));
   return <div ref={workspaceRef} className={`pseudo-workspace${comparison ? " test-f1-workspace" : ""}${fullscreen ? " fullscreen" : ""}`}>
     <header className="pseudo-viewer-heading">
-      <div className="pseudo-viewer-title"><h1>{comparison?.title ?? (comparison ? "Тестовый F1" : "Просмотр псевдоразметки")}</h1><p title={comparison?.subtitle ?? `${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}>{comparison?.subtitle ?? `${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}</p>
+      <div className="pseudo-viewer-title"><div className="pseudo-viewer-title-line"><h1>{comparison?.title ?? (comparison ? "Тестовый F1" : "Просмотр псевдоразметки")}</h1>{comparison?.titleActions}</div><p title={comparison?.subtitle ?? `${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}>{comparison?.subtitle ?? `${info.source_dataset_name} · ${formatDateTime(info.created_at)}`}</p>
         {!comparison?.featureStyle ? <div className="pseudo-model" title={`Сеть: ${info.model_name}. Обучена на: ${info.training_dataset_name}`}><span>Сеть: <strong>{info.model_name}</strong></span><span>Обучена на: <strong>{info.training_dataset_name}</strong></span>{!comparison ? <span>{pseudoCheckpointLabel(info)}</span> : null}{!comparison ? <span>{geojson.features.length.toLocaleString("ru-RU")} объектов</span> : null}</div> : null}
       </div>
       {comparison?.summary}
       {!comparison ? <a className="secondary compact-action pseudo-download" href={info.geojson_url} aria-label="Скачать GeoJSON" title="Скачать GeoJSON"><Download size={16} /><span>Скачать GeoJSON</span></a> : null}
     </header>
+    {comparison?.dialog}
     {info.warnings.length > 0 ? <details className="info-box"><summary>Не все исходные снимки доступны: подробности</summary><ul>{info.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details> : null}
     {imagesVisible && visibleErrors.length > 0 ? <div className="info-box" role="alert">
       <ul>{visibleErrors.map((scene) => <li key={scene.id}><strong>{scene.name}</strong>: {rasterErrors[scene.id]}</li>)}</ul>

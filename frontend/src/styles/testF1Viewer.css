@@ -29,6 +29,7 @@
 .test-f1-legend-item { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 11px; }
 .test-f1-legend-item i { width: 9px; height: 9px; border-radius: 50%; }
 .test-f1-page > .info-box svg { vertical-align: middle; }
+.test-f1-download { flex-shrink: 0; }
 @media (max-width: 800px), (max-width: 1000px) and (max-height: 500px) {
   .test-f1-mobile-scenes { display: block; width: 100%; min-height: 44px; font-size: 16px; }
   .test-f1-scene-list { display: none; }
@@ -40,6 +41,7 @@
   .test-f1-map-notice { top: 96px; }
 }
 @media (max-width: 700px) {
+  .test-f1-download span { display: none; }
   .test-f1-summary { padding: 5px 7px; }
   .test-f1-summary > div { gap: 2px 8px; }
   .test-f1-summary strong { font-size: 14px; line-height: 17px; }

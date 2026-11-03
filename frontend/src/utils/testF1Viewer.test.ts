@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { comparisonLayerLabel, comparisonLayerStyle, sceneF1Score } from "./testF1Viewer";
+import { comparisonLayerLabel, comparisonLayerStyle, sceneF1Score, testF1PredictionDownloadUrl } from "./testF1Viewer";
 import type { TestF1SceneInfo, TestF1ScoreInfo } from "../api/types";
+
+it("выгружает всю сохранённую выборку, фиксируя запуски разных классов без повторов", () => {
+  const first = "0e843918-629b-46e2-b93c-a670020fc400", second = "58c34965-b92c-4dc1-9279-41c1c1ee0820";
+  const url = testF1PredictionDownloadUrl("сеть/29", [
+    { id: `${second}_tile-1` }, { id: `${first}_tile-1` }, { id: `${first}_tile-2` },
+  ], "single");
+  expect(url).toContain("/results/training/%D1%81%D0%B5%D1%82%D1%8C%2F29/test-f1/download?");
+  const parameters = new URLSearchParams(url.split("?")[1]);
+  expect(parameters.get("annotation_layout")).toBe("single");
+  expect(parameters.getAll("job")).toEqual([first, second]);
+  expect(testF1PredictionDownloadUrl("29", [{ id: `${first}_tile-1` }], "per_image")).toContain("annotation_layout=per_image");
+});
 
 describe("Слои сравнения тестовой разметки", () => {
   it("после отключения эталона оставляет только прогноз, после отключения прогноза — только эталон", () => {

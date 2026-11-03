@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import gzip
 import uuid
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +13,9 @@ import pytest
 import rasterio
 from rasterio.features import rasterize
 from rasterio.transform import from_origin
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 
 from mlsystem2.training_ui_api._test_f1_artifacts import (
     save_test_f1_manifest, save_test_f1_scene, test_f1_layers as _layers,
@@ -18,6 +23,7 @@ from mlsystem2.training_ui_api._test_f1_artifacts import (
 from mlsystem2.training_ui_api._test_f1_viewer import _saved_scenes, store_test_f1_view
 from mlsystem2.metrics.api import compute_object_f1
 from mlsystem2.metrics.contracts import ObjectF1Request
+from mlsystem2.training_ui_api.contracts import TrainingUIAPIError
 
 
 def test_multiclass_layers_keep_wrong_class_as_false_negative(tmp_path: Path):
@@ -36,6 +42,153 @@ def test_multiclass_layers_keep_wrong_class_as_false_negative(tmp_path: Path):
         shapes = [(feature["geometry"], 1) for feature in layers["features"] if feature["properties"]["test_f1_layer"] == layer]
         actual = int(rasterize(shapes, out_shape=(2, 2), transform=transform).sum()) if shapes else 0
         assert actual == expected
+
+
+@pytest.fixture
+def prediction_download(tmp_path, monkeypatch):
+    from mlsystem2.training_ui_api import _test_f1_viewer as viewer
+    from mlsystem2.training_ui_api import _test_f1_artifacts as artifacts
+    from mlsystem2.training_ui_api._routes import results as routes
+    from mlsystem2.training_ui_api._routes.common import RouteContext
+    from mlsystem2.training_ui_api._models import TrainingResultRow, TrainingResultTestMetricRow
+
+    result_id, job_id = uuid.uuid4(), uuid.uuid4()
+    config = SimpleNamespace(stored_files_root=tmp_path / "stored", scratch_root=tmp_path / "scratch")
+    root = config.stored_files_root / "test-f1" / str(job_id)
+    transform = from_origin(100, 200, 1, 1)
+    prediction = np.zeros((8, 12), np.int32)
+    prediction[1:7, 1:5], prediction[1:7, 5:9], prediction[0, 11] = 80, 95, 80
+    prediction[3:5, 2:4] = 0
+    scenes = []
+    for index, labels in enumerate((prediction, np.zeros_like(prediction)), start=1):
+        image_path = tmp_path / f"снимок{index}.tif"
+        with rasterio.open(image_path, "w", driver="GTiff", width=12, height=8, count=3,
+                           dtype="uint8", crs="EPSG:3857", transform=transform) as image:
+            image.write(np.ones((3, 8, 12), np.uint8))
+        truth = np.zeros_like(labels)
+        scenes.append(save_test_f1_scene(root, {}, {"index": index, "image_path": str(image_path),
+            "test_sample_id": str(uuid.uuid4()), "test_sample_name": "Выборка / участки", "test_sample_revision": 3,
+            "source_tile_index": 1}, truth, (labels > 0).astype(np.uint8), {},
+            object_snapshots={None: (truth, labels, [])}))
+        image_path.unlink()  # Выгрузка не должна зависеть от сегодняшних TIFF и эталона.
+    save_test_f1_manifest(root, str(result_id), scenes)
+    original = {path.name: path.read_bytes() for path in root.iterdir()}
+    result = SimpleNamespace(id=result_id, status="ok", archived_at=None, class_display_name="ЗУ500\\проверка", dataset_number=29)
+    metric = SimpleNamespace(metrics={"viewer_jobs": {"foreground": str(job_id)}})
+    session = SimpleNamespace(get=lambda model, key: result if model is TrainingResultRow and key == result_id
+        else metric if model is TrainingResultTestMetricRow and key == result_id else None)
+    monkeypatch.setattr(artifacts, "compute_object_f1", lambda *_: pytest.fail("Пересчёт F1 запрещён"))
+    monkeypatch.setattr(viewer, "queue_training_result_test_f1", lambda *_a, **_k: pytest.fail("Повторный инференс запрещён"))
+    monkeypatch.setattr(viewer, "_image_path", lambda *_: pytest.fail("Текущие снимки не относятся к сохранённому прогнозу"))
+
+    def auth(request: Request):
+        if request.headers.get("Authorization") != "Bearer test-user":
+            raise HTTPException(401)
+        return "Проверяющий"
+
+    app = FastAPI()
+    app.add_exception_handler(TrainingUIAPIError, lambda _request, exc: JSONResponse({"detail": str(exc)}, status_code=400))
+    routes.register_result_routes(app, RouteContext(config, lambda: session, auth, auth))
+    with TestClient(app) as client:
+        client.headers["Authorization"] = "Bearer test-user"
+        yield SimpleNamespace(client=client, config=config, result_id=result_id, job_id=job_id, root=root,
+            original=original, prediction=prediction, transform=transform,
+            url=f"/api/v1/results/training/{result_id}/test-f1/download")
+
+
+def test_prediction_download_both_layouts_preserve_exact_objects_and_empty_scenes(prediction_download):
+    fixture = prediction_download
+    common = fixture.client.get(fixture.url, params={"annotation_layout": "single", "job": str(fixture.job_id)})
+    assert common.status_code == 200, common.text
+    assert common.headers["Content-Type"].startswith("application/geo+json")
+    assert "filename*=utf-8''" in common.headers["Content-Disposition"].lower()
+    assert common.headers["Cache-Control"] == "private, no-store"
+    payload = common.json()
+    assert payload["crs"]["properties"]["name"] == "EPSG:3857"
+    assert len(payload["features"]) == 2
+    assert {item["properties"]["instance_id"] for item in payload["features"]} == {80, 95}
+    assert any(item["geometry"]["type"] == "MultiPolygon" for item in payload["features"])
+    assert all(item["properties"]["test_sample_revision"] == 3 for item in payload["features"])
+    assert all("test_f1_layer" not in item["properties"] for item in payload["features"])
+    restored = rasterize([(item["geometry"], item["properties"]["instance_id"]) for item in payload["features"]],
+                         out_shape=fixture.prediction.shape, transform=fixture.transform, dtype="int32")
+    np.testing.assert_array_equal(restored, fixture.prediction)
+    separate = fixture.client.get(fixture.url, params={"annotation_layout": "per_image"})
+    assert separate.status_code == 200 and separate.headers["Content-Type"] == "application/zip"
+    with zipfile.ZipFile(BytesIO(separate.content)) as archive:
+        assert len(archive.namelist()) == 2
+        assert all(name.endswith(".geojson") and "/" not in name and "\\" not in name for name in archive.namelist())
+        documents = [json.loads(archive.read(name)) for name in archive.namelist()]
+        assert documents[0]["features"] == payload["features"]
+        assert documents[1]["features"] == []
+    assert not list((fixture.config.scratch_root / "test-sample-downloads").iterdir())
+    assert {path.name: path.read_bytes() for path in fixture.root.iterdir()} == fixture.original
+
+
+def test_prediction_download_rejects_foreign_missing_and_changed_calculations(prediction_download):
+    fixture = prediction_download
+    assert fixture.client.get(fixture.url, params={"job": str(uuid.uuid4())}).status_code == 409
+    assert fixture.client.get(fixture.url.replace(str(fixture.result_id), str(uuid.uuid4()))).status_code == 400
+    assert fixture.client.get(fixture.url, params={"annotation_layout": "reference"}).status_code == 422
+    assert fixture.client.get(fixture.url, params={"job": "../чужой"}).status_code == 422
+    del fixture.client.headers["Authorization"]
+    assert fixture.client.get(fixture.url).status_code == 401
+    fixture.client.headers["Authorization"] = "Bearer test-user"
+    (fixture.root / "tile-2.npz").unlink()
+    response = fixture.client.get(fixture.url)
+    assert response.status_code == 400 and "Полный сохранённый прогноз" in response.text
+    assert not list(fixture.config.scratch_root.glob("test-sample-downloads/*"))
+
+
+def test_prediction_download_cleans_partial_artifact_if_saved_mask_is_damaged(prediction_download):
+    fixture = prediction_download
+    (fixture.root / "tile-2.npz").write_bytes(b"broken")
+    assert fixture.client.get(fixture.url).status_code == 400
+    assert not list(fixture.config.scratch_root.glob("test-sample-downloads/*"))
+
+
+def test_common_prediction_keeps_overlapping_scenes_independent(prediction_download):
+    fixture = prediction_download
+    np.savez_compressed(fixture.root / "tile-2.npz", predicted=(fixture.prediction > 0).astype(np.uint8),
+                        objects_0_predicted=fixture.prediction)
+    response = fixture.client.get(fixture.url)
+    assert response.status_code == 200
+    features = response.json()["features"]
+    assert len(features) == 4 and len({item["id"] for item in features}) == 4
+    assert len({item["properties"]["test_f1_scene_id"] for item in features}) == 2
+    assert {item["properties"]["instance_id"] for item in features} == {80, 95}
+
+
+@pytest.mark.parametrize("target,expected", [(None, {1, 2}), (1, {1})])
+def test_prediction_export_retains_multiclass_types_and_managed_scope(tmp_path, target, expected):
+    from mlsystem2.training_ui_api._test_f1_artifacts import test_f1_prediction_features as predicted_features
+
+    prediction = np.array([[1, 2, 2], [0, 1, 2]], np.uint8)
+    path = tmp_path / "маски.npz"
+    np.savez_compressed(path, predicted=prediction, objects_1_predicted=(prediction == 1).astype(np.int32) * 31,
+                        objects_2_predicted=(prediction == 2).astype(np.int32) * 61)
+    schema = [{"id": 1, "slug": "river", "name": "Реки", "color": "#00aaff"},
+              {"id": 2, "slug": "swamp", "name": "Заболачивание", "color": "#00ff00"}]
+    scene = {"public_id": "расчёт_tile-1", "sample_name": "Тестовая выборка", "sample_revision": 2,
+        "source_tile_index": 1, "class_schema": schema, "target_class_id": target,
+        "transform": tuple(from_origin(100, 200, 1, 1))[:6], "crs": "EPSG:3857"}
+    features = list(predicted_features(path, scene))
+    assert {item["properties"]["object_type_id"] for item in features} == expected
+    for class_id in expected:
+        selected = [item for item in features if item["properties"]["object_type_id"] == class_id]
+        actual = rasterize([(item["geometry"], 1) for item in selected], out_shape=prediction.shape, transform=from_origin(100, 200, 1, 1))
+        np.testing.assert_array_equal(actual > 0, prediction == class_id)
+        assert all(item["properties"]["_mlsystem2_class"] == schema[class_id - 1]["slug"] for item in selected)
+
+
+def test_legacy_prediction_export_uses_only_saved_foreground_without_original_raster(tmp_path):
+    from mlsystem2.training_ui_api._test_f1_artifacts import test_f1_prediction_features as predicted_features
+
+    path = tmp_path / "старые_маски.npz"
+    np.savez_compressed(path, predicted=np.eye(2, dtype=np.uint8))
+    features = list(predicted_features(path, {"public_id": "расчёт_tile-1", "sample_name": "Выборка", "sample_revision": 1,
+        "source_tile_index": 1, "transform": tuple(from_origin(0, 2, 1, 1))[:6], "crs": "EPSG:3857"}))
+    assert len(features) == 1 and features[0]["geometry"]["type"] == "MultiPolygon"
 
 
 def test_partial_view_publication_preserves_other_class_job(tmp_path: Path):

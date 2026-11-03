@@ -11,8 +11,9 @@ from functools import partial
 from threading import Event
 from typing import Literal
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
@@ -51,7 +52,7 @@ from mlsystem2.training_ui_api._pseudo_viewer import pseudo_markup_footprint, ps
 from mlsystem2.training_ui_api._pseudo_comparison import _ComparisonCancelled, pseudo_comparison_counts, pseudo_comparison_layers
 from mlsystem2.training_ui_api._raster_http import raster_response, raster_revision
 from mlsystem2.training_ui_api._test_f1_viewer import (
-    prepare_test_f1_view, test_f1_raster, test_f1_scene_layers, test_f1_view,
+    build_test_f1_prediction_download, prepare_test_f1_view, test_f1_raster, test_f1_scene_layers, test_f1_view,
 )
 from mlsystem2.training_ui_api._models import TrainingResultRow
 from mlsystem2.training_ui_api._test_samples import queue_training_result_test_f1, training_result_test_f1_info
@@ -160,6 +161,21 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
     def post_test_f1_view(result_id: uuid.UUID, db: Session = Depends(ctx.get_db),
                           _: str = Depends(ctx.authenticated)) -> TestF1ViewInfo:
         return prepare_test_f1_view(db, ctx.config, result_id)
+
+    @app.get("/api/v1/results/training/{result_id}/test-f1/download", response_class=FileResponse,
+             responses={200: {"description": "Псевдоразметка сохранённого расчёта тестового F1.", "content": {
+                 "application/geo+json": {"schema": {"type": "string", "format": "binary"}},
+                 "application/zip": {"schema": {"type": "string", "format": "binary"}},
+             }}})
+    def get_test_f1_prediction_download(
+        result_id: uuid.UUID, annotation_layout: Literal["per_image", "single"] = "single",
+        job: list[uuid.UUID] | None = Query(default=None),
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> FileResponse:
+        artifact = build_test_f1_prediction_download(db, ctx.config, result_id, annotation_layout, job)
+        return FileResponse(artifact.path, filename=artifact.filename,
+            media_type="application/zip" if annotation_layout == "per_image" else "application/geo+json",
+            headers={"Cache-Control": "private, no-store"}, background=BackgroundTask(artifact.cleanup))
 
     @app.get("/api/v1/results/training/{result_id}/test-f1/layers/{scene_id}")
     def get_test_f1_layers(result_id: uuid.UUID, scene_id: str, request: Request, class_id: int | None = None,

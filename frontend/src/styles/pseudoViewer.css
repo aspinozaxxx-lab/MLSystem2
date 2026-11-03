@@ -3,6 +3,7 @@
 .pseudo-workspace { display: flex; flex-direction: column; min-width: 0; gap: 10px; }
 .pseudo-viewer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
 .pseudo-viewer-title { flex: 1; min-width: 0; }
+.pseudo-viewer-title-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .pseudo-viewer-heading h1 { font-size: 18px; line-height: 24px; margin: 0 0 2px; }
 .pseudo-viewer-heading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pseudo-model { display: flex; gap: 12px; font-size: 11px; line-height: 14px; margin-top: 3px; color: var(--muted); overflow: hidden; }

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +18,11 @@ from ._config import TrainingUIAPIConfig
 from ._models import JobRow, TrainingResultRow, TrainingResultTestMetricRow, TestSampleRow
 from ._pseudo_viewer import _raster_metadata
 from ._raster_http import raster_revision
-from ._test_f1_artifacts import test_f1_layer_content, test_f1_object_score
-from ._test_samples import queue_training_result_test_f1, training_result_test_f1_info
+from ._test_f1_artifacts import test_f1_layer_content, test_f1_object_score, test_f1_prediction_features
+from ._test_samples import (
+    TEST_SAMPLE_DOWNLOAD_ROOT_NAME, TestSampleDownloadArtifact, _safe_name,
+    queue_training_result_test_f1, training_result_test_f1_info,
+)
 from .contracts import JobSource, TestF1SceneInfo, TestF1ScoreInfo, TestF1ViewInfo, TrainingUIAPIError
 
 
@@ -261,6 +266,57 @@ def _scene(session: Session, config: TrainingUIAPIConfig, result_id: uuid.UUID, 
 def test_f1_raster(session: Session, config: TrainingUIAPIConfig, result_id: uuid.UUID, scene_id: str) -> Path:
     _, scene = _scene(session, config, result_id, scene_id)
     return _image_path(config, scene)
+
+
+def build_test_f1_prediction_download(
+    session: Session, config: TrainingUIAPIConfig, result_id: uuid.UUID,
+    annotation_layout: str = "single", expected_jobs: list[uuid.UUID] | None = None,
+) -> TestSampleDownloadArtifact:
+    result = _result(session, result_id)
+    saved, warnings = _saved_scenes(session, config, result_id)
+    if not saved or warnings:
+        raise TrainingUIAPIError("Полный сохранённый прогноз недоступен. Подготовьте визуализацию тестового F1.")
+    jobs = sorted({root.name for root, _ in saved})
+    if expected_jobs is not None and jobs != sorted({str(value) for value in expected_jobs}):
+        raise HTTPException(409, "Сохранённый расчёт обновился. Обновите страницу и скачайте прогноз заново.")
+    directory = Path(config.scratch_root) / TEST_SAMPLE_DOWNLOAD_ROOT_NAME
+    directory.mkdir(parents=True, exist_ok=True)
+    suffix = ".zip" if annotation_layout == "per_image" else ".geojson"
+    path = directory / f"f1-{result_id}-{uuid.uuid4()}{suffix}"
+    header = {"type": "FeatureCollection", "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+              "training_result_id": str(result_id), "test_f1_jobs": jobs}
+
+    def write_geojson(stream, scenes):
+        stream.write(json.dumps(header, ensure_ascii=False, separators=(",", ":"))[:-1] + ',"features":[')
+        first = True
+        for root, scene in scenes:
+            for feature in test_f1_prediction_features(root / f"{scene['id']}.npz", scene):
+                if not first:
+                    stream.write(",")
+                stream.write(json.dumps(feature, ensure_ascii=False, allow_nan=False, separators=(",", ":")))
+                first = False
+        stream.write("]}\n")
+
+    try:
+        if annotation_layout == "per_image":
+            with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for index, (root, scene) in enumerate(saved, start=1):
+                    name = f"{index:03d}_{_safe_name(scene['sample_name'], 'sample')}_tile{scene['source_tile_index']:03d}.geojson"
+                    with archive.open(name, "w", force_zip64=True) as binary, io.TextIOWrapper(binary, encoding="utf-8") as stream:
+                        write_geojson(stream, [(root, scene)])
+        else:
+            with path.open("w", encoding="utf-8", newline="\n") as stream:
+                write_geojson(stream, saved)
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+        path.unlink(missing_ok=True)
+        raise TrainingUIAPIError("Не удалось прочитать сохранённый прогноз тестового F1. Подготовьте визуализацию заново.") from exc
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    name = _safe_name(result.class_display_name, "test_f1")
+    if result.dataset_number is not None:
+        name += f"_{result.dataset_number}"
+    return TestSampleDownloadArtifact(path=path, filename=f"{name}_псевдоразметка{suffix}")
 
 
 def test_f1_scene_layers(

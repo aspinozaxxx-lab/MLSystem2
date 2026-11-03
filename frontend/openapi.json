@@ -5737,6 +5737,87 @@
         }
       }
     },
+    "/api/v1/results/training/{result_id}/test-f1/download": {
+      "get": {
+        "summary": "Get Test F1 Prediction Download",
+        "operationId": "get_test_f1_prediction_download_api_v1_results_training__result_id__test_f1_download_get",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          },
+          {
+            "name": "annotation_layout",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "per_image",
+                "single"
+              ],
+              "type": "string",
+              "default": "single",
+              "title": "Annotation Layout"
+            }
+          },
+          {
+            "name": "job",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Псевдоразметка сохранённого расчёта тестового F1.",
+            "content": {
+              "application/geo+json": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/results/training/{result_id}/test-f1/layers/{scene_id}": {
       "get": {
         "summary": "Get Test F1 Layers",

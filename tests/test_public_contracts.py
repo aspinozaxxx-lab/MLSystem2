@@ -392,6 +392,11 @@ def test_training_test_f1_view_contract(monkeypatch) -> None:
     assert set(paths[f"{prefix}/view"]) == {"get", "post"}
     for suffix in ("raster", "footprint", "layers"):
         assert set(paths[f"{prefix}/{suffix}/{{scene_id}}"] ) == {"get"}
+    download = paths[f"{prefix}/download"]["get"]
+    assert {"application/geo+json", "application/zip"}.issubset(download["responses"]["200"]["content"])
+    assert any(item["name"] == "annotation_layout" and item["schema"]["enum"] == ["per_image", "single"]
+               for item in download["parameters"])
+    assert any(item["name"] == "job" and not item["required"] for item in download["parameters"])
     parameters = paths[f"{prefix}/layers/{{scene_id}}"]["get"]["parameters"]
     assert any(item["name"] == "class_id" and not item["required"] for item in parameters)
     assert any(item["name"] == "metric" and item["schema"]["enum"] == ["pixel", "objects"] for item in parameters)
