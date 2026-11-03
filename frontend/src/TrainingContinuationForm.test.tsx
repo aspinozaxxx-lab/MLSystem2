@@ -28,6 +28,7 @@ describe("состав датасета при дообучении", () => {
     expect(html).toContain('name="dataset_source" value="current"');
     expect(html).toContain("Другой датасет класса");
     expect(html).toContain("Тестовая разметка класса");
+    expect(html).toContain("Конвейер дообучения");
     expect(html).toContain("Последующие изменения датасета не учитываются");
   });
 
@@ -40,6 +41,7 @@ describe("состав датасета при дообучении", () => {
           this.set("epochs", "10"); this.set("minutes", "10"); this.set("patience", "3");
           if (source) this.set("dataset_source", source);
           this.set("dataset_key", "другой-датасет"); this.set("test_sample_id", "пробная-разметка");
+          this.set("pipeline_variant", "next_gen4");
         }
       }
     });
@@ -57,6 +59,8 @@ describe("состав датасета при дообучении", () => {
     const body = JSON.parse(fetcher.mock.calls[0][1].body);
     expect(body.dataset_source).toBe(source || "original");
     expect(body.checkpoint).toBe("best");
+    expect(body.pipeline_variant).toBe("next_gen4");
+    expect(body.normalization_policy).toBe("auto");
     expect(body.dataset_key).toBe(source === "dataset" ? "другой-датасет" : undefined);
     expect(body.test_sample_id).toBe(source === "test_sample" ? "пробная-разметка" : undefined);
     expect(input.closeModal).toHaveBeenCalledOnce();

@@ -73,6 +73,7 @@ export type TrainingResultExportItem = components["schemas"]["TrainingResultExpo
 export type TrainingResultInfo = components["schemas"]["TrainingResultInfo"];
 export type TrainingContinuationCreate = components["schemas"]["TrainingContinuationCreate"];
 export type TrainingContinuationOptions = components["schemas"]["TrainingContinuationOptions"];
+export type TrainingContinuationNormalizationAdvice = components["schemas"]["TrainingContinuationNormalizationAdvice"];
 export type TrainingTemplate = components["schemas"]["TrainingTemplate"];
 export type TestSampleCatalogResponse = components["schemas"]["TestSampleCatalogResponse"];
 export type TestSampleCard = components["schemas"]["TestSampleCard"];

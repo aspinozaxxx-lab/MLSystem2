@@ -8,6 +8,8 @@
 
 - `list_supported_models() -> list[ModelSpec]` - возвращает `segformer_b0`, `segformer_b2`, `smp_segformer_b0`, `smp_segformer_b1`, `smp_segformer_b2`, `smp_segformer_b3`, `smp_deeplabv3plus_resnet50`, `smp_unet_resnet34`, `smp_unet_resnet50`, `smp_unet_resnet101`, `smp_unet_resnet152`.
 - `create_model(spec: ModelSpec) -> ModelHandle` - создает модель по спецификации.
+- `compatible_training_pipelines(spec: ModelSpec) -> list[str]` — чистый список конвейеров с совместимыми весами и семантикой выходов; учитывает архитектуру, каналы, один/два binary logits, multiclass и BN/попиксельную LayerNorm. Object-профили совместимы только сами с собой. Архивный next_gen v1 сохраняется для исходных сетей.
+- `initialize_model(source: ModelHandle, target_spec: ModelSpec, *, preserve_global_preprocessing: bool = True) -> ModelHandle` — новый этап от всех весов. Создаёт целевую обёртку offline, переносит всё состояние основной сети с точным совпадением ключей/размеров, запрещает частичную загрузку и изменение головы/декодера. Между глобальными профилями по умолчанию копирует исходный preprocessing целиком; `False` явно принимает новую train-калибровку целевой спецификации. HF config наследуется. История next-gen — в `parameters.weight_initialization`; legacy сохраняет исходный контракт spec и историю в конфигурации этапа. Источник не меняется.
 - `load_checkpoint(request: LoadCheckpointRequest) -> LoadedCheckpoint` - загружает локальный `.pt` checkpoint.
 - `save_checkpoint(request: SaveCheckpointRequest) -> CheckpointArtifact` - сохраняет локальный `.pt` checkpoint.
 
@@ -16,7 +18,7 @@
 - `ModelsError` - ошибка модели или checkpoint.
 - `ModelSpec` - поля `name`, `input_channels`, `output_channels`, `pretrained`, `parameters`.
 - `ModelHandle` - поля `spec`, `model`.
-- `LoadCheckpointRequest` - поля `checkpoint_uri`, `model_spec`, `map_location`.
+- `LoadCheckpointRequest` - поля `checkpoint_uri`, `model_spec`, `map_location`; обычная строгая загрузка checkpoint не меняется.
 - `SaveCheckpointRequest` - поля `model`, `checkpoint_uri`, `metadata`.
 - `CheckpointArtifact` - поля `uri`, `format`, `metadata`.
 - `LoadedCheckpoint` - поля `model`, `artifact`.

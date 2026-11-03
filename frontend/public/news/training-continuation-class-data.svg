@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" viewBox="0 0 1440 760" role="img" aria-labelledby="title desc">
   <title id="title">Дообучение на данных своего класса</title>
-  <desc id="desc">Схема: исходная сеть и выбранные веса, другой датасет либо тестовая разметка того же класса, фиксация источника при старте и отдельный связанный результат.</desc>
+  <desc id="desc">Схема: исходная сеть и выбранные веса, данные того же класса, совместимый конвейер дообучения и отдельный связанный результат.</desc>
   <defs>
     <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#07142e"/><stop offset="1" stop-color="#142b49"/></linearGradient>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 10 5 0 10" fill="none" stroke="#48d7e6" stroke-width="2"/></marker>
@@ -10,7 +10,7 @@
     <rect x="56" y="40" width="120" height="32" rx="16" fill="#16435a"/>
     <text x="116" y="62" text-anchor="middle" fill="#7ae9f1" font-size="16" font-weight="700">СХЕМА</text>
     <text x="56" y="125" fill="#fff" font-size="38" font-weight="700">Знакомая сеть. Новые данные. Отдельный результат.</text>
-    <text x="56" y="165" fill="#bbcddd" font-size="22">Дообучение сохраняет архитектуру и конвейер выбранной сети</text>
+    <text x="56" y="165" fill="#bbcddd" font-size="22">Выбирайте данные и совместимый конвейер — все веса исходной сети сохраняются</text>
     <rect x="56" y="268" width="304" height="245" rx="20" fill="#142d48" stroke="#54758f"/>
     <text x="82" y="309" fill="#fff" font-size="25" font-weight="700">Исходная сеть</text>
     <text x="82" y="344" fill="#c0d4e2" font-size="18">Завершённое обучение</text>
@@ -31,11 +31,11 @@
     <rect x="1020" y="268" width="364" height="245" rx="20" fill="#142d48" stroke="#54758f"/>
     <text x="1048" y="310" fill="#fff" font-size="25" font-weight="700">Новый этап</text>
     <text x="1048" y="350" fill="#c0d4e2" font-size="19">Фиксированный снимок данных</text>
-    <text x="1048" y="388" fill="#c0d4e2" font-size="19">Отдельные веса и запуск MLflow</text>
+    <text x="1048" y="388" fill="#c0d4e2" font-size="19">Выбранный конвейер дообучения</text>
     <text x="1048" y="426" fill="#c0d4e2" font-size="19">Связь с исходной сетью</text>
     <text x="1048" y="464" fill="#7ae9f1" font-size="19">Название и ревизия источника</text>
     <rect x="56" y="613" width="1328" height="94" rx="16" fill="#0b223a"/>
     <text x="82" y="651" fill="#fff" font-size="22" font-weight="700">Результаты → сеть → Продолжить обучение → На каких данных учить</text>
-    <text x="82" y="683" fill="#aec6d8" font-size="18">Прежний и актуальный состав исходного датасета также доступны</text>
+    <text x="82" y="683" fill="#aec6d8" font-size="18">Гровика подскажет, стоит ли менять нормализацию; по умолчанию исходные границы сохраняются</text>
   </g>
 </svg>

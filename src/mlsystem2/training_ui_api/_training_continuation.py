@@ -19,12 +19,15 @@ from sqlalchemy.orm import Session
 from mlsystem2.mlflow_adapter.api import download_run_artifact, get_finished_run_artifact
 from mlsystem2.mlflow_adapter.contracts import MLflowAdapterError
 from mlsystem2.dataset_preparing.api import per_image_annotation_name
+from mlsystem2.models.api import compatible_training_pipelines
+from mlsystem2.models.contracts import ModelSpec
 
 from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import dataset_class_row, find_managed_dataset
 from ._markup_lock import TestSampleStorageBusy, markup_read_lock, test_sample_storage_lock
 from ._models import JobRow, TrainingResultRow, TestSampleRow, TestSampleTileRow
 from ._test_samples import _sample_root, _sample_row
+from ._templates import NEXT_GEN2_EDITABLE_KEYS, sanitize_template_config
 from ._result_metadata import next_result_number
 from ._template_selection import effective_inference_template_row
 from ._queueing import (
@@ -56,6 +59,29 @@ _OPTION_KEYS = {
     "run_inference_after_training": POST_TRAINING_INFERENCE_CONFIG_KEY,
     "secondary_priority": SECONDARY_PRIORITY_CONFIG_KEY,
 }
+
+
+def _global_pipeline(variant: str) -> bool:
+    return variant == "next_gen4_global_norm" or variant.startswith(("next_gen4_augmentation_", "next_gen4_consistency_"))
+
+
+def _pipeline_spec(result: TrainingResultRow, job: JobRow) -> ModelSpec:
+    return ModelSpec(name=result.architecture, input_channels=int(job.config.get("train.input_channels") or 4),
+                     output_channels=len(result.class_schema) + 1 if result.task == "multiclass" else 1,
+                     parameters={"pipeline_variant": job.config.get("train.pipeline_variant") or "legacy"})
+
+
+def _pipeline_profile(source: JobRow, result: TrainingResultRow, target: str) -> dict[str, Any]:
+    overrides = {key: source.config[key] for key in NEXT_GEN2_EDITABLE_KEYS if key in source.config}
+    overrides["train.pipeline_variant"] = target
+    tile_size = int(source.config.get("tile_preparation.tile_size") or source.tile_size or 512)
+    overrides["tile_preparation.tile_size"] = tile_size if target == "legacy" or tile_size in (512, 768, 1024, 1536) else 512
+    normalized = sanitize_template_config(overrides, fallback=source.config, architecture=result.architecture)
+    if target != "legacy":
+        normalized["tile_preparation.seed"] = 42
+    if target == "legacy" and result.task == "multiclass":
+        normalized["train.loss"] = "cross_entropy_dice"
+    return normalized
 
 
 def can_continue_training(result: TrainingResultRow, job: JobRow | None) -> bool:
@@ -218,6 +244,7 @@ def continuation_options(
         run_inference_after_training=bool(flat.get(POST_TRAINING_INFERENCE_CONFIG_KEY, False)),
         secondary_priority=bool(flat.get(SECONDARY_PRIORITY_CONFIG_KEY, False)),
         class_key=(class_row.key if (class_row := dataset_class_row(session, result.dataset_key or result.class_key)) else None),
+        pipeline_variants=compatible_training_pipelines(_pipeline_spec(result, job)),
     )
 
 
@@ -232,6 +259,14 @@ def create_continuation_job(
     session.refresh(source, with_for_update=True)
     if not can_continue_training(result, source):
         raise TrainingUIAPIError("Исходное обучение больше недоступно для продолжения.")
+    source_variant = str(source.config.get("train.pipeline_variant") or "legacy")
+    selected_variant = request.pipeline_variant or source_variant
+    if selected_variant not in compatible_training_pipelines(_pipeline_spec(result, source)):
+        raise TrainingUIAPIError("Выбранный конвейер несовместим с весами этой сети. Выберите вариант из списка в диалоге дообучения.")
+    if request.normalization_policy == "recompute" and not _global_pipeline(selected_variant):
+        raise TrainingUIAPIError("Пересчёт границ доступен только конвейеру с глобальной нормализацией.")
+    if request.normalization_policy == "preserve" and _global_pipeline(selected_variant) and not _global_pipeline(source_variant):
+        raise TrainingUIAPIError("У исходной сети нет глобальных границ: для выбранного профиля нужна новая калибровка.")
     # Старые клиенты без этих полей сохраняют прежнее наследование опций.
     selected_options = {
         key: bool(source.config.get(key, False)) if getattr(request, name) is None else getattr(request, name)
@@ -244,6 +279,8 @@ def create_continuation_job(
             or existing.config[CONTINUATION_KEY].get("checkpoint") != request.checkpoint
             or existing.config[CONTINUATION_KEY].get("dataset_source", "original") != request.dataset_source
             or existing.config[CONTINUATION_KEY].get("dataset_key") != request.dataset_key
+            or existing.config[CONTINUATION_KEY].get("pipeline_variant", source_variant) != selected_variant
+            or existing.config[CONTINUATION_KEY].get("normalization_policy", "auto") != request.normalization_policy
             or existing.config[CONTINUATION_KEY].get("test_sample_id") != (str(request.test_sample_id) if request.test_sample_id else None)):
             raise TrainingUIAPIError("Параметры повторной отправки изменены. Откройте диалог заново.")
         return existing
@@ -263,6 +300,8 @@ def create_continuation_job(
         except TestSampleStorageBusy as exc:
             raise TrainingUIAPIError("Публикуется тестовая разметка. Повторите запуск после публикации.") from exc
     job_config = copy.deepcopy(source.config)
+    profile = _pipeline_profile(source, result, selected_variant) if selected_variant != source_variant else {}
+    job_config.update(profile)
     for transient_key in (POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY,
                           TRAINING_STARTED_BY_CONFIG_KEY):
         job_config.pop(transient_key, None)
@@ -280,6 +319,9 @@ def create_continuation_job(
         "test_sample_id": str(request.test_sample_id) if request.test_sample_id else None,
         "data_name": current.name if current else sample.name if sample else None,
         "source_dataset_version": result.dataset_version,
+        "source_pipeline_variant": source_variant, "pipeline_variant": selected_variant,
+        "pipeline_config": profile,
+        "normalization_policy": request.normalization_policy,
     }
     if sample is not None:
         job_config[CONTINUATION_KEY]["test_sample_revision"] = sample.content_revision
@@ -295,7 +337,7 @@ def create_continuation_job(
         dataset_name=current.name if current else source.dataset_name,
         training_dataset_name=current.name if current else f"Тестовая разметка «{sample.name}»" if sample else source.training_dataset_name or source.dataset_name,
         model_name=source.model_name, architecture=source.architecture,
-        tile_size=source.tile_size, custom_dataset_id=None if current or sample else source.custom_dataset_id,
+        tile_size=int(profile.get("tile_preparation.tile_size") or source.tile_size or 512), custom_dataset_id=None if current or sample else source.custom_dataset_id,
         mlflow_experiment_id=source.mlflow_experiment_id,
         mlflow_experiment_name=source.mlflow_experiment_name,
         mlflow_run_name=f"{(source.mlflow_run_name or source.model_name)[:235]} — продолжение",
@@ -383,6 +425,12 @@ def build_continuation_config(
         } | snapshot
     else:
         _restore_dataset(payload["dataset"], config, run_id, root)
+    # Зафиксированный профиль нового конвейера меняет правила обучения,
+    # не подменяя уже выбранные и скопированные источники разметки.
+    for key, value in lineage.get("pipeline_config", {}).items():
+        section, separator, field = key.partition(".")
+        if separator and (section in {"train", "tile_preparation", "next_gen"} or key == "dataset.val_fraction"):
+            payload.setdefault(section, {})[field] = value
     payload["runtime"] = {
         **payload.get("runtime", {}), "project_root": str(config.project_root),
         "scratch_root": str(run_dir / "scratch"), "logs_root": str(run_dir / "logs"),
@@ -394,6 +442,16 @@ def build_continuation_config(
         max_training_time_sec=row.config["train.max_training_time_sec"],
         early_stopping_patience=row.config["train.early_stopping_patience"],
     )
+    weights_only = (lineage.get("pipeline_variant") != lineage.get("source_pipeline_variant")
+                    or data_source != "original" or _global_pipeline(str(payload["train"].get("pipeline_variant") or "legacy")))
+    if weights_only:
+        payload["train"]["initial_checkpoint_weights_only"] = True
+    else:
+        payload["train"].pop("initial_checkpoint_weights_only", None)
+    if lineage.get("normalization_policy") == "recompute":
+        payload["train"]["initial_checkpoint_recalculate_normalization"] = True
+    else:
+        payload["train"].pop("initial_checkpoint_recalculate_normalization", None)
     payload["mlflow"] = {**payload.get("mlflow", {}), "experiment_name": row.mlflow_experiment_name or "MLSystem2"}
     return payload
 

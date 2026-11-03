@@ -170,7 +170,7 @@ def test_continue_api_copies_parameters_and_keeps_original(saved_training, check
     assert options.status_code == 200
     assert options.json() == {"additional_epochs": 30, "additional_time_sec": 1800,
                               "early_stopping_patience": 7, "last_checkpoint_available": True,
-                              "run_inference_after_training": True, "secondary_priority": False, "class_key": "образец"}
+                              "run_inference_after_training": True, "secondary_priority": False, "class_key": "образец", "pipeline_variants": ["legacy"]}
     request = _request(checkpoint)
     response = env.client.post(url, json=request)
     assert response.status_code == 200, response.text
@@ -896,3 +896,118 @@ def test_multiclass_test_sample_retains_schema_and_object_ids(training_sample):
         assert [item.slug for item in prepared.dataset.classes] == ["water", "land"]
         annotation = json.loads(Path(prepared.dataset.scenes[0].annotation_file).read_text(encoding="utf-8"))
         assert annotation["features"][0]["id"] == "эталон"
+
+
+def _use_segformer_pipeline(env, variant="next_gen2"):
+    profile = continuation._pipeline_profile(SimpleNamespace(config={"tile_preparation.tile_size": 512}, tile_size=512),
+        SimpleNamespace(architecture="smp_segformer_b0", task="binary"), variant)
+    for key, value in profile.items():
+        section, _, field = key.partition(".")
+        if section in {"train", "tile_preparation", "next_gen"} or key == "dataset.val_fraction":
+            env.payload.setdefault(section, {})[field] = value
+    env.payload["train"]["model_name"] = "smp_segformer_b0"
+    (env.source_dir / "run.yml").write_text(yaml.safe_dump(env.payload, allow_unicode=True), encoding="utf-8")
+    with env.factory() as session:
+        source = session.get(JobRow, env.job_id)
+        source.architecture = "smp_segformer_b0"
+        source.config = {**source.config, **profile}
+        result = session.get(TrainingResultRow, env.result_id)
+        result.architecture = source.architecture
+        session.commit()
+
+
+def test_continuation_changes_compatible_pipeline_and_uses_frozen_profile(saved_training):
+    env = saved_training
+    _use_segformer_pipeline(env)
+    url = f"/api/v1/results/training/{env.result_id}/continue"
+    options = env.client.get(url).json()
+    assert "next_gen4" in options["pipeline_variants"]
+    assert "object_f1_v2" not in options["pipeline_variants"]
+    assert "next_gen4_consistency_v7" not in options["pipeline_variants"]
+    request = _request(pipeline_variant="next_gen4", run_inference_after_training=False)
+    response = env.client.post(url, json=request)
+    assert response.status_code == 200, response.text
+    assert env.client.post(url, json=request).json()["id"] == response.json()["id"]
+    assert env.client.post(url, json={**request, "pipeline_variant": "next_gen3"}).status_code == 400
+    with env.factory() as session:
+        job = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        payload = _worker._build_training_config(session, job, env.config, env.config.scratch_root / str(job.id))
+        assert payload["train"]["pipeline_variant"] == "next_gen4"
+        assert payload["train"]["initial_checkpoint_weights_only"] is True
+        assert payload["tile_preparation"]["stride"] == payload["tile_preparation"]["tile_size"] == 512
+        assert payload["train"]["epochs"] == request["additional_epochs"]
+        assert payload["train"]["max_training_time_sec"] == request["additional_time_sec"]
+        assert Path(payload["dataset"]["annotation_file"]).is_file()
+        assert session.get(JobRow, env.job_id).config["train.pipeline_variant"] == "next_gen2"
+        run_path = env.config.scratch_root / str(job.id) / "run.yml"
+        run_path.write_text(yaml.safe_dump(payload, allow_unicode=True), encoding="utf-8")
+        settings = load_settings(env.config.training_settings_path, run_path)
+        target = ModelHandle(spec=_runner._model_spec(settings), model=object())
+        requests, transfers = [], []
+
+        def load(request):
+            requests.append(request)
+            return LoadedCheckpoint(model=target, artifact=CheckpointArtifact(uri=request.checkpoint_uri, format="torch_pt"))
+
+        def initialize(source, spec, **kwargs):
+            transfers.append((source, spec, kwargs))
+            return target
+
+        assert _runner._load_or_create_model(settings, SimpleNamespace(load_checkpoint=load, initialize_model=initialize)) is target
+        assert requests[0].model_spec is None
+        assert transfers[0][1].parameters["pipeline_variant"] == "next_gen4"
+
+
+@pytest.mark.parametrize("variant", ["object_f1", "object_f1_v2", "legacy", "next_gen4_consistency_v2", "произвольный"])
+def test_incompatible_pipeline_is_rejected_before_queue(saved_training, variant):
+    env = saved_training
+    _use_segformer_pipeline(env)
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=_request(
+        pipeline_variant=variant, run_inference_after_training=False))
+    assert response.status_code == 400 and "несовместим" in response.json()["detail"]
+    with env.factory() as session:
+        assert len(session.scalars(select(JobRow)).all()) == 1
+
+
+def test_layer_norm_network_offers_all_compatible_context_profiles(saved_training):
+    env = saved_training
+    _use_segformer_pipeline(env, "next_gen4_consistency_v5")
+    response = env.client.get(f"/api/v1/results/training/{env.result_id}/continue")
+    assert response.status_code == 200, response.text
+    assert response.json()["pipeline_variants"] == [f"next_gen4_consistency_v{index}" for index in range(2, 8)]
+
+
+def test_normalization_advice_uses_only_enabled_valid_pixels_and_never_queues(training_sample, monkeypatch):
+    from mlsystem2.training_ui_api import _continuation_normalization as advice
+
+    env = training_sample
+    _use_segformer_pipeline(env, "next_gen4_global_norm")
+    monkeypatch.setattr(advice, "_report", lambda *_args: {"mode":"global_minmax", "low":[50] * env.channels,
+        "high":[200] * env.channels,"valid_pixel_count":1000000})
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue/normalization", json={
+        "dataset_source":"test_sample","test_sample_id":str(env.sample_id),"pipeline_variant":"next_gen4_global_norm"})
+    assert response.status_code == 200, response.text
+    info = response.json()
+    assert info["recommendation"] == "preserve" and "невелик" in info["reason"]
+    assert info["scene_count"] == 2 and info["source_count"] == 2
+    assert info["sampled_valid_pixels"] == 2 * 14 * 16
+    assert info["clipped_fractions"] == [1.0] * env.channels
+    with env.factory() as session:
+        assert len(session.scalars(select(JobRow)).all()) == 1
+
+
+@pytest.mark.parametrize("policy", ["auto", "preserve", "recompute"])
+def test_normalization_policy_controls_new_stage_and_is_idempotent(training_sample, policy):
+    env = training_sample
+    _use_segformer_pipeline(env, "next_gen4_global_norm")
+    request = _request(dataset_source="test_sample", test_sample_id=str(env.sample_id),
+        normalization_policy=policy, run_inference_after_training=False)
+    url = f"/api/v1/results/training/{env.result_id}/continue"
+    response = env.client.post(url, json=request)
+    assert response.status_code == 200, response.text
+    assert env.client.post(url, json={**request,"normalization_policy":"preserve" if policy != "preserve" else "recompute"}).status_code == 400
+    with env.factory() as session:
+        job = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        payload = _worker._build_training_config(session, job, env.config, env.config.scratch_root / str(job.id))
+        assert payload["train"]["initial_checkpoint_weights_only"] is True
+        assert payload["train"].get("initial_checkpoint_recalculate_normalization", False) is (policy == "recompute")

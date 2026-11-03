@@ -1998,6 +1998,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/results/training/{result_id}/continue/normalization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Get Continuation Normalization Advice */
+        post: operations["get_continuation_normalization_advice_api_v1_results_training__result_id__continue_normalization_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/results/training/{result_id}/test-f1/view": {
         parameters: {
             query?: never;
@@ -5488,21 +5505,17 @@ export interface components {
         };
         /**
          * TrainingContinuationCreate
-         * @description Чекпойнт, лимиты и параметры очереди нового этапа обучения.
+         * @description Параметры нового этапа от сохранённых весов.
          */
         TrainingContinuationCreate: {
-            /** Additional Epochs */
-            additional_epochs: number;
-            /** Additional Time Sec */
-            additional_time_sec: number;
-            /** Early Stopping Patience */
-            early_stopping_patience: number;
             /**
              * Checkpoint
              * @default best
              * @enum {string}
              */
             checkpoint: "best" | "last";
+            /** Pipeline Variant */
+            pipeline_variant?: string | null;
             /**
              * Dataset Source
              * @description Прежний состав, актуальный состав, другой датасет или тестовая разметка того же класса.
@@ -5514,6 +5527,18 @@ export interface components {
             dataset_key?: string | null;
             /** Test Sample Id */
             test_sample_id?: string | null;
+            /** Additional Epochs */
+            additional_epochs: number;
+            /** Additional Time Sec */
+            additional_time_sec: number;
+            /** Early Stopping Patience */
+            early_stopping_patience: number;
+            /**
+             * Normalization Policy
+             * @default auto
+             * @enum {string}
+             */
+            normalization_policy: "auto" | "preserve" | "recompute";
             /** Run Inference After Training */
             run_inference_after_training?: boolean | null;
             /** Secondary Priority */
@@ -5523,6 +5548,81 @@ export interface components {
              * Format: uuid
              */
             request_id: string;
+        };
+        /**
+         * TrainingContinuationDataSelection
+         * @description Исходные веса, конвейер и данные нового этапа или его предварительной оценки.
+         */
+        TrainingContinuationDataSelection: {
+            /**
+             * Checkpoint
+             * @default best
+             * @enum {string}
+             */
+            checkpoint: "best" | "last";
+            /** Pipeline Variant */
+            pipeline_variant?: string | null;
+            /**
+             * Dataset Source
+             * @description Прежний состав, актуальный состав, другой датасет или тестовая разметка того же класса.
+             * @default original
+             * @enum {string}
+             */
+            dataset_source: "original" | "current" | "dataset" | "test_sample";
+            /** Dataset Key */
+            dataset_key?: string | null;
+            /** Test Sample Id */
+            test_sample_id?: string | null;
+        };
+        /**
+         * TrainingContinuationNormalizationAdvice
+         * @description Приблизительная рекомендация; не запускает обучение и не калибрует модель.
+         */
+        TrainingContinuationNormalizationAdvice: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "not_applicable" | "unavailable";
+            /**
+             * Recommendation
+             * @default preserve
+             * @enum {string}
+             */
+            recommendation: "preserve" | "recompute";
+            /** Reason */
+            reason: string;
+            /** Warnings */
+            warnings?: string[];
+            /**
+             * Scene Count
+             * @default 0
+             */
+            scene_count: number;
+            /**
+             * Source Count
+             * @default 0
+             */
+            source_count: number;
+            /**
+             * Sampled Scene Count
+             * @default 0
+             */
+            sampled_scene_count: number;
+            /**
+             * Sampled Valid Pixels
+             * @default 0
+             */
+            sampled_valid_pixels: number;
+            /**
+             * Estimated Valid Pixels
+             * @default 0
+             */
+            estimated_valid_pixels: number;
+            /** Original Valid Pixels */
+            original_valid_pixels?: number | null;
+            /** Clipped Fractions */
+            clipped_fractions?: number[];
         };
         /**
          * TrainingContinuationOptions
@@ -5549,6 +5649,8 @@ export interface components {
             secondary_priority: boolean;
             /** Class Key */
             class_key?: string | null;
+            /** Pipeline Variants */
+            pipeline_variants?: string[];
         };
         /** TrainingJobCreate */
         TrainingJobCreate: {
@@ -10191,6 +10293,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_continuation_normalization_advice_api_v1_results_training__result_id__continue_normalization_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrainingContinuationDataSelection"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingContinuationNormalizationAdvice"];
                 };
             };
             /** @description Validation Error */

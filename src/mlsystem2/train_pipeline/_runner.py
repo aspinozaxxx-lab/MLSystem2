@@ -34,7 +34,7 @@ from mlsystem2.mlflow_adapter.api import (
     start_run,
 )
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef, MLflowRunStatus, MLflowStartRunRequest
-from mlsystem2.models.api import create_model, load_checkpoint
+from mlsystem2.models.api import create_model, initialize_model, load_checkpoint
 from mlsystem2.inference.api import object_separation_config
 from mlsystem2.inference.contracts import ObjectSeparationConfig
 from mlsystem2.models.contracts import LoadCheckpointRequest, ModelSpec
@@ -90,6 +90,7 @@ class _PipelineDependencies:
     log_pipeline_report: object
     end_run: object
     log_dataset_artifacts: object | None = None
+    initialize_model: object | None = None
 
 
 def _default_dependencies() -> _PipelineDependencies:
@@ -112,6 +113,7 @@ def _default_dependencies() -> _PipelineDependencies:
         log_pipeline_report=log_pipeline_report,
         end_run=end_run,
         log_dataset_artifacts=log_dataset_artifacts,
+        initialize_model=initialize_model,
     )
 
 
@@ -592,7 +594,7 @@ def _tile_request(
     )
 
 
-def _model_spec(settings: SystemSettings, train_loader: object | None = None) -> ModelSpec:
+def _model_spec(settings: SystemSettings, train_loader: object | None = None, *, preprocessing_override: dict | None = None) -> ModelSpec:
     parameters: dict[str, object] = {}
     if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
         dataset = getattr(train_loader, "dataset", None)
@@ -626,7 +628,7 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None) ->
         if settings.train.pipeline_variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
             parameters["preprocessing"]["mask_output_nodata"] = True
         if settings.train.pipeline_variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
-            parameters["preprocessing"] = global_minmax_parameters(
+            parameters["preprocessing"] = dict(preprocessing_override) if preprocessing_override is not None else global_minmax_parameters(
                 getattr(dataset, "band_histogram", None), settings.train.input_channels)
         if settings.train.pipeline_variant == "next_gen4_augmentation_v3":
             parameters["augmentation_policy"] = "validity_guard_v3"
@@ -728,6 +730,16 @@ def _load_or_create_model(
     deps: _PipelineDependencies,
     train_loader: object | None = None,
 ):
+    if settings.train.initial_checkpoint_uri and getattr(settings.train, "initial_checkpoint_weights_only", False):
+        loaded = deps.load_checkpoint(LoadCheckpointRequest(
+            checkpoint_uri=settings.train.initial_checkpoint_uri, map_location=settings.train.device,
+        ))
+        previous = loaded.model.spec.parameters.get("preprocessing") or {}
+        preserve = not getattr(settings.train, "initial_checkpoint_recalculate_normalization", False)
+        override = previous if preserve and previous.get("mode") == "global_minmax" else None
+        spec = _model_spec(settings, train_loader, preprocessing_override=override)
+        initializer = getattr(deps, "initialize_model", None) or initialize_model
+        return initializer(loaded.model, spec, preserve_global_preprocessing=preserve)
     spec = _model_spec(settings, train_loader)
     if settings.train.initial_checkpoint_uri:
         loaded = deps.load_checkpoint(

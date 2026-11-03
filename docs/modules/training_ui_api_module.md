@@ -372,10 +372,18 @@ Next-gen4-augmentation-v4 — дополнительное значение `pip
   лимита времени — 3600 секунд), `last_checkpoint_available` после проверки артефактов завершённого MLflow run.
   `class_key` — канонический класс исходной сети, либо `null`; диалог использует существующие каталог
   датасетов и `GET /api/v1/test-samples/cards?class_key=...` для выбора данных этого класса.
+  `pipeline_variants` — совместимые профили весов из `models.compatible_training_pipelines`.
 - `POST /api/v1/results/training/{result_id}/continue` — новый ручной training job от выбранного checkpoint.
   `TrainingContinuationCreate` принимает три строго положительных целых лимита, `dataset_source=original|current|dataset|test_sample`
   (по умолчанию `original`, включая старые запросы), `checkpoint=best|last`
   (по умолчанию best) и UUID `request_id` для идемпотентной отправки. Иные параметры не принимаются.
+  Optional `pipeline_variant` выбирает совместимый конвейер, без поля сохраняется исходный.
+  Смена фиксирует стандартный профиль через существующий sanitizer; лимиты и поддерживаемый тайл
+  сохраняются, неподдерживаемый размер заменяется на 512. Выбор и профиль записываются в lineage,
+  вариант участвует в идемпотентности. Worker меняет параметры профиля поверх исходного resolved config,
+  сохраняя фактические источники данных, и запрашивает явную инициализацию всех весов через models.
+  Глобальные границы исходной сети по умолчанию сохраняются. `normalization_policy=auto|preserve|recompute`
+  допускает явный пересчёт только по новым train-окнам; выбор фиксируется и входит в идемпотентность.
   Оба маршрута требуют пользовательскую сессию. Источник — успешный нативный result с завершённым training job
   и сохранёнными параметрами; импортированные модели и незавершённые работы не подходят. Worker скачивает
   `best.pt`/`final.pt` из исходного завершённого запуска и передаёт через существующий `train.initial_checkpoint_uri`.
@@ -419,6 +427,15 @@ Next-gen4-augmentation-v4 — дополнительное значение `pip
   `PseudoMarkupResultInfo.checkpoint_kind` и `PseudoMarkupViewInfo.checkpoint_kind` возвращают
   `best|last`; исторические задания без выбора считаются `best`.
   Прежние MLflow run и checkpoint сохраняются; номера эпох относятся к своему этапу.
+- `POST /api/v1/results/training/{result_id}/continue/normalization` — `TrainingContinuationDataSelection`
+  (checkpoint, pipeline_variant, dataset_source, dataset_key/test_sample_id), ответ `TrainingContinuationNormalizationAdvice`:
+  status, recommendation, reason, warnings, scene_count/source_count/sampled_scene_count,
+  sampled_valid_pixels/estimated_valid_pixels/original_valid_pixels, clipped_fractions.
+  Читает исходный preprocessing-report и до 24 снимков 256×256 только по valid pixels, без GPU,
+  F1 и постановки заданий. Учитывает объём, разные исходники и обрезание каналов; при малом наборе,
+  отсутствии сдвига или локальных выбросах советует сохранять. Правила и пороги — в архитектуре.
+  Совет не применяется автоматически, статистика preview не передаётся в обучение. UI показывает
+  причины и кнопку применения; при недоступности данных остаётся осторожный выбор сохранения.
 - Запуск строится как «архитектура → конвейер → предобученные веса». SegFormer B0/B1/B2/B3 поддерживают
   `legacy` и `next_gen2` с независимой галочкой `train.pretrained` для binary и multiclass; остальные сети — `legacy`.
   HF исключён из каталога и новых ручных/автоматических обучений. Исторические результаты и инференс сохранены.

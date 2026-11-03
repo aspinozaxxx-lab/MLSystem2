@@ -5659,6 +5659,56 @@
         }
       }
     },
+    "/api/v1/results/training/{result_id}/continue/normalization": {
+      "post": {
+        "summary": "Get Continuation Normalization Advice",
+        "operationId": "get_continuation_normalization_advice_api_v1_results_training__result_id__continue_normalization_post",
+        "parameters": [
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrainingContinuationDataSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingContinuationNormalizationAdvice"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/results/training/{result_id}/test-f1/view": {
       "get": {
         "summary": "Get Test F1 View",
@@ -15352,21 +15402,6 @@
       },
       "TrainingContinuationCreate": {
         "properties": {
-          "additional_epochs": {
-            "type": "integer",
-            "exclusiveMinimum": 0.0,
-            "title": "Additional Epochs"
-          },
-          "additional_time_sec": {
-            "type": "integer",
-            "exclusiveMinimum": 0.0,
-            "title": "Additional Time Sec"
-          },
-          "early_stopping_patience": {
-            "type": "integer",
-            "exclusiveMinimum": 0.0,
-            "title": "Early Stopping Patience"
-          },
           "checkpoint": {
             "type": "string",
             "enum": [
@@ -15375,6 +15410,18 @@
             ],
             "title": "Checkpoint",
             "default": "best"
+          },
+          "pipeline_variant": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Variant"
           },
           "dataset_source": {
             "type": "string",
@@ -15411,6 +15458,31 @@
               }
             ],
             "title": "Test Sample Id"
+          },
+          "additional_epochs": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Additional Epochs"
+          },
+          "additional_time_sec": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Additional Time Sec"
+          },
+          "early_stopping_patience": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Early Stopping Patience"
+          },
+          "normalization_policy": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "preserve",
+              "recompute"
+            ],
+            "title": "Normalization Policy",
+            "default": "auto"
           },
           "run_inference_after_training": {
             "anyOf": [
@@ -15449,7 +15521,156 @@
           "request_id"
         ],
         "title": "TrainingContinuationCreate",
-        "description": "Чекпойнт, лимиты и параметры очереди нового этапа обучения."
+        "description": "Параметры нового этапа от сохранённых весов."
+      },
+      "TrainingContinuationDataSelection": {
+        "properties": {
+          "checkpoint": {
+            "type": "string",
+            "enum": [
+              "best",
+              "last"
+            ],
+            "title": "Checkpoint",
+            "default": "best"
+          },
+          "pipeline_variant": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Variant"
+          },
+          "dataset_source": {
+            "type": "string",
+            "enum": [
+              "original",
+              "current",
+              "dataset",
+              "test_sample"
+            ],
+            "title": "Dataset Source",
+            "description": "Прежний состав, актуальный состав, другой датасет или тестовая разметка того же класса.",
+            "default": "original"
+          },
+          "dataset_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Key"
+          },
+          "test_sample_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Sample Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TrainingContinuationDataSelection",
+        "description": "Исходные веса, конвейер и данные нового этапа или его предварительной оценки."
+      },
+      "TrainingContinuationNormalizationAdvice": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "not_applicable",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "recommendation": {
+            "type": "string",
+            "enum": [
+              "preserve",
+              "recompute"
+            ],
+            "title": "Recommendation",
+            "default": "preserve"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "scene_count": {
+            "type": "integer",
+            "title": "Scene Count",
+            "default": 0
+          },
+          "source_count": {
+            "type": "integer",
+            "title": "Source Count",
+            "default": 0
+          },
+          "sampled_scene_count": {
+            "type": "integer",
+            "title": "Sampled Scene Count",
+            "default": 0
+          },
+          "sampled_valid_pixels": {
+            "type": "integer",
+            "title": "Sampled Valid Pixels",
+            "default": 0
+          },
+          "estimated_valid_pixels": {
+            "type": "integer",
+            "title": "Estimated Valid Pixels",
+            "default": 0
+          },
+          "original_valid_pixels": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Valid Pixels"
+          },
+          "clipped_fractions": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "title": "Clipped Fractions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "TrainingContinuationNormalizationAdvice",
+        "description": "Приблизительная рекомендация; не запускает обучение и не калибрует модель."
       },
       "TrainingContinuationOptions": {
         "properties": {
@@ -15492,6 +15713,13 @@
               }
             ],
             "title": "Class Key"
+          },
+          "pipeline_variants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pipeline Variants"
           }
         },
         "additionalProperties": false,

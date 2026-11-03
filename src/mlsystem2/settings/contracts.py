@@ -132,6 +132,8 @@ class TrainSettings(BaseModel):
     output_channels: int = Field(default=1, gt=0)
     pretrained: bool = False
     initial_checkpoint_uri: str | None = None
+    initial_checkpoint_weights_only: bool = False
+    initial_checkpoint_recalculate_normalization: bool = False
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     device: str = "cuda"
@@ -153,6 +155,10 @@ class TrainSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_loss(self) -> Self:
+        if self.initial_checkpoint_weights_only and not self.initial_checkpoint_uri:
+            raise ValueError("Инициализация весами требует исходный чекпойнт.")
+        if self.initial_checkpoint_recalculate_normalization and not self.initial_checkpoint_weights_only:
+            raise ValueError("Пересчёт нормализации начальных весов доступен только новому этапу обучения.")
         multiclass_losses = {"cross_entropy", "cross_entropy_dice"}
         if self.task == "multiclass" and self.loss not in multiclass_losses | {"cross_entropy_tversky"}:
             raise ValueError("multiclass train требует loss=cross_entropy или cross_entropy_dice")

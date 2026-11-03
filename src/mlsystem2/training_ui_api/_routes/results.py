@@ -29,6 +29,7 @@ from mlsystem2.training_ui_api._service import (
     _job_detail,
 )
 from mlsystem2.training_ui_api._training_continuation import continuation_options, create_continuation_job
+from mlsystem2.training_ui_api._continuation_normalization import normalization_advice
 from mlsystem2.training_ui_api.contracts import (
     DatasetResultsResponse,
     JobDetail,
@@ -42,6 +43,8 @@ from mlsystem2.training_ui_api.contracts import (
     TrainingResultInfo,
     TrainingContinuationCreate,
     TrainingContinuationOptions,
+    TrainingContinuationDataSelection,
+    TrainingContinuationNormalizationAdvice,
     TestF1ViewInfo,
 )
 
@@ -143,6 +146,13 @@ def register_result_routes(app: FastAPI, ctx: RouteContext) -> None:
         _: str = Depends(ctx.authenticated),
     ) -> TrainingContinuationOptions:
         return continuation_options(db, result_id, ctx.config)
+
+    @app.post("/api/v1/results/training/{result_id}/continue/normalization", response_model=TrainingContinuationNormalizationAdvice)
+    def get_continuation_normalization_advice(
+        result_id: uuid.UUID, selection: TrainingContinuationDataSelection,
+        db: Session = Depends(ctx.get_db), _: str = Depends(ctx.authenticated),
+    ) -> TrainingContinuationNormalizationAdvice:
+        return normalization_advice(db, result_id, selection, ctx.config)
 
     @app.post("/api/v1/results/training/{result_id}/continue", response_model=JobDetail)
     def post_training_continuation(

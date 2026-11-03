@@ -10,6 +10,12 @@
 
 ## Публичные контракты
 
+При `settings.train.initial_checkpoint_weights_only=true` начальный checkpoint сначала загружается
+строго, затем `models.initialize_model` переносит всю сеть в целевой `_model_spec`. Для global→global
+исходный preprocessing подставляется до построения спецификации без вычисления новых границ;
+`initial_checkpoint_recalculate_normalization=true` явно разрешает новую калибровку только по train.
+Для window→global первичная калибровка необходима. Без флага загрузка прежняя.
+
 - `TrainPipelineError` — невосстановимая ошибка конвейера.
 - `PipelineStatus` — `succeeded|failed`.
 - `ModuleTiming` — `module`, `elapsed_sec`, `details`.

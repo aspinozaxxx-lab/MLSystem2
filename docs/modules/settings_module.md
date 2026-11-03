@@ -77,6 +77,11 @@ batch по архитектуре: B0 — 16/8/4/2, B1 — 8/4/2/1, B2/B3 — 4/
 weight decay 0.01, loss `cross_entropy_tversky`, alpha/beta 0.75/0.25 и threshold 0.5.
 В UI меняются pretrained, tile_size, epochs, early_stopping_patience и max_training_time_sec. Batch limits запрещены.
 Для продолжения завершённого обучения разрешён `train.initial_checkpoint_uri` также в next-gen2 и object_f1.
+`TrainSettings.initial_checkpoint_weights_only=false` сохраняет точное восстановление; `true` требует
+`initial_checkpoint_uri` и явно инициализирует новый совместимый профиль полным состоянием основной сети,
+с preprocessing целевого профиля и сохранением исходных глобальных границ. UI использует его при смене
+конвейера, опубликованного источника либо для глобального профиля. `initial_checkpoint_recalculate_normalization=false`
+сохраняет исходные global min/max; `true` требует weights-only и явно пересчитывает их только по train.
 Фиксированные параметры профиля сохраняются; `train_pipeline` проверяет архитектуру, число каналов,
 вариант конвейера и нормализацию загружаемого checkpoint перед обучением. HTTP-диалог выбирает best/last
 исходного результата, прямой путь к файлу через этот диалог не принимается.

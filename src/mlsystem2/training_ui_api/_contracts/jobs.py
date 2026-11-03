@@ -26,23 +26,18 @@ class TrainingJobCreate(BaseModel):
     secondary_priority: bool = False
 
 
-class TrainingContinuationCreate(BaseModel):
-    """Чекпойнт, лимиты и параметры очереди нового этапа обучения."""
+class TrainingContinuationDataSelection(BaseModel):
+    """Исходные веса, конвейер и данные нового этапа или его предварительной оценки."""
 
     model_config = ConfigDict(extra="forbid")
 
-    additional_epochs: int = Field(gt=0, strict=True)
-    additional_time_sec: int = Field(gt=0, strict=True)
-    early_stopping_patience: int = Field(gt=0, strict=True)
     checkpoint: Literal["best", "last"] = "best"
+    pipeline_variant: str | None = Field(default=None, min_length=1)
     dataset_source: Literal["original", "current", "dataset", "test_sample"] = Field(
         default="original", description="Прежний состав, актуальный состав, другой датасет или тестовая разметка того же класса.",
     )
     dataset_key: str | None = Field(default=None, min_length=1)
     test_sample_id: UUID | None = None
-    run_inference_after_training: bool | None = None
-    secondary_priority: bool | None = None
-    request_id: UUID
 
     @model_validator(mode="after")
     def validate_data_selection(self):
@@ -51,6 +46,35 @@ class TrainingContinuationCreate(BaseModel):
         if (self.dataset_source == "test_sample") != (self.test_sample_id is not None):
             raise ValueError("Идентификатор тестовой разметки нужен только при её выборе.")
         return self
+
+
+class TrainingContinuationCreate(TrainingContinuationDataSelection):
+    """Параметры нового этапа от сохранённых весов."""
+
+    additional_epochs: int = Field(gt=0, strict=True)
+    additional_time_sec: int = Field(gt=0, strict=True)
+    early_stopping_patience: int = Field(gt=0, strict=True)
+    normalization_policy: Literal["auto", "preserve", "recompute"] = "auto"
+    run_inference_after_training: bool | None = None
+    secondary_priority: bool | None = None
+    request_id: UUID
+
+
+class TrainingContinuationNormalizationAdvice(BaseModel):
+    """Приблизительная рекомендация; не запускает обучение и не калибрует модель."""
+
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["available", "not_applicable", "unavailable"]
+    recommendation: Literal["preserve", "recompute"] = "preserve"
+    reason: str
+    warnings: list[str] = Field(default_factory=list)
+    scene_count: int = 0
+    source_count: int = 0
+    sampled_scene_count: int = 0
+    sampled_valid_pixels: int = 0
+    estimated_valid_pixels: int = 0
+    original_valid_pixels: int | None = None
+    clipped_fractions: list[float] = Field(default_factory=list)
 
 
 class TrainingContinuationOptions(BaseModel):
@@ -65,6 +89,7 @@ class TrainingContinuationOptions(BaseModel):
     run_inference_after_training: bool = False
     secondary_priority: bool = False
     class_key: str | None = None
+    pipeline_variants: list[str] = Field(default_factory=list)
 
 
 class QueueEnabledUpdate(BaseModel):
@@ -182,5 +207,7 @@ __all__ = [
     "QueueSnapshot",
     "TrainingJobCreate",
     "TrainingContinuationCreate",
+    "TrainingContinuationDataSelection",
+    "TrainingContinuationNormalizationAdvice",
     "TrainingContinuationOptions",
 ]

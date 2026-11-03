@@ -58,7 +58,7 @@ EXPECTED_API = {
         "annotation_regions",
     ],
     "tile_preparation.api": ["create_tile_dataloader"],
-    "models.api": ["list_supported_models", "create_model", "load_checkpoint", "save_checkpoint"],
+    "models.api": ["list_supported_models", "create_model", "compatible_training_pipelines", "initialize_model", "load_checkpoint", "save_checkpoint"],
     "metrics.api": ["compute_object_f1", "compute_pixel_f1", "summarize_epoch_metrics"],
     "train.api": ["train_model"],
     "mlflow_adapter.api": [
@@ -180,7 +180,7 @@ def test_completed_training_continuation_contract(monkeypatch) -> None:
 
     assert set(TrainingContinuationCreate.model_fields) == {
         "additional_epochs", "additional_time_sec", "early_stopping_patience", "checkpoint", "request_id",
-        "run_inference_after_training", "secondary_priority", "dataset_source", "dataset_key", "test_sample_id",
+        "run_inference_after_training", "secondary_priority", "dataset_source", "dataset_key", "test_sample_id", "pipeline_variant", "normalization_policy",
     }
     assert {"can_continue_training", "continued_from_result_id", "continued_from_checkpoint"} <= TrainingResultInfo.model_fields.keys()
     monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
@@ -195,6 +195,8 @@ def test_completed_training_continuation_contract(monkeypatch) -> None:
     assert "continued_from_dataset_source" in TrainingResultInfo.model_fields
     assert {"continued_from_data_name", "training_test_sample_names"} <= TrainingResultInfo.model_fields.keys()
     assert "class_key" in schema["components"]["schemas"]["TrainingContinuationOptions"]["properties"]
+    assert "pipeline_variants" in schema["components"]["schemas"]["TrainingContinuationOptions"]["properties"]
+    assert "post" in schema["paths"]["/api/v1/results/training/{result_id}/continue/normalization"]
     assert Path("frontend/public/news/training-continuation-class-data.svg").is_file()
     assert Path("frontend/public/news/training-continuation-dataset-source.svg").is_file()
     assert properties["additional_epochs"]["exclusiveMinimum"] == 0
