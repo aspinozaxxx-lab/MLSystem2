@@ -166,7 +166,7 @@ def test_archive_import_preserves_pixels_polygons_holes_and_editor_lifecycle(man
         assert session.scalars(select(JobRow)).all() == []
 
 
-@pytest.mark.parametrize("failure", ["path", "missing_pair", "extra_annotation", "invalid_json", "invalid_geometry", "invalid_tiff", "features_null", "duplicate_path", "symlink", "size_limit"])
+@pytest.mark.parametrize("failure", ["path", "missing_pair", "extra_annotation", "invalid_json", "invalid_geometry", "invalid_tiff", "features_null", "duplicate_path", "symlink"])
 def test_invalid_archives_leave_sample_and_drafts_unchanged(manual_client, failure, monkeypatch):
     client, config, sample = manual_client
     scene = _add_image(client, sample)
@@ -192,8 +192,6 @@ def test_invalid_archives_leave_sample_and_drafts_unchanged(manual_client, failu
         annotations["scene_b.geojson"] = {"type": "FeatureCollection", "features": None}
     if failure == "duplicate_path":
         extras["выборка/region_a/SCENE_A.TIF"] = "дубликат".encode("utf-8")
-    if failure == "size_limit":
-        monkeypatch.setattr("mlsystem2.training_ui_api._test_sample_editor._ARCHIVE_MAX_BYTES", 10)
     if failure == "symlink":
         info = zipfile.ZipInfo("ссылка.tif")
         info.external_attr = 0o120777 << 16
@@ -202,12 +200,38 @@ def test_invalid_archives_leave_sample_and_drafts_unchanged(manual_client, failu
     assert response.status_code == 400, response.text
     if failure in {"path", "symlink"}:
         assert "небезопасный путь" in response.text
-    if failure == "size_limit":
-        assert "8 ГиБ" in response.text
     after = client.get(f"/api/v1/test-samples/{sample['id']}").json()
     assert after["content_revision"] == before["content_revision"] and after["tiles"] == before["tiles"]
     assert client.get(base + f"/scenes/{scene['annotation_name']}").json()["draft"] is not None
     assert not list(config.scratch_root.glob("test-sample-import-*"))
+
+
+@pytest.mark.parametrize("width,height", [(9000, 8), (8, 9000)])
+def test_archive_accepts_large_raster_dimensions_without_changing_pixels(manual_client, width, height):
+    client, config, sample = manual_client
+    path = config.images_root / "kanopus" / "region_a" / "large.tif"
+    image = np.full((4, height, width), 61, dtype="uint8")
+    with rasterio.open(path, "w", driver="GTiff", width=width, height=height, count=4, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(10, 50, 1, 1)) as raster:
+        raster.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined)
+        raster.descriptions = ("RED", "GRN", "BLU", "NIR")
+        raster.write(image)
+    response = _upload_archive(client, sample, _archive(config, {"общая.geojson": _annotation()}, images=("region_a/large.tif",)))
+    assert response.status_code == 200, response.text
+    result = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    assert result["image_count"] == 1
+    with rasterio.open(config.stored_files_root / "test-samples" / sample["id"] / "tile_001.tif") as raster:
+        assert (raster.width, raster.height) == (width, height)
+        np.testing.assert_array_equal(raster.read(), image)
+
+
+def test_archive_accepts_geojson_over_previous_size_limit(manual_client):
+    client, config, sample = manual_client
+    annotation = json.dumps(_annotation()).encode("utf-8") + b" " * (51 * 1024**2)
+    content = _archive(config, {}, images=("region_a/scene_a.tif",), extras={"общая.geojson": annotation})
+    response = _upload_archive(client, sample, content)
+    assert response.status_code == 200, response.text
+    assert client.get(f"/api/v1/test-samples/{sample['id']}").json()["image_count"] == 1
 
 
 def test_archive_common_annotation_clips_exactly_and_keeps_negative_image(manual_client):

@@ -248,8 +248,6 @@ def sample_editor_browse(session, config, sample_id, folder):
 
 
 def sample_editor_import(session, config, sample_id, request, username):
-    if len(request.model_dump_json().encode("utf-8")) > 50 * 1024 * 1024:
-        raise TrainingUIAPIError("Общий размер GeoJSON не должен превышать 50 МиБ.")
     sample = _sample_row(session, sample_id)
     dataset = _dataset(session, config, sample)
     prepared = []
@@ -463,23 +461,15 @@ def sample_editor_add_images(session, config, sample_id, request):
     return [(per_image_annotation_name(path), "new", _empty_annotation_payload(path, dataset), False) for path in paths]
 
 
-_ARCHIVE_MAX_BYTES = 8 * 1024**3
-_ARCHIVE_MAX_EXPANDED_BYTES = 16 * 1024**3
-_ARCHIVE_MAX_GEOJSON_BYTES = 50 * 1024**2
-
-
 def _extract_test_archive(stream, directory):
     """Извлечь только TIFF, их маски и GeoJSON, не доверяя путям внутри ZIP."""
-    stream.seek(0, os.SEEK_END)
-    if stream.tell() > _ARCHIVE_MAX_BYTES:
-        raise TrainingUIAPIError("Размер ZIP не должен превышать 8 ГиБ.")
     stream.seek(0)
     images, annotations = [], []
     try:
         with zipfile.ZipFile(stream) as archive:
             members = archive.infolist()
-            if len(members) > 2000 or sum(item.file_size for item in members) > _ARCHIVE_MAX_EXPANDED_BYTES:
-                raise TrainingUIAPIError("В ZIP допустимы до 2000 файлов и 16 ГиБ распакованных данных.")
+            if len(members) > 2000:
+                raise TrainingUIAPIError("В ZIP допустимы до 2000 файлов.")
             seen = set()
             selected = []
             for member in members:
@@ -508,8 +498,6 @@ def _extract_test_archive(stream, directory):
                 selected.append((member, path))
             if not 1 <= len(images) <= 100 or not annotations:
                 raise TrainingUIAPIError("В ZIP нужны от 1 до 100 TIFF и GeoJSON: общий или отдельный к каждому снимку.")
-            if sum(member.file_size for member, path in selected if path.suffix.lower() == ".geojson") > _ARCHIVE_MAX_GEOJSON_BYTES:
-                raise TrainingUIAPIError("Общий размер GeoJSON не должен превышать 50 МиБ.")
             for member, path in selected:
                 target = directory.joinpath(*path.parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -562,8 +550,6 @@ def sample_editor_import_archive(session, config, sample_id, username, stream):
             try:
                 # Расширение файла не гарантирует формат: VRT и внешние источники запрещены.
                 with rasterio.open(source, driver="GTiff") as raster:
-                    if max(raster.width, raster.height) > 8192:
-                        raise TrainingUIAPIError(f"{image.name}: размер TIFF не должен превышать 8192 × 8192 пикселя.")
                     if raster.crs is None or raster.crs.to_epsg() != 3857:
                         raise TrainingUIAPIError(f"{image.name}: нужен TIFF в EPSG:3857; пиксели тестовой выборки не перепроецируются.")
                     bounds = box(*raster.bounds)

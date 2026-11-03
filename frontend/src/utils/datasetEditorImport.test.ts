@@ -23,4 +23,8 @@ describe("загрузка GeoJSON в черновики", () => {
     await expect(readAnnotationFiles([file("папка_один.geojson", payload, 50 * 1024 * 1024 + 1)])).rejects.toThrow("50 МиБ");
     await expect(readAnnotationFiles(Array.from({ length: 101 }, (_, i) => file(`папка_${i}.geojson`)))).rejects.toThrow("100");
   });
+  it("для тестовых разметок снимает предел объёма, сохраняя проверку формата", async () => {
+    await expect(readAnnotationFiles([file("крупная.geojson", payload, 9 * 1024 ** 3)], { unlimitedSize: true })).resolves.toHaveLength(1);
+    await expect(readAnnotationFiles([file("ошибка.geojson", "[]", 9 * 1024 ** 3)], { unlimitedSize: true })).rejects.toThrow("FeatureCollection");
+  });
 });

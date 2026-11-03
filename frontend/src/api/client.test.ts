@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { apiJson, downloadFilename } from "./client";
+import { apiForm, apiJson, downloadFilename } from "./client";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -55,5 +55,86 @@ describe("downloadFilename", () => {
     });
 
     expect(downloadFilename(response)).toBe("Разметка рек.txt");
+  });
+});
+
+function uploadFixture() {
+  const requests: FakeRequest[] = [];
+  class FakeRequest extends EventTarget {
+    upload = new EventTarget();
+    status = 0;
+    responseText = "";
+    responseHeaders = "";
+    withCredentials = false;
+    open = vi.fn();
+    send = vi.fn();
+    setRequestHeader = vi.fn();
+    abort = vi.fn(() => this.dispatchEvent(new Event("abort")));
+    getAllResponseHeaders() { return this.responseHeaders; }
+    constructor() { super(); requests.push(this); }
+    progress(loaded: number, total = 0) {
+      this.upload.dispatchEvent(Object.assign(new Event("progress"), { loaded, total, lengthComputable: total > 0 }));
+    }
+    respond(status: number, payload: unknown, headers = "") {
+      this.status = status; this.responseText = JSON.stringify(payload); this.responseHeaders = headers;
+      this.dispatchEvent(new Event("load"));
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", FakeRequest);
+  return requests;
+}
+
+describe("передача файлов с прогрессом", () => {
+  it("показывает фактические байты и завершение передачи отдельно от ответа API", async () => {
+    const requests = uploadFixture(), progress = vi.fn(), form = new FormData();
+    form.append("archive", new Blob(["архив"]), "выборка.zip");
+    const promise = apiForm("/test-samples/набор/editor/import-archive", form, { onUploadProgress: progress });
+    const settled = vi.fn(); void promise.then(settled);
+    const xhr = requests[0];
+    expect(xhr.open).toHaveBeenCalledWith("POST", "/api/v1/test-samples/набор/editor/import-archive");
+    expect(xhr.withCredentials).toBe(true);
+    expect(xhr.send).toHaveBeenCalledWith(form);
+    expect(xhr.setRequestHeader).not.toHaveBeenCalled();
+    xhr.progress(25, 100);
+    expect(progress).toHaveBeenLastCalledWith({ loaded: 25, total: 100, complete: false });
+    xhr.upload.dispatchEvent(new Event("load"));
+    expect(progress).toHaveBeenLastCalledWith({ loaded: 100, total: 100, complete: true });
+    await Promise.resolve(); expect(settled).not.toHaveBeenCalled();
+    xhr.respond(200, { saved: true });
+    await expect(promise).resolves.toEqual({ saved: true });
+  });
+
+  it("не придумывает процент, если длина передачи неизвестна", async () => {
+    const requests = uploadFixture(), progress = vi.fn();
+    const promise = apiForm("/upload", new FormData(), { onUploadProgress: progress });
+    requests[0].progress(1024);
+    expect(progress).toHaveBeenLastCalledWith({ loaded: 1024, total: null, complete: false });
+    requests[0].respond(200, {}); await promise;
+  });
+
+  it("передаёт GeoJSON тем же транспортом, сохраняет заголовки действий и коды ошибок", async () => {
+    const requests = uploadFixture(), progress = vi.fn(), events = new EventTarget(), action = vi.fn();
+    events.addEventListener("grovika:action", action); vi.stubGlobal("window", events);
+    const body = { scenes: [{ annotation_name: "контур.geojson" }] };
+    const promise = apiJson("/test-samples/набор/editor/drafts/import", { method: "POST", body, onUploadProgress: progress });
+    const xhr = requests[0];
+    expect(xhr.send).toHaveBeenCalledWith(JSON.stringify(body));
+    expect(xhr.setRequestHeader).toHaveBeenCalledWith("content-type", "application/json");
+    xhr.respond(400, { detail: "Контур выходит за снимок", code: "annotation_outside_footprint" },
+      "x-grovika-action: test_import\r\nx-grovika-user: session\r\n");
+    await expect(promise).rejects.toMatchObject({ status: 400, code: "annotation_outside_footprint", message: "Контур выходит за снимок" });
+    expect(action).toHaveBeenCalledOnce();
+  });
+
+  it("завершает ожидание при сетевой ошибке, отмене и истечении времени", async () => {
+    const requests = uploadFixture();
+    const failed = apiForm("/upload", new FormData(), { onUploadProgress: vi.fn() });
+    requests[0].dispatchEvent(new Event("error")); await expect(failed).rejects.toThrow("Проверьте соединение");
+    const controller = new AbortController();
+    const aborted = apiForm("/upload", new FormData(), { onUploadProgress: vi.fn(), signal: controller.signal });
+    controller.abort(); await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
+    expect(requests[1].abort).toHaveBeenCalledOnce();
+    const timedOut = apiForm("/upload", new FormData(), { onUploadProgress: vi.fn() });
+    requests[2].dispatchEvent(new Event("timeout")); await expect(timedOut).rejects.toThrow("Сервер не ответил");
   });
 });

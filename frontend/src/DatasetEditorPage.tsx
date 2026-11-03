@@ -52,7 +52,7 @@ import type { ViewOptions } from "ol/View";
 import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 
-import { ApiError, apiDownloadGet, apiForm, apiJson, downloadBlob } from "./api/client";
+import { ApiError, apiDownloadGet, apiForm, apiJson, downloadBlob, type UploadProgress } from "./api/client";
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
 import { TestSampleDownloadOptionsForm, type TestSampleAnnotationLayout } from "./TestSampleDownloadOptions";
@@ -369,6 +369,8 @@ export function DatasetEditorPage({
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveFile, setArchiveFile] = useState<File | null>(null);
   const [archiveError, setArchiveError] = useState("");
+  const [archiveProgress, setArchiveProgress] = useState<UploadProgress | null>(null);
+  const [importProgress, setImportProgress] = useState<UploadProgress | null>(null);
   const [browser, setBrowser] = useState<RasterBrowser | null>(null);
   const [selectedRasters, setSelectedRasters] = useState<Set<string>>(new Set());
   const [publication, setPublication] = useState<PublicationInfo | null>(null);
@@ -2252,12 +2254,14 @@ export function DatasetEditorPage({
     setBusy(true);
     setImportError("");
     setImportClippingRequired(false);
+    setImportProgress(null);
     try {
-      const uploaded = await readAnnotationFiles(importFiles);
+      const uploaded = await readAnnotationFiles(importFiles, { unlimitedSize: Boolean(testSampleId) });
       if (datasetKeyRef.current !== key) return;
+      setImportProgress({ loaded: 0, total: null, complete: false });
       const response = await apiJson<{ dataset: EditorDataset; scenes: EditorScene[] }>(
         `${editorPath(key)}/drafts/import`,
-        { method: "POST", body: { scenes: uploaded, clip_to_footprint: clipToFootprint } },
+        { method: "POST", body: { scenes: uploaded, clip_to_footprint: clipToFootprint }, onUploadProgress: setImportProgress },
       );
       if (datasetKeyRef.current !== key) return;
       setImportOpen(false);
@@ -2279,16 +2283,17 @@ export function DatasetEditorPage({
     const key = datasetKey;
     if (!key || !testSampleId || !archiveFile || busy) return;
     setArchiveError("");
-    if (!archiveFile.name.toLowerCase().endsWith(".zip") || archiveFile.size > 8 * 1024 ** 3) {
-      setArchiveError("Выберите ZIP размером до 8 ГиБ.");
+    if (!archiveFile.name.toLowerCase().endsWith(".zip")) {
+      setArchiveError("Выберите архив ZIP.");
       return;
     }
     setBusy(true);
+    setArchiveProgress({ loaded: 0, total: archiveFile.size, complete: false });
     try {
       const form = new FormData();
       form.append("archive", archiveFile);
       const before = new Set(scenes.map((scene) => scene.annotation_name));
-      const result = await apiForm<MutationResult>(`${editorPath(key)}/import-archive`, form);
+      const result = await apiForm<MutationResult>(`${editorPath(key)}/import-archive`, form, { onUploadProgress: setArchiveProgress });
       if (datasetKeyRef.current !== key) return;
       const added = result.scenes.filter((scene) => !before.has(scene.annotation_name));
       setArchiveOpen(false);
@@ -3120,14 +3125,14 @@ export function DatasetEditorPage({
             <div className="modal-body">
               <p>ZIP со снимками TIFF и разметкой в одном из двух вариантов:</p>
               <ul><li>Отдельный одноимённый GeoJSON к каждому TIFF.</li><li>Один общий GeoJSON для всех снимков — объекты будут обрезаны по каждому снимку и его полезным пикселям.</li></ul>
-              <p>До 100 снимков, размером до 8192 × 8192 пикселя. TIFF: EPSG:3857, uint8, четыре канала Канопуса или RGB ортофото; прозрачность ортофото поддерживается. Без CRS в GeoJSON координаты считаются в проекции TIFF.</p>
+              <p>До 100 снимков без ограничения размеров TIFF и объёма архива. TIFF: EPSG:3857, uint8, четыре канала Канопуса или RGB ортофото; прозрачность ортофото поддерживается. Без CRS в GeoJSON координаты считаются в проекции TIFF.</p>
               <p>Снимки добавятся к текущему набору сразу после проверки всего архива. Существующие снимки и ваши черновики сохранятся. Затем можно править контуры и удалять снимки обычным способом.</p>
-              <label className="field"><span>Архив ZIP · до 8 ГиБ</span>
+              <label className="field"><span>Архив ZIP</span>
                 <input type="file" accept=".zip,application/zip" disabled={busy}
-                  onChange={(event) => { setArchiveFile(event.target.files?.[0] || null); setArchiveError(""); }} />
+                  onChange={(event) => { setArchiveFile(event.target.files?.[0] || null); setArchiveError(""); setArchiveProgress(null); }} />
               </label>
               {archiveError ? <p className="error-box" role="alert" style={{ overflowWrap: "anywhere" }}>{archiveError}</p> : null}
-              {busy ? <p role="status">Загружаем архив, проверяем снимки и готовим разметку. Большой набор может занять несколько минут; не закрывайте страницу.</p> : null}
+              {busy && archiveProgress ? <TestMarkupUploadProgress progress={archiveProgress} /> : null}
             </div>
             <footer className="modal-footer">
               <button className="secondary" type="button" disabled={busy} onClick={() => setArchiveOpen(false)}>Отмена</button>
@@ -3157,11 +3162,12 @@ export function DatasetEditorPage({
                 ))}. Схема классов должна совпадать с GeoJSON этого датасета.</p>
               ) : null}
               {importError ? <p className={importClippingRequired ? "info-box" : "error-box"} role="alert" style={{ overflowWrap: "anywhere" }}>{importError}</p> : null}
-              <label className="field"><span>Файлы разметки · до 100 файлов, всего до 50 МиБ</span>
+              <label className="field"><span>Файлы разметки · до 100 файлов{testSampleId ? "" : ", всего до 50 МиБ"}</span>
                 <input type="file" accept=".geojson" multiple disabled={busy}
-                  onChange={(event) => { setImportFiles(Array.from(event.target.files || [])); setImportError(""); setImportClippingRequired(false); }} />
+                  onChange={(event) => { setImportFiles(Array.from(event.target.files || [])); setImportError(""); setImportClippingRequired(false); setImportProgress(null); }} />
               </label>
               {importFiles.length ? <p>Выбрано файлов: {importFiles.length}</p> : null}
+              {busy ? importProgress ? <TestMarkupUploadProgress progress={importProgress} /> : <p role="status">Читаем выбранные файлы разметки…</p> : null}
               <p className="muted">Весь пакет проходит проверку перед сохранением. После загрузки снимки появятся только в ваших черновиках — для добавления в датасет нужна отдельная публикация.</p>
             </div>
             <footer className="modal-footer">
@@ -3629,6 +3635,21 @@ function pseudoFeatureColor(
   return typeof sourceColor === "string" && /^#[0-9a-f]{6}$/i.test(sourceColor)
     ? sourceColor.toUpperCase()
     : objectType?.color || "#22D3EE";
+}
+
+export function TestMarkupUploadProgress({ progress }: { progress: UploadProgress }) {
+  const ratio = progress.complete ? 1 : progress.total ? Math.max(0, Math.min(1, progress.loaded / progress.total)) : undefined;
+  const size = (bytes: number) => {
+    const unit = Math.min(4, Math.floor(Math.log2(Math.max(1, bytes)) / 10));
+    return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(bytes / 1024 ** unit)} ${["Б", "КиБ", "МиБ", "ГиБ", "ТиБ"][unit]}`;
+  };
+  return <div className="test-markup-upload-progress">
+    <div><strong>{progress.complete ? "Файлы переданы на сервер" : "Передача файлов на сервер"}</strong>
+      {ratio !== undefined ? <span>{Math.floor(ratio * 100)}%</span> : null}</div>
+    <progress max={1} value={ratio} aria-label="Передача файлов на сервер" />
+    {progress.loaded > 0 ? <small>Передано {size(progress.loaded)}{progress.total ? ` из ${size(progress.total)}` : ""}</small> : null}
+    {progress.complete ? <p role="status">Сервер проверяет снимки и сохраняет разметку. Не закрывайте окно до завершения.</p> : null}
+  </div>;
 }
 
 function featureStyle(

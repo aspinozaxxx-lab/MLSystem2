@@ -4,9 +4,9 @@ type AnnotationFile = { name: string; size: number; text: () => Promise<string> 
 
 export const NEW_SCENE_REVISION = "new";
 
-export async function readAnnotationFiles(files: AnnotationFile[]) {
+export async function readAnnotationFiles(files: AnnotationFile[], options: { unlimitedSize?: boolean } = {}) {
   if (!files.length || files.length > 100) throw new Error("Выберите от 1 до 100 файлов GeoJSON.");
-  if (files.reduce((sum, file) => sum + file.size, 0) > 50 * 1024 * 1024) {
+  if (!options.unlimitedSize && files.reduce((sum, file) => sum + file.size, 0) > 50 * 1024 * 1024) {
     throw new Error("Общий размер выбранных GeoJSON не должен превышать 50 МиБ.");
   }
   const names = new Set<string>();

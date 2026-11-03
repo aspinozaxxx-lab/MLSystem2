@@ -11,6 +11,7 @@ import {
   displayedClassStyles,
   isEditorFeatureVisible,
   pseudoMarkupStyle,
+  TestMarkupUploadProgress,
 } from "./DatasetEditorPage";
 import { clipEditorGeometry, featureCounts, featureClassCounts } from "./utils/datasetEditor";
 
@@ -21,6 +22,17 @@ it("предлагает ZIP с готовыми снимками только �
   expect(testEditor).toContain('aria-label="Загрузить готовую тестовую разметку"');
   expect(datasetEditor).not.toContain('aria-label="Загрузить готовую тестовую разметку"');
   expect(testEditor).toContain('aria-label="Загрузить GeoJSON"');
+});
+
+it("разделяет передачу файлов и последующее сохранение на сервере", () => {
+  const sending = renderToStaticMarkup(createElement(TestMarkupUploadProgress, { progress: { loaded: 256, total: 1024, complete: false } }));
+  expect(sending).toContain("25%"); expect(sending).toContain('value="0.25"');
+  expect(sending).not.toContain("Сервер проверяет");
+  const unknown = renderToStaticMarkup(createElement(TestMarkupUploadProgress, { progress: { loaded: 256, total: null, complete: false } }));
+  expect(unknown).not.toContain("%"); expect(unknown).not.toContain('value=');
+  const processing = renderToStaticMarkup(createElement(TestMarkupUploadProgress, { progress: { loaded: 1024, total: 1024, complete: true } }));
+  expect(processing).toContain("100%"); expect(processing).toContain("Сервер проверяет снимки и сохраняет разметку");
+  expect(processing).not.toContain("Импорт завершён");
 });
 
 
