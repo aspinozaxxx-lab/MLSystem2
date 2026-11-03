@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,7 +26,7 @@ from mlsystem2.training_ui_api import _training_continuation as continuation, _w
 from mlsystem2.training_ui_api._config import get_config
 from mlsystem2.training_ui_api._database import Base, configure_schema, create_session_factory
 from mlsystem2.training_ui_api._dataset_catalog import list_managed_datasets
-from mlsystem2.training_ui_api._models import DatasetClassRow, JobRow, PseudoMarkupResultRow, StoredFileRow, TrainingResultRow
+from mlsystem2.training_ui_api._models import DatasetClassRow, DatasetRow, JobRow, PseudoMarkupResultRow, StoredFileRow, TestSampleRow, TestSampleTileRow, TrainingResultRow
 from mlsystem2.training_ui_api._queueing import (
     POST_TRAINING_INFERENCE_CONFIG_KEY, POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY,
     SECONDARY_PRIORITY_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY, TRAINING_STARTED_BY_CONFIG_KEY, is_secondary_job,
@@ -169,7 +170,7 @@ def test_continue_api_copies_parameters_and_keeps_original(saved_training, check
     assert options.status_code == 200
     assert options.json() == {"additional_epochs": 30, "additional_time_sec": 1800,
                               "early_stopping_patience": 7, "last_checkpoint_available": True,
-                              "run_inference_after_training": True, "secondary_priority": False}
+                              "run_inference_after_training": True, "secondary_priority": False, "class_key": "образец"}
     request = _request(checkpoint)
     response = env.client.post(url, json=request)
     assert response.status_code == 200, response.text
@@ -632,3 +633,266 @@ def test_current_continuation_rejects_incompatible_dataset(live_training, monkey
     assert "несовместим" in response.json()["detail"]
     with env.factory() as session:
         assert len(session.scalars(select(JobRow)).all()) == 1
+
+
+def _another_dataset(env):
+    folder = env.live_folder.parent / "дополнительный"
+    shutil.copytree(env.live_folder, folder)
+    with env.factory() as session:
+        dataset = next(item for item in list_managed_datasets(session, env.config, include_custom=False)
+                       if item.source_path == "Учебный класс/дополнительный")
+        session.commit()
+    return dataset, folder
+
+
+def test_continuation_on_another_dataset_uses_target_and_its_result_number(live_training):
+    env = live_training
+    target, folder = _another_dataset(env)
+    request = _request(dataset_source="dataset", dataset_key=target.key, run_inference_after_training=False)
+    url = f"/api/v1/results/training/{env.result_id}/continue"
+    response = env.client.post(url, json=request)
+    assert response.status_code == 200, response.text
+    assert response.json()["dataset_key"] == target.key
+    assert env.client.post(url, json=request).json()["id"] == response.json()["id"]
+    assert env.client.post(url, json={**request, "dataset_key": "другой"}).status_code == 400
+    child_id = uuid.UUID(response.json()["id"])
+    env.change_live_dataset()
+    with env.factory() as session:
+        child = session.get(JobRow, child_id)
+        payload = _worker._build_training_config(session, child, env.config, env.config.scratch_root / str(child.id))
+        prepared = prepare_dataset(DatasetPreparationRequest(**payload["dataset"], expected_band_count=4))
+        assert prepared.dataset is not None, prepared.report
+        assert {Path(scene.image_path).stem for scene in prepared.dataset.scenes} == {"scene_a", "scene_removed"}
+        assert payload["dataset"]["val_fraction"] == env.payload["dataset"]["val_fraction"]
+        assert payload["train"]["learning_rate"] == env.payload["train"]["learning_rate"]
+        assert Path(payload["train"]["initial_checkpoint_uri"]).read_bytes() == continuation.BEST_ARTIFACT.encode()
+        result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == child_id))
+        assert result.class_key == target.key and result.dataset_key == target.key
+        assert result.dataset_number == 1 and result.class_display_name == target.name
+        assert result.dataset_version == child.dataset_version
+        assert session.get(TrainingResultRow, env.result_id).dataset_version == env.original_version
+        session.commit()
+    info = env.client.get(f"/api/v1/results/datasets/{target.key}").json()["results"][0]
+    assert info["continued_from_dataset_source"] == "dataset"
+    assert info["continued_from_data_name"] == target.name
+    assert folder.exists()
+
+
+@pytest.mark.parametrize("change", ["class", "deleted"])
+def test_selected_dataset_is_rechecked_at_start(live_training, change):
+    env = live_training
+    target, _ = _another_dataset(env)
+    request = _request(dataset_source="dataset", dataset_key=target.key, run_inference_after_training=False)
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=request)
+    assert response.status_code == 200, response.text
+    with env.factory() as session:
+        target_row = session.scalar(select(DatasetRow).where(DatasetRow.key == target.key))
+        if change == "class":
+            other = DatasetClassRow(key="другой-класс", name="Другой класс", technical_name="другой-класс", imagery_type="kanopus")
+            session.add(other)
+            session.flush()
+            target_row.class_id = other.id
+        else:
+            from datetime import datetime, timezone
+            target_row.deleted_at = datetime.now(timezone.utc)
+        session.commit()
+        child = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        with pytest.raises(TrainingUIAPIError, match="класса|недоступен"):
+            _worker._build_training_config(session, child, env.config, env.config.scratch_root / str(child.id))
+    rejected = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json={**request, "request_id": str(uuid.uuid4())})
+    assert rejected.status_code == 400
+
+
+@pytest.fixture(params=[3, 4])
+def training_sample(saved_training, request):
+    env = saved_training
+    channels = request.param
+    sample_id = uuid.uuid4()
+    root = env.config.stored_files_root / "test-samples" / str(sample_id)
+    root.mkdir(parents=True)
+    for index in (1, 7):
+        with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+            with rasterio.open(root / f"tile_{index:03d}.tif", "w", driver="GTiff", width=16, height=16,
+                               count=channels, dtype="uint8", crs="EPSG:3857", transform=from_origin(0, 16, 1, 1), ALPHA="NO") as image:
+                image.write(np.full((channels, 16, 16), 40, dtype=np.uint8))
+                image.descriptions = ("RED", "GRN", "BLU", "NIR")[:channels]
+                image.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined)[:channels]
+                mask = np.full((16, 16), 255, dtype=np.uint8)
+                mask[:2] = 0
+                image.write_mask(mask)
+        (root / f"tile_{index:03d}.geojson").write_text(json.dumps({
+            "type": "FeatureCollection", "crs": {"type": "name", "properties": {"name": "EPSG:3857"}},
+            "features": [{"type": "Feature", "id": "эталон", "properties": {"_mlsystem2_role": "positive"},
+                          "geometry": mapping(box(4, 4, 10, 10))}],
+        }), encoding="utf-8")
+    env.payload["train"]["input_channels"] = channels
+    (env.source_dir / "run.yml").write_text(yaml.safe_dump(env.payload, allow_unicode=True), encoding="utf-8")
+    with env.factory() as session:
+        source = session.get(JobRow, env.job_id)
+        source.config = {**source.config, "train.input_channels": channels}
+        session.scalar(select(DatasetClassRow)).imagery_type = "ortho" if channels == 3 else "kanopus"
+        sample = TestSampleRow(id=sample_id, name="Уточнённый эталон", dataset_key="образец", dataset_name="Учебный датасет",
+            class_key="образец", class_name="Учебный класс", dataset_short_name="main", task="binary", class_schema=[],
+            tile_width=16, tile_height=16, image_count=3, requested_object_count=2, actual_object_count=2, territory_count=1)
+        session.add(sample)
+        session.flush()
+        for index in (1, 7, 9):
+            session.add(TestSampleTileRow(test_sample_id=sample_id, tile_index=index, source_name=f"Снимок {index}",
+                territory="Территория", object_count=1 if index != 9 else 0, enabled=index != 9))
+        session.commit()
+    env.sample_id, env.sample_root, env.channels = sample_id, root, channels
+    yield env
+
+
+def test_continuation_on_test_sample_freezes_current_enabled_reference_and_valid_mask(training_sample):
+    env = training_sample
+    url = f"/api/v1/results/training/{env.result_id}/continue"
+    request = _request(dataset_source="test_sample", test_sample_id=str(env.sample_id), run_inference_after_training=False)
+    response = env.client.post(url, json=request)
+    assert response.status_code == 200, response.text
+    assert env.client.post(url, json=request).json()["id"] == response.json()["id"]
+    assert env.client.post(url, json={**request, "test_sample_id": str(uuid.uuid4())}).status_code == 400
+    with env.factory() as session:
+        sample = session.get(TestSampleRow, env.sample_id)
+        sample.name = "Эталон после правки"
+        sample.content_revision = 2
+        next(tile for tile in sample.tiles if tile.tile_index == 7).enabled = False
+        session.commit()
+        child = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        payload = _worker._build_training_config(session, child, env.config, env.config.scratch_root / str(child.id))
+        prepared = prepare_dataset(DatasetPreparationRequest(**payload["dataset"], expected_band_count=env.channels))
+        assert prepared.dataset is not None, prepared.report
+        assert len(prepared.dataset.scenes) == 1
+        scene = prepared.dataset.scenes[0]
+        assert Path(scene.image_path).stem == "tile_001"
+        assert Path(scene.annotation_file).read_bytes() == (env.sample_root / "tile_001.geojson").read_bytes()
+        with rasterio.open(scene.image_path) as frozen, rasterio.open(env.sample_root / "tile_001.tif") as original:
+            np.testing.assert_array_equal(frozen.dataset_mask(), original.dataset_mask())
+            np.testing.assert_array_equal(frozen.read(), original.read())
+        frozen_image, frozen_markup = Path(scene.image_path).read_bytes(), Path(scene.annotation_file).read_bytes()
+        assert child.config[continuation.CONTINUATION_KEY]["test_sample_revision"] == 2
+        assert child.config[continuation.CONTINUATION_KEY]["tile_indices"] == [1]
+        assert child.dataset_version == f"test-sample:{env.sample_id}:r2"
+        result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == child.id))
+        assert result.dataset_key == "образец" and result.dataset_version == child.dataset_version
+        assert payload["train"]["learning_rate"] == env.payload["train"]["learning_rate"]
+        assert payload["tile_preparation"] == env.payload["tile_preparation"]
+        assert Path(payload["train"]["initial_checkpoint_uri"]).read_bytes() == continuation.BEST_ARTIFACT.encode()
+        session.commit()
+        session.delete(sample)
+        session.commit()
+    assert env.sample_root.resolve().is_relative_to(env.config.stored_files_root.resolve())
+    shutil.rmtree(env.sample_root)
+    assert Path(scene.image_path).read_bytes() == frozen_image
+    assert Path(scene.annotation_file).read_bytes() == frozen_markup
+    infos = env.client.get("/api/v1/results/datasets/образец").json()["results"]
+    info = next(item for item in infos if item["job_id"] == response.json()["id"])
+    assert info["continued_from_data_name"] == "Эталон после правки"
+    assert info["training_test_sample_names"] == ["Эталон после правки"]
+
+
+@pytest.mark.parametrize("change", ["class", "schema", "channels", "disabled", "missing"])
+def test_test_sample_incompatible_inputs_are_rejected_before_queue(training_sample, change):
+    env = training_sample
+    with env.factory() as session:
+        sample = session.get(TestSampleRow, env.sample_id)
+        if change == "class":
+            sample.class_key = "другой"
+        elif change == "schema":
+            sample.task = "multiclass"
+        elif change == "channels":
+            source = session.get(JobRow, env.job_id)
+            source.config = {**source.config, "train.input_channels": 3 if env.channels == 4 else 4}
+        elif change == "disabled":
+            for tile in sample.tiles:
+                tile.enabled = False
+        else:
+            (env.sample_root / "tile_001.geojson").unlink()
+        session.commit()
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=_request(
+        dataset_source="test_sample", test_sample_id=str(env.sample_id), run_inference_after_training=False))
+    assert response.status_code == 400, response.text
+    with env.factory() as session:
+        assert len(session.scalars(select(JobRow)).all()) == 1
+
+
+@pytest.mark.parametrize("selection", [{"dataset_source": "dataset"}, {"dataset_source": "test_sample"},
+    {"dataset_source": "original", "dataset_key": "образец"},
+    {"dataset_source": "dataset", "dataset_key": "образец", "test_sample_id": str(uuid.uuid4())}])
+def test_continuation_requires_exact_data_selection(saved_training, selection):
+    env = saved_training
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=_request(**selection))
+    assert response.status_code == 422
+
+
+def test_test_sample_provenance_is_inherited_by_further_stages(training_sample, monkeypatch):
+    env = training_sample
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=_request(
+        dataset_source="test_sample", test_sample_id=str(env.sample_id), run_inference_after_training=False))
+    assert response.status_code == 200, response.text
+    with env.factory() as session:
+        job = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        _worker._build_training_config(session, job, env.config, env.config.scratch_root / str(job.id))
+        job.status = "completed"
+        child = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == job.id))
+        child.status = "ok"
+        child.mlflow_run_id = "дочерний-run"
+        session.commit()
+        monkeypatch.setattr(continuation, "get_finished_run_artifact", lambda *_args: SimpleNamespace())
+        next_job = continuation.create_continuation_job(session, child.id, TrainingContinuationCreate(**_request(
+            run_inference_after_training=False)), env.config)
+        assert next_job.config[continuation.TRAINING_TEST_SAMPLES_KEY] == job.config[continuation.TRAINING_TEST_SAMPLES_KEY]
+        assert next_job.config[continuation.TRAINING_TEST_SAMPLES_KEY][0]["id"] == str(env.sample_id)
+
+
+def test_publication_busy_keeps_test_sample_continuation_in_queue(training_sample, monkeypatch):
+    from contextlib import contextmanager
+    from mlsystem2.training_ui_api._markup_lock import TestSampleStorageBusy
+
+    env = training_sample
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=_request(
+        dataset_source="test_sample", test_sample_id=str(env.sample_id), run_inference_after_training=False))
+    assert response.status_code == 200, response.text
+
+    @contextmanager
+    def busy(*_args, **_kwargs):
+        raise TestSampleStorageBusy("Публикуется разметка")
+        yield
+
+    monkeypatch.setattr(continuation, "test_sample_storage_lock", busy)
+    with env.factory() as session:
+        job = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        _worker._start_training_job(session, job, env.config,
+            popen_factory=lambda *_args, **_kwargs: pytest.fail("Процесс не должен запускаться во время публикации"))
+        assert job.status == "queued" and job.tmp_path is None and job.error is None
+
+
+def test_multiclass_test_sample_retains_schema_and_object_ids(training_sample):
+    env = training_sample
+    schema = [{"id": index, "slug": slug, "name": name, "color": color, "priority": index}
+              for index, slug, name, color in [(1, "water", "Вода", "#00aaff"), (2, "land", "Суша", "#ffaa00")]]
+    env.payload["train"].update(task="multiclass", output_channels=3)
+    (env.source_dir / "run.yml").write_text(yaml.safe_dump(env.payload, allow_unicode=True), encoding="utf-8")
+    with env.factory() as session:
+        sample = session.get(TestSampleRow, env.sample_id)
+        sample.task, sample.class_schema = "multiclass", schema
+        result = session.get(TrainingResultRow, env.result_id)
+        result.task, result.class_schema = "multiclass", schema
+        session.commit()
+    for path in env.sample_root.glob("*.geojson"):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document.update(_mlsystem2_schema_version=1, _mlsystem2_task="multiclass", _mlsystem2_classes=schema)
+        document["features"][0]["properties"].update(_mlsystem2_origin_key="исходный-объект", _mlsystem2_class="water")
+        path.write_text(json.dumps(document), encoding="utf-8")
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=_request(
+        dataset_source="test_sample", test_sample_id=str(env.sample_id), run_inference_after_training=False))
+    assert response.status_code == 200, response.text
+    with env.factory() as session:
+        job = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        payload = _worker._build_training_config(session, job, env.config, env.config.scratch_root / str(job.id))
+        prepared = prepare_dataset(DatasetPreparationRequest(**payload["dataset"], expected_band_count=env.channels))
+        assert prepared.dataset is not None, prepared.report
+        assert prepared.dataset.format == "per_image_multiclass"
+        assert [item.slug for item in prepared.dataset.classes] == ["water", "land"]
+        annotation = json.loads(Path(prepared.dataset.scenes[0].annotation_file).read_text(encoding="utf-8"))
+        assert annotation["features"][0]["id"] == "эталон"

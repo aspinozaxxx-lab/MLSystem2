@@ -594,12 +594,12 @@ def _start_training_job(
             cwd=str(config.project_root),
             start_new_session=True,
         )
-    except _ManagedDatasetNotReady:
+    except (_ManagedDatasetNotReady, TestSampleStorageBusy):
         shutil.rmtree(run_dir, ignore_errors=True)
         row.tmp_path = None
         row.error = None
         session.flush()
-        LOGGER.info("Training job %s waits for managed dataset materialization", row.id)
+        LOGGER.info("Задание обучения %s ожидает публикации или подготовки данных", row.id)
         return
     except Exception:
         LOGGER.exception("Failed to start training job %s", row.id)

@@ -370,8 +370,10 @@ Next-gen4-augmentation-v4 — дополнительное значение `pip
 - `GET /api/v1/results/training/{result_id}/continue` — `TrainingContinuationOptions`: начальные значения
   `additional_epochs`, `additional_time_sec`, `early_stopping_patience` из исходного задания (при отсутствии
   лимита времени — 3600 секунд), `last_checkpoint_available` после проверки артефактов завершённого MLflow run.
+  `class_key` — канонический класс исходной сети, либо `null`; диалог использует существующие каталог
+  датасетов и `GET /api/v1/test-samples/cards?class_key=...` для выбора данных этого класса.
 - `POST /api/v1/results/training/{result_id}/continue` — новый ручной training job от выбранного checkpoint.
-  `TrainingContinuationCreate` принимает три строго положительных целых лимита, `dataset_source=original|current`
+  `TrainingContinuationCreate` принимает три строго положительных целых лимита, `dataset_source=original|current|dataset|test_sample`
   (по умолчанию `original`, включая старые запросы), `checkpoint=best|last`
   (по умолчанию best) и UUID `request_id` для идемпотентной отправки. Иные параметры не принимаются.
   Оба маршрута требуют пользовательскую сессию. Источник — успешный нативный result с завершённым training job
@@ -384,6 +386,16 @@ Next-gen4-augmentation-v4 — дополнительное значение `pip
   при отправке и старте. Штатный snapshot под блокировкой MLMarkup берёт опубликованные снимки и геометрию,
   включая правки за время ожидания; job/result получают фактическую ревизию. Другой одноимённый набор,
   личные черновики и текущий шаблон не подставляются. Custom-upload использует `original`.
+  `dataset` требует только `dataset_key`, `test_sample` — только `test_sample_id`; для остальных режимов
+  оба поля отсутствуют. Другой датасет должен быть активным и принадлежать классу исходной сети;
+  задача, выходные ID/slug и каналы проверяются повторно на старте. Результат и номер принадлежат
+  выбранному датасету. Тестовая разметка должна иметь тот же класс, задачу и схему; копируются только
+  её включённые TIFF, valid mask и эталонные GeoJSON актуальной ревизии, под блокировкой хранилища.
+  В worker занятая публикация откладывает подготовку. Snapshot использует обычный per-image формат
+  и постоянные TIFF в `stored_files_root/training-data/<job UUID>` для повторного продолжения
+  и не зависит от дальнейших изменений источника. Результат остаётся у исходного датасета, как и
+  автоматическая псевдоразметка. В lineage сохраняются выбранные ID, название, ревизия и индексы;
+  `ui.training_test_samples` наследуется потомками для пометки зависимых тестовых оценок.
   Выбор, исходная и фактическая версии сохраняются в JSON происхождения без новой таблицы. При наличии
   используется полный `config/resolved_train_config.json`; исторический резерв — исходный YAML запуска.
   Все новые задания сохраняют полный валидированный снимок обучения `SystemSettings` без блока `inference` в `run.yml` до старта процесса.
@@ -397,7 +409,9 @@ Next-gen4-augmentation-v4 — дополнительное значение `pip
   и запрос прежней остановки очищаются. Исходный result, его звезда и псевдоразметки не меняются.
   `TrainingResultInfo.can_continue_training` определяет наличие кнопки без сетевого обхода артефактов на
   каждой строке; `continued_from_result_id`, `continued_from_epoch` (для best), `continued_from_checkpoint`
-  и `continued_from_dataset_source` (`original|current`, `null` у исходной сети)
+  и `continued_from_dataset_source` (`original|current|dataset|test_sample`, `null` у исходной сети),
+  `continued_from_data_name` (название выбранного источника), `training_test_sample_names` (тестовые
+  разметки этого или предшествующих этапов, F1 на них не независим)
   обозначают происхождение нового этапа. Доступность файла уточняется при открытии диалога и отправке.
   UI группирует цепочки и ответвления продолжений с исходной сетью; псевдоразметки остаются под своим
   этапом. `PseudoMarkupResultInfo.checkpoint_epoch` и `PseudoMarkupViewInfo.checkpoint_epoch` показывают

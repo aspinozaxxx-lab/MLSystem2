@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .common import JobSource, JobStatus, JobType, RuntimeProgress
 
@@ -35,12 +35,22 @@ class TrainingContinuationCreate(BaseModel):
     additional_time_sec: int = Field(gt=0, strict=True)
     early_stopping_patience: int = Field(gt=0, strict=True)
     checkpoint: Literal["best", "last"] = "best"
-    dataset_source: Literal["original", "current"] = Field(
-        default="original", description="Прежний снимок датасета либо актуальный опубликованный состав на момент старта.",
+    dataset_source: Literal["original", "current", "dataset", "test_sample"] = Field(
+        default="original", description="Прежний состав, актуальный состав, другой датасет или тестовая разметка того же класса.",
     )
+    dataset_key: str | None = Field(default=None, min_length=1)
+    test_sample_id: UUID | None = None
     run_inference_after_training: bool | None = None
     secondary_priority: bool | None = None
     request_id: UUID
+
+    @model_validator(mode="after")
+    def validate_data_selection(self):
+        if (self.dataset_source == "dataset") != (self.dataset_key is not None):
+            raise ValueError("Ключ датасета нужен только при выборе другого датасета.")
+        if (self.dataset_source == "test_sample") != (self.test_sample_id is not None):
+            raise ValueError("Идентификатор тестовой разметки нужен только при её выборе.")
+        return self
 
 
 class TrainingContinuationOptions(BaseModel):
@@ -54,6 +64,7 @@ class TrainingContinuationOptions(BaseModel):
     last_checkpoint_available: bool
     run_inference_after_training: bool = False
     secondary_priority: bool = False
+    class_key: str | None = None
 
 
 class QueueEnabledUpdate(BaseModel):

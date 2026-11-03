@@ -3195,9 +3195,14 @@ function DatasetResultsPanel({
       run(() => apiJson<TrainingContinuationOptions>(`/results/training/${result.id}/continue`)),
       getBootstrap(),
     ]);
-    if (options && catalog) showModal({
+    if (!options || !catalog) return;
+    const testSamples = options.class_key
+      ? await run(() => apiJson<TestSampleCard[]>(`/test-samples/cards?class_key=${encodeURIComponent(options.class_key!)}`))
+      : [];
+    if (!testSamples) return;
+    showModal({
       title: "Продолжить обучение",
-      body: <TrainingContinuationForm inferenceAvailable={Boolean(inferenceTemplateForDataset(catalog.inference_templates, catalog.datasets, payload.class_key || datasetKey))} result={result} options={options} run={run} closeModal={closeModal} reload={reloadAfterChange} />,
+      body: <TrainingContinuationForm datasets={catalog.datasets} testSamples={testSamples} inferenceAvailable={Boolean(inferenceTemplateForDataset(catalog.inference_templates, catalog.datasets, payload.class_key || datasetKey))} result={result} options={options} run={run} closeModal={closeModal} reload={reloadAfterChange} />,
       footer: null,
     });
   };
@@ -3834,7 +3839,8 @@ export function ResultsTable({
                       <TrainingResultComment resultId={result.id} comment={result.comment} onSaved={comment => onCommentSaved?.(result.id, comment)} />
                       {family.stages.length > 1 ? <small className="training-stage-label">Этап {stageIndex + 1}{!result.continued_from_result_id ? " · исходная сеть" : ""}</small> : null}
                       {result.continued_from_result_id ? <small className="muted">{family.stages.some(stage => stage.id === result.continued_from_result_id) ? `От этапа ${family.stages.findIndex(stage => stage.id === result.continued_from_result_id) + 1}` : "Продолжение"} · {result.continued_from_checkpoint === "last" ? "последние веса" : `лучшие веса${result.continued_from_epoch != null ? ` эпохи ${result.continued_from_epoch}` : ""}`}</small> : null}
-                      {result.continued_from_result_id ? <small className="muted">{result.continued_from_dataset_source === "current" ? "Актуальный состав датасета" : "Прежний состав датасета"}</small> : null}
+                      {result.continued_from_result_id ? <small className="muted">{result.continued_from_dataset_source === "test_sample" ? `Тестовая разметка: ${result.continued_from_data_name || "название не сохранено"}` : result.continued_from_dataset_source === "dataset" ? `Выбранный датасет: ${result.continued_from_data_name || "название не сохранено"}` : result.continued_from_dataset_source === "current" ? "Актуальный состав датасета" : "Прежний состав датасета"}</small> : null}
+                      {result.training_test_sample_names?.length ? <small className="inference-template-warning" title="F1 на этих разметках не является независимой оценкой качества, поскольку они участвовали в обучении этой сети или её предшествующих этапов.">Обучалась на тестовой разметке: {result.training_test_sample_names.join(", ")}</small> : null}
                     </span>
                   </td>
                   <td title="Статус">

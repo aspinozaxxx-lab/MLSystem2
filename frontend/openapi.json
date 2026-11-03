@@ -15380,11 +15380,37 @@
             "type": "string",
             "enum": [
               "original",
-              "current"
+              "current",
+              "dataset",
+              "test_sample"
             ],
             "title": "Dataset Source",
-            "description": "Прежний снимок датасета либо актуальный опубликованный состав на момент старта.",
+            "description": "Прежний состав, актуальный состав, другой датасет или тестовая разметка того же класса.",
             "default": "original"
+          },
+          "dataset_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Key"
+          },
+          "test_sample_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Sample Id"
           },
           "run_inference_after_training": {
             "anyOf": [
@@ -15455,6 +15481,17 @@
             "type": "boolean",
             "title": "Secondary Priority",
             "default": false
+          },
+          "class_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Class Key"
           }
         },
         "additionalProperties": false,
@@ -15827,7 +15864,9 @@
                 "type": "string",
                 "enum": [
                   "original",
-                  "current"
+                  "current",
+                  "dataset",
+                  "test_sample"
                 ]
               },
               {
@@ -15835,6 +15874,24 @@
               }
             ],
             "title": "Continued From Dataset Source"
+          },
+          "continued_from_data_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continued From Data Name"
+          },
+          "training_test_sample_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Training Test Sample Names"
           },
           "input_channels": {
             "type": "integer",

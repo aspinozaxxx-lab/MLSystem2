@@ -5505,11 +5505,15 @@ export interface components {
             checkpoint: "best" | "last";
             /**
              * Dataset Source
-             * @description Прежний снимок датасета либо актуальный опубликованный состав на момент старта.
+             * @description Прежний состав, актуальный состав, другой датасет или тестовая разметка того же класса.
              * @default original
              * @enum {string}
              */
-            dataset_source: "original" | "current";
+            dataset_source: "original" | "current" | "dataset" | "test_sample";
+            /** Dataset Key */
+            dataset_key?: string | null;
+            /** Test Sample Id */
+            test_sample_id?: string | null;
             /** Run Inference After Training */
             run_inference_after_training?: boolean | null;
             /** Secondary Priority */
@@ -5543,6 +5547,8 @@ export interface components {
              * @default false
              */
             secondary_priority: boolean;
+            /** Class Key */
+            class_key?: string | null;
         };
         /** TrainingJobCreate */
         TrainingJobCreate: {
@@ -5684,7 +5690,11 @@ export interface components {
             /** Continued From Checkpoint */
             continued_from_checkpoint?: ("best" | "last") | null;
             /** Continued From Dataset Source */
-            continued_from_dataset_source?: ("original" | "current") | null;
+            continued_from_dataset_source?: ("original" | "current" | "dataset" | "test_sample") | null;
+            /** Continued From Data Name */
+            continued_from_data_name?: string | null;
+            /** Training Test Sample Names */
+            training_test_sample_names?: string[];
             /**
              * Input Channels
              * @default 4

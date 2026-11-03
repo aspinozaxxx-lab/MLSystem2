@@ -40,7 +40,7 @@ from ._automation import (
 )
 from ._catalog import MODEL_DISPLAY_NAMES, UI_ARCHITECTURES, ui_model_infos
 from ._config import TrainingUIAPIConfig, get_config
-from ._training_continuation import CONTINUATION_KEY, can_continue_training
+from ._training_continuation import CONTINUATION_KEY, TRAINING_TEST_SAMPLES_KEY, can_continue_training
 from ._dataset_catalog import (
     dataset_training_result,
     create_dataset_class as _create_dataset_class,
@@ -3050,6 +3050,8 @@ def _training_result_info(
         continued_from_epoch=continuation.get("epoch"),
         continued_from_checkpoint=continuation.get("checkpoint"),
         continued_from_dataset_source=continuation.get("dataset_source", "original") if continuation else None,
+        continued_from_data_name=continuation.get("data_name"),
+        training_test_sample_names=list(dict.fromkeys(item["name"] for item in (job.config or {}).get(TRAINING_TEST_SAMPLES_KEY, []))) if job else [],
         input_channels=_job_input_channels(job),
         quality_metric=row.quality_metric,
         task=row.task,

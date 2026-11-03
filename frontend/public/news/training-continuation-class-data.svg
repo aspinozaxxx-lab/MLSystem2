@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" viewBox="0 0 1440 760" role="img" aria-labelledby="title desc">
+  <title id="title">Дообучение на данных своего класса</title>
+  <desc id="desc">Схема: исходная сеть и выбранные веса, другой датасет либо тестовая разметка того же класса, фиксация источника при старте и отдельный связанный результат.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#07142e"/><stop offset="1" stop-color="#142b49"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 10 5 0 10" fill="none" stroke="#48d7e6" stroke-width="2"/></marker>
+  </defs>
+  <rect width="1440" height="760" rx="28" fill="url(#bg)"/>
+  <g font-family="Arial, sans-serif">
+    <rect x="56" y="40" width="120" height="32" rx="16" fill="#16435a"/>
+    <text x="116" y="62" text-anchor="middle" fill="#7ae9f1" font-size="16" font-weight="700">СХЕМА</text>
+    <text x="56" y="125" fill="#fff" font-size="38" font-weight="700">Знакомая сеть. Новые данные. Отдельный результат.</text>
+    <text x="56" y="165" fill="#bbcddd" font-size="22">Дообучение сохраняет архитектуру и конвейер выбранной сети</text>
+    <rect x="56" y="268" width="304" height="245" rx="20" fill="#142d48" stroke="#54758f"/>
+    <text x="82" y="309" fill="#fff" font-size="25" font-weight="700">Исходная сеть</text>
+    <text x="82" y="344" fill="#c0d4e2" font-size="18">Завершённое обучение</text>
+    <rect x="82" y="371" width="252" height="49" rx="12" fill="#1c5360"/>
+    <text x="208" y="402" text-anchor="middle" fill="#b8f5ed" font-size="20">Лучшие веса</text>
+    <rect x="82" y="434" width="252" height="49" rx="12" fill="#223c58"/>
+    <text x="208" y="465" text-anchor="middle" fill="#d4e3ef" font-size="20">Последние веса</text>
+    <path d="M365 388 H413" stroke="#48d7e6" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="440" y="226" width="484" height="143" rx="20" fill="#143d4b" stroke="#48d7e6"/>
+    <text x="468" y="265" fill="#7ae9f1" font-size="16" font-weight="700">ДАННЫЕ ТОГО ЖЕ КЛАССА</text>
+    <text x="468" y="301" fill="#fff" font-size="26" font-weight="700">Другой датасет</text>
+    <text x="468" y="338" fill="#c0dbe2" font-size="19">Опубликованные снимки и полигоны</text>
+    <rect x="440" y="394" width="484" height="165" rx="20" fill="#19384c" stroke="#7facc4"/>
+    <text x="468" y="435" fill="#fff" font-size="26" font-weight="700">Тестовая разметка</text>
+    <text x="468" y="472" fill="#c0dbe2" font-size="19">Включённые снимки и эталон</text>
+    <text x="468" y="516" fill="#f0cf8c" font-size="18">F1 на ней после обучения не независим</text>
+    <path d="M941 388 H991" stroke="#48d7e6" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="1020" y="268" width="364" height="245" rx="20" fill="#142d48" stroke="#54758f"/>
+    <text x="1048" y="310" fill="#fff" font-size="25" font-weight="700">Новый этап</text>
+    <text x="1048" y="350" fill="#c0d4e2" font-size="19">Фиксированный снимок данных</text>
+    <text x="1048" y="388" fill="#c0d4e2" font-size="19">Отдельные веса и запуск MLflow</text>
+    <text x="1048" y="426" fill="#c0d4e2" font-size="19">Связь с исходной сетью</text>
+    <text x="1048" y="464" fill="#7ae9f1" font-size="19">Название и ревизия источника</text>
+    <rect x="56" y="613" width="1328" height="94" rx="16" fill="#0b223a"/>
+    <text x="82" y="651" fill="#fff" font-size="22" font-weight="700">Результаты → сеть → Продолжить обучение → На каких данных учить</text>
+    <text x="82" y="683" fill="#aec6d8" font-size="18">Прежний и актуальный состав исходного датасета также доступны</text>
+  </g>
+</svg>
