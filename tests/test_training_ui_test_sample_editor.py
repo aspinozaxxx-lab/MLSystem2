@@ -5,6 +5,7 @@ import json
 import uuid
 import zipfile
 from io import BytesIO
+import os
 from threading import Event, Thread
 
 import pytest
@@ -324,6 +325,140 @@ def test_archive_ortho_alpha_and_geographic_geojson(manual_client, monkeypatch, 
     assert shape(detail.json()["geojson"]["features"][0]["geometry"]).symmetric_difference(box(1000000, 5999968, 1000032, 5999996)).area < 1e-6
 
 
+def _white_background_archive(tmp_path):
+    path = tmp_path / "белая_подложка.tif"
+    pixels = np.full((4, 544, 32), 128, dtype="uint8")
+    pixels[3] = 255
+    pixels[3, :, 0] = 0
+    pixels[:3, :, 1:7] = 255
+    pixels[:3, 250:270, 7:10] = 255
+    pixels[:3, 10:14, 12:16] = 255  # Белая крыша внутри снимка.
+    pixels[3, 20:24, 20:24] = 0
+    pixels[:3, 24:26, 20:24] = 255  # Белое пятно у внутреннего nodata, без связи с краем.
+    with rasterio.open(path, "w", driver="GTiff", width=32, height=544, count=4, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(1000, 6000, 1, 1), ALPHA="YES") as image:
+        image.write(pixels)
+        image.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
+    geometries = [box(1001, 5991, 1005, 5996), box(1004, 5981, 1011, 5985),
+                  box(1012, 5986, 1016, 5990), box(1025, 5960, 1030, 5970)]
+    payload = _annotation()
+    payload["features"] = [{"type": "Feature", "id": str(index), "properties": {}, "geometry": mapping(geometry)}
+                           for index, geometry in enumerate(geometries)]
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.write(path, path.name)
+        archive.writestr("общая.geojson", json.dumps(payload))
+    expected = pixels[3].copy()
+    expected[:, 1:7] = 0
+    expected[250:270, 7:10] = 0
+    return buffer.getvalue(), pixels, expected
+
+
+def test_archive_opaque_white_exterior_is_nodata_but_white_roof_is_retained(manual_client, monkeypatch, tmp_path):
+    from mlsystem2.training_ui_api import _test_sample_editor as editor
+
+    client, config, sample = manual_client
+    original_dataset = editor._dataset
+    monkeypatch.setattr(editor, "_dataset", lambda *args: original_dataset(*args).model_copy(update={"imagery_type": ImageryType.ORTHO}))
+    content, pixels, expected = _white_background_archive(tmp_path)
+    response = _upload_archive(client, sample, content)
+    assert response.status_code == 200, response.text
+    root = config.stored_files_root / "test-samples" / sample["id"]
+    with rasterio.open(root / "tile_001.tif") as image, rasterio.open(root / "tile_001_mask.png") as mask:
+        np.testing.assert_array_equal(image.read(), pixels[:3])
+        np.testing.assert_array_equal(image.dataset_mask(), expected)
+        reduced = image.dataset_mask(out_shape=(272, 16))
+        assert not reduced[:, :3].any()
+        assert np.all(reduced[5:7, 6:8] == 255)
+        assert not np.any(mask.read(1)[expected == 0])
+        assert np.all(mask.read(1)[10:14, 12:16] == 1)
+    detail = client.get(f"/api/v1/test-samples/{sample['id']}/editor/scenes/tile_001.geojson").json()
+    features = {feature["id"]: shape(feature["geometry"]) for feature in detail["geojson"]["features"]}
+    assert set(features) == {"1", "2", "3"}
+    assert features["1"].equals(box(1007, 5981, 1011, 5985))
+    assert features["2"].equals(box(1012, 5986, 1016, 5990))
+    with create_session_factory(config)() as session:
+        assert session.scalars(select(JobRow)).all() == []
+
+
+def test_publish_repairs_old_white_background_without_mutating_storage_snapshot(manual_client, monkeypatch, tmp_path):
+    from mlsystem2.training_ui_api import _test_sample_editor as editor
+
+    client, config, sample = manual_client
+    original_dataset = editor._dataset
+    monkeypatch.setattr(editor, "_dataset", lambda *args: original_dataset(*args).model_copy(update={"imagery_type": ImageryType.ORTHO}))
+    content, pixels, expected = _white_background_archive(tmp_path)
+    with monkeypatch.context() as old_import:
+        old_import.setattr(editor, "normalize_ortho_background", lambda path: None)
+        response = _upload_archive(client, sample, content)
+        assert response.status_code == 200, response.text
+    root = config.stored_files_root / "test-samples" / sample["id"]
+    image_path = root / "tile_001.tif"
+    previous_sample = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    with create_session_factory(config)() as session:
+        previous_tile_ids = [tile.id for tile in session.get(SampleRow, uuid.UUID(sample["id"])).tiles]
+    snapshot = tmp_path / "снимок_прежней_оценки.tif"
+    os.link(image_path, snapshot)
+    snapshot_digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    base = f"/api/v1/test-samples/{sample['id']}/editor"
+    detail = client.get(base + "/scenes/tile_001.geojson").json()
+    response = client.put(base + "/drafts/tile_001.geojson", json={"base_revision": detail["scene"]["revision"], "geojson": detail["geojson"]})
+    assert response.status_code == 200, response.text
+
+    # Ошибка после подмены staging не должна менять опубликованный TIFF или снимок F1.
+    with create_session_factory(config)() as session:
+        with pytest.raises(RuntimeError, match="Отмена публикации"):
+            with sample_editor_publish(session, config, uuid.UUID(sample["id"]), "mluser"):
+                raise RuntimeError("Отмена публикации")
+        session.rollback()
+    with rasterio.open(image_path) as old:
+        np.testing.assert_array_equal(old.dataset_mask(), pixels[3])
+    response = client.post(base + "/drafts/publish")
+    assert response.status_code == 200, response.text
+    assert hashlib.sha256(snapshot.read_bytes()).hexdigest() == snapshot_digest
+    with rasterio.open(image_path) as image:
+        np.testing.assert_array_equal(image.dataset_mask(), expected)
+        np.testing.assert_array_equal(image.read(), pixels[:3])
+        assert image.transform == from_origin(1000, 6000, 1, 1)
+    after = client.get(f"/api/v1/test-samples/{sample['id']}").json()
+    assert after["content_revision"] == previous_sample["content_revision"] + 1
+    assert after["actual_object_count"] == 3
+    with create_session_factory(config)() as session:
+        assert [tile.id for tile in session.get(SampleRow, uuid.UUID(sample["id"])).tiles] == previous_tile_ids
+        assert session.scalars(select(JobRow)).all() == []
+
+
+@pytest.mark.parametrize("seed", [42, 43, 44])
+def test_strip_background_connectivity_matches_whole_raster_oracle(tmp_path, monkeypatch, seed):
+    from scipy.ndimage import binary_propagation
+    from mlsystem2.training_ui_api import _raster_valid_data as validity
+
+    monkeypatch.setattr(validity, "_BACKGROUND_STRIP_ROWS", 4)
+    random = np.random.default_rng(seed)
+    pixels = np.full((3, 35, 27), 128, dtype="uint8")
+    white = random.random((35, 27)) < 0.55
+    pixels[:, white] = 255
+    mask = np.where(random.random(white.shape) < 0.1, 0, 255).astype("uint8")
+    candidates = white | (mask == 0)
+    seeds = np.zeros_like(candidates)
+    seeds[[0, -1], :] = candidates[[0, -1], :]
+    seeds[:, [0, -1]] = candidates[:, [0, -1]]
+    expected = mask.copy()
+    expected[binary_propagation(seeds, mask=candidates)] = 0
+    path = tmp_path / "проверка_связности.tif"
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), rasterio.open(path, "w", driver="GTiff", width=27, height=35,
+                       count=3, dtype="uint8", crs="EPSG:3857", transform=from_origin(0, 35, 1, 1)) as image:
+        image.write(pixels)
+        image.write_mask(mask)
+    validity.normalize_ortho_background(path)
+    with rasterio.open(path) as image:
+        np.testing.assert_array_equal(image.read(), pixels)
+        np.testing.assert_array_equal(image.dataset_mask(), expected)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    validity.normalize_ortho_background(path)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+
 def test_manual_annotations_draft_publish_and_archive_do_not_change_source(manual_client):
     client, config, sample = manual_client
     source = config.images_root / "kanopus/region_a/scene_a.tif"
@@ -506,6 +641,7 @@ def test_manual_network_recalculation_is_idempotent_and_catalog_does_not_queue(m
 def test_manual_raster_preserves_nir_or_converts_alpha_to_mask(tmp_path, imagery):
     source_path, target_path = tmp_path / "исходный.tif", tmp_path / "подготовленный.tif"
     data = np.full((4, 32, 32), 100, dtype="uint8")
+    data[:3, :4, :4] = 255
     data[3] = 0 if imagery == ImageryType.KANOPUS else 255
     if imagery == ImageryType.ORTHO:
         data[3, :4, :4] = 0

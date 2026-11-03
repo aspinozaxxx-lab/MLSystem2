@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from array import array
 from functools import lru_cache
 from pathlib import Path
+import shutil
+import uuid
 
 from affine import Affine
 from rasterio.enums import ColorInterp, Resampling
@@ -12,6 +15,8 @@ from rasterio.enums import ColorInterp, Resampling
 import numpy as np
 import rasterio
 from rasterio.features import shapes
+from rasterio.windows import Window
+from scipy.ndimage import label
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.affinity import affine_transform
@@ -22,6 +27,97 @@ from shapely.validation import make_valid
 _VALID_FOOTPRINT_MAX_SIDE = 4096
 _VALID_FOOTPRINT_SIMPLIFY_CELLS = 0.75
 _EDITOR_CLIPPING_SIMPLIFY_PIXELS = 1.0
+_ORTHO_MASK_TAG = "MLSYSTEM2_ORTHO_VALID_MASK"
+_ORTHO_MASK_VERSION = "exterior_white_4_connected_v1"
+_BACKGROUND_STRIP_ROWS = 256
+
+
+def normalize_ortho_background(image_path: Path) -> None:
+    """Исключить непрозрачную белую подложку, сохранив белые объекты внутри снимка.
+
+    Два прохода полосами сохраняют нативную сетку без полной RGB-копии в памяти.
+    Связность через существующий nodata учитывается между полосами; диагонального
+    касания недостаточно. Перед записью разрывается hardlink staging-каталога.
+    """
+    parents = array("q", [0])
+
+    def root(position):
+        while parents[position] != position:
+            parents[position] = parents[parents[position]]
+            position = parents[position]
+        return position
+
+    def join(first, second):
+        first, second = root(int(first)), root(int(second))
+        parents[max(first, second)] = min(first, second)
+
+    strips = []
+    previous_bottom = None
+    with rasterio.open(image_path) as source:
+        if source.tags().get(_ORTHO_MASK_TAG) == _ORTHO_MASK_VERSION:
+            return
+        for y in range(0, source.height, _BACKGROUND_STRIP_ROWS):
+            window = Window(0, y, source.width, min(_BACKGROUND_STRIP_ROWS, source.height - y))
+            mask, white, components = _ortho_background_components(source, window)
+            boundary = np.unique(np.concatenate((components[0], components[-1], components[:, 0], components[:, -1])))
+            boundary = boundary[boundary != 0]
+            first = len(parents)
+            parents.extend(range(first, first + len(boundary)))
+            identifiers = np.arange(first, first + len(boundary), dtype=np.int64)
+
+            def edge_ids(edge):
+                result = np.zeros(edge.shape, dtype=np.int64)
+                positive = edge != 0
+                result[positive] = identifiers[np.searchsorted(boundary, edge[positive])]
+                return result
+
+            top, bottom = edge_ids(components[0]), edge_ids(components[-1])
+            outside = np.concatenate((edge_ids(components[:, 0]), edge_ids(components[:, -1]),
+                                      top if y == 0 else [],
+                                      bottom if y + window.height == source.height else []))
+            for identifier in np.unique(outside):
+                if identifier:
+                    join(0, identifier)
+            if previous_bottom is not None:
+                connected = (top != 0) & (previous_bottom != 0)
+                for first_id, second_id in np.unique(np.stack((top[connected], previous_bottom[connected]), axis=1), axis=0):
+                    join(first_id, second_id)
+            previous_bottom = bottom
+            white_labels = np.intersect1d(boundary, np.unique(components[white & (mask != 0)]))
+            strips.append((window, boundary, identifiers, white_labels))
+
+    exterior = np.fromiter((root(position) == 0 for position in range(len(parents))), dtype=bool)
+    changed = any(bool(np.any(exterior[identifiers[np.searchsorted(boundary, white_labels)]]))
+                  for _, boundary, identifiers, white_labels in strips)
+    shared = image_path.stat().st_nlink > 1
+    if shared and not changed:
+        return
+    if shared:
+        temporary = image_path.with_name(f".mask-{uuid.uuid4().hex}.tif")
+        try:
+            shutil.copyfile(image_path, temporary)
+            temporary.replace(image_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), rasterio.open(image_path, "r+") as target:
+        if changed:
+            for window, boundary, identifiers, _ in strips:
+                mask, _, components = _ortho_background_components(target, window)
+                outside = boundary[exterior[identifiers]]
+                mask[np.isin(components, outside)] = 0
+                target.write_mask(mask, window=window)
+            # Иначе уменьшенные маски могут продолжать показывать прежнюю подложку.
+            factors = target.overviews(1)
+            if factors:
+                target.build_overviews(factors, Resampling.average)
+        target.update_tags(**{_ORTHO_MASK_TAG: _ORTHO_MASK_VERSION})
+
+
+def _ortho_background_components(dataset, window):
+    mask = dataset.dataset_mask(window=window)
+    white = np.all(dataset.read((1, 2, 3), window=window) == 255, axis=0)
+    components, _ = label(white | (mask == 0))
+    return mask, white, components
 
 
 def valid_data_footprint(image_path: Path) -> BaseGeometry:

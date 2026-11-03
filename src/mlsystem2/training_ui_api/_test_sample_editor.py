@@ -34,7 +34,9 @@ from ._datasets import imagery_images_dir
 from ._markup_export import _write_png
 from ._markup_lock import test_sample_storage_lock
 from ._models import DatasetEditorDraftRow, TestSampleRow, TestSampleTileRow
-from ._raster_valid_data import clip_geometries_to_valid_data, editor_clipping_footprint
+from ._raster_valid_data import (
+    clip_geometries_to_valid_data, editor_clipping_footprint, normalize_ortho_background,
+)
 from . import _test_sample_sources as sources
 from ._test_samples import (
     _clear_test_sample_tile_f1, _mark_test_sample_evaluation_stale,
@@ -313,6 +315,8 @@ def _copy_image(source_path, target_path, imagery):
                 output.build_overviews(factors, Resampling.average)
             output.descriptions = source.descriptions[:count]
             output.colorinterp = source.colorinterp[:count]
+    if imagery == ImageryType.ORTHO:
+        normalize_ortho_background(target_path)
 
 
 def _write_mask(root, tile, payload, schema):
@@ -395,13 +399,14 @@ def sample_editor_publish(session, config, sample_id, username, *, images=None, 
                     for path in stage.glob(f"tile_{tile.tile_index:03d}_*"):
                         path.unlink()
                     continue
-                normalized = _normalize(payload, {}, dataset, image, clip=uploaded_images is None)
-                if uploaded_images is not None:
-                    # Для готового эталона нужна точная маска, а не упрощённый контур карты.
-                    with rasterio.open(image) as raster:
-                        clipped = clip_geometries_to_valid_data(raster, [shape(f["geometry"]) for f in normalized["features"]])
-                    normalized["features"] = [{**feature, "geometry": mapping(geometry)}
-                        for feature, geometry in zip(normalized["features"], clipped) if not geometry.is_empty]
+                if dataset.imagery_type == ImageryType.ORTHO:
+                    normalize_ortho_background(image)
+                normalized = _normalize(payload, {}, dataset, image, clip=False)
+                # Опубликованный эталон всегда использует точную маску, а не контур карты.
+                with rasterio.open(image) as raster:
+                    clipped = clip_geometries_to_valid_data(raster, [shape(f["geometry"]) for f in normalized["features"]])
+                normalized["features"] = [{**feature, "geometry": mapping(geometry)}
+                    for feature, geometry in zip(normalized["features"], clipped) if not geometry.is_empty]
                 _write_geojson_atomic(stage / _tile_name(tile), normalized)
                 _write_mask(stage, tile, normalized, sample.class_schema or [])
                 tile.object_count = len(normalized["features"])
