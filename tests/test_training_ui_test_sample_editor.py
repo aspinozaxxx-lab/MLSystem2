@@ -428,6 +428,37 @@ def test_publish_repairs_old_white_background_without_mutating_storage_snapshot(
         assert session.scalars(select(JobRow)).all() == []
 
 
+def test_saving_unchanged_draft_preserves_native_mask_boundary_pixels(manual_client, monkeypatch, tmp_path):
+    from mlsystem2.training_ui_api import _test_sample_editor as editor
+
+    client, config, sample = manual_client
+    original_dataset = editor._dataset
+    monkeypatch.setattr(editor, "_dataset", lambda *args: original_dataset(*args).model_copy(update={"imagery_type": ImageryType.ORTHO}))
+    pixels = np.full((4, 32, 32), 128, dtype="uint8")
+    pixels[3] = 0
+    pixels[3, 8:24, 8:24] = 255
+    pixels[3, 7, 15] = 255
+    path = tmp_path / "неровная_граница.tif"
+    with rasterio.open(path, "w", driver="GTiff", width=32, height=32, count=4, dtype="uint8", ALPHA="YES",
+                       crs="EPSG:3857", transform=from_origin(1000, 6000, 1, 1)) as image:
+        image.write(pixels)
+        image.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.write(path, path.name)
+        archive.writestr("общая.geojson", json.dumps(_annotation(box(1000, 5968, 1032, 6000))))
+    response = _upload_archive(client, sample, buffer.getvalue())
+    assert response.status_code == 200, response.text
+    base = f"/api/v1/test-samples/{sample['id']}/editor"
+    detail = client.get(base + "/scenes/tile_001.geojson").json()
+    response = client.put(base + "/drafts/tile_001.geojson", json={"base_revision": detail["scene"]["revision"], "geojson": detail["geojson"]})
+    assert response.status_code == 200, response.text
+    response = client.post(base + "/drafts/publish")
+    assert response.status_code == 200, response.text
+    with rasterio.open(config.stored_files_root / "test-samples" / sample["id"] / "tile_001_mask.png") as mask:
+        np.testing.assert_array_equal(mask.read(1) > 0, pixels[3] > 0)
+
+
 @pytest.mark.parametrize("seed", [42, 43, 44])
 def test_strip_background_connectivity_matches_whole_raster_oracle(tmp_path, monkeypatch, seed):
     from scipy.ndimage import binary_propagation

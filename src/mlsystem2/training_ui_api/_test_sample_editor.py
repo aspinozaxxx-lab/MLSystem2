@@ -23,7 +23,7 @@ from sqlalchemy import select
 from ._dataset_catalog import dataset_class_row, find_managed_dataset
 from ._dataset_editor import (
     DatasetEditorConflict, DatasetEditorImportClippingRequired,
-    _clip_geojson_to_footprint, _dataset_images_root, _draft_info, _draft_summary, _empty_annotation_payload,
+    _dataset_images_root, _draft_info, _draft_summary, _empty_annotation_payload,
     _file_revision, _footprint_covers_geometry, _image_path_for_annotation,
     _normalize_editor_geojson, _read_geojson, _safe_annotation_name, _safe_raster_path,
     _reproject_editor_geojson,
@@ -189,10 +189,19 @@ def _normalize(payload, previous, dataset, image, *, clip=True, allow_invalid=Fa
         raise TrainingUIAPIError("ID объектов не должны повторяться.")
     candidate = _reproject_editor_geojson(candidate, image)
     normalized = _normalize_editor_geojson(candidate, previous, dataset, image_path=image)
+    _validate_editor_geojson(normalized, image, dataset, check_footprint=False, allow_repair=allow_invalid)
     if clip:
-        normalized = _clip_geojson_to_footprint(normalized, editor_clipping_footprint(image))
-    _validate_editor_geojson(normalized, image, dataset,
-                             check_footprint=clip and not allow_invalid, allow_repair=allow_invalid)
+        geometries = [shape(feature["geometry"]) for feature in normalized["features"]]
+        # Промежуточные запутанные контуры черновика сохраняются для ручного исправления.
+        positions = [position for position, geometry in enumerate(geometries) if geometry.is_valid]
+        with rasterio.open(image) as raster:
+            clipped = clip_geometries_to_valid_data(raster, [geometries[position] for position in positions])
+        by_position = dict(zip(positions, clipped))
+        normalized["features"] = [feature if position not in by_position else
+            {**feature, "geometry": mapping(by_position[position])}
+            for position, feature in enumerate(normalized["features"])
+            if position not in by_position or not by_position[position].is_empty]
+        _validate_editor_geojson(normalized, image, dataset, check_footprint=False, allow_repair=allow_invalid)
     return normalized
 
 
@@ -401,12 +410,7 @@ def sample_editor_publish(session, config, sample_id, username, *, images=None, 
                     continue
                 if dataset.imagery_type == ImageryType.ORTHO:
                     normalize_ortho_background(image)
-                normalized = _normalize(payload, {}, dataset, image, clip=False)
-                # Опубликованный эталон всегда использует точную маску, а не контур карты.
-                with rasterio.open(image) as raster:
-                    clipped = clip_geometries_to_valid_data(raster, [shape(f["geometry"]) for f in normalized["features"]])
-                normalized["features"] = [{**feature, "geometry": mapping(geometry)}
-                    for feature, geometry in zip(normalized["features"], clipped) if not geometry.is_empty]
+                normalized = _normalize(payload, {}, dataset, image)
                 _write_geojson_atomic(stage / _tile_name(tile), normalized)
                 _write_mask(stage, tile, normalized, sample.class_schema or [])
                 tile.object_count = len(normalized["features"])
