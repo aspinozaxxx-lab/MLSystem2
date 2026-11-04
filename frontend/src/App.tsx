@@ -1327,11 +1327,12 @@ function TestSampleEditorPage({
     }
   };
 
-  const download = async (layout: TestSampleAnnotationLayout): Promise<boolean> => {
+  const download = async (layout: TestSampleAnnotationLayout, includeImages: boolean): Promise<boolean> => {
     if (!sample || !draft) return false;
     const request: TestSampleDownloadRequest = {
       enabled_tile_indices: draft.enabledTileIndices,
       annotation_layout: layout,
+      include_images: includeImages,
     };
     setDownloading(true);
     try {

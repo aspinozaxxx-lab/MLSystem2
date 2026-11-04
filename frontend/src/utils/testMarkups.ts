@@ -4,8 +4,16 @@ import type {
   TestSampleCatalogResponse,
   TestSampleDetail,
   TestSampleDraftPreview,
+  TestSampleDownloadRequest,
   TestSampleSummary,
 } from "../api/types";
+
+export function testSampleDownloadUrl(
+  sampleId: string, layout: TestSampleDownloadRequest["annotation_layout"] = "single", includeImages = false,
+): string {
+  const query = new URLSearchParams({ annotation_layout: layout, include_images: String(includeImages) });
+  return `/test-samples/${encodeURIComponent(sampleId)}/download?${query}`;
+}
 
 export type TestMarkupDraft = {
   name: string;

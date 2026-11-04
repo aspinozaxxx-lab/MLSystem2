@@ -102,7 +102,7 @@ def test_class_catalog_versions_and_mixed_publication(region_sample):
         assert image.dataset_mask().sum() > 0
     polygons = json.loads((root / "tile_002.geojson").read_text(encoding="utf-8"))["features"]
     assert all(f["properties"]["_mlsystem2_role"] == "positive" and shape(f["geometry"]).is_valid for f in polygons)
-    downloaded = client.get(after["download_url"])
+    downloaded = client.get(after["download_url"], params={"include_images": True})
     assert downloaded.status_code == 200, downloaded.text
     with ZipFile(BytesIO(downloaded.content)) as archive:
         assert len([n for n in archive.namelist() if n.endswith(".tif")]) == 2

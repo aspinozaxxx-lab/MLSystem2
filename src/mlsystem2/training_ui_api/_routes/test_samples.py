@@ -552,11 +552,13 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
     def download_test_sample(
         sample_id: uuid.UUID,
         annotation_layout: Literal["per_image", "single"] = "single",
+        include_images: bool = False,
         db: Session = Depends(ctx.get_db),
         _: str = Depends(ctx.authenticated),
     ) -> FileResponse:
         artifact = _sample_or_404(lambda: build_test_sample_download(
             db, sample_id, ctx.config, annotation_layout=annotation_layout,
+            include_images=include_images,
         ))
         return FileResponse(
             artifact.path,
@@ -588,6 +590,7 @@ def register_test_sample_routes(app: FastAPI, ctx: RouteContext) -> None:
                 ctx.config,
                 enabled_tile_indices=request.enabled_tile_indices,
                 annotation_layout=request.annotation_layout,
+                include_images=request.include_images,
             )
         )
         return FileResponse(

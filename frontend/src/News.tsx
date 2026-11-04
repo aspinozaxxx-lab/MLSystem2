@@ -15,6 +15,14 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [
 {
+  slug: "test-markup-download-without-images",
+  date: "2026-11-04",
+  title: "Тестовые разметки скачиваются без снимков по умолчанию",
+  updates: [
+    "При скачивании тестовой разметки архив по умолчанию содержит только GeoJSON. Доступны общий файл и отдельные файлы по снимкам. Чтобы скачать полный комплект, включите флажок «Добавить снимки TIFF» в том же окне.",
+  ],
+},
+{
   slug: "training-continuation-class-data",
   date: "2026-11-04",
   title: "Дообучение на данных класса: выбирайте датасет или тестовую разметку",

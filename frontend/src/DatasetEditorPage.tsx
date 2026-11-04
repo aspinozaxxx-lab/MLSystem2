@@ -56,6 +56,7 @@ import { ApiError, apiDownloadGet, apiForm, apiJson, downloadBlob, type UploadPr
 import type { AnnotationVersionCatalog, AnnotationVersionDetail, AnnotationVersionDraft } from "./api/types";
 import { DatasetAnnotationVersions } from "./DatasetAnnotationVersions";
 import { TestSampleDownloadOptionsForm, type TestSampleAnnotationLayout } from "./TestSampleDownloadOptions";
+import { testSampleDownloadUrl } from "./utils/testMarkups";
 import { createTestRegionObjectCounter, resizeTestRegion, squareTestRegion, testRegionObjectCountStyle, testRegions, testRegionSize, translateTestRegion, TEST_REGION_SIZES } from "./utils/testRegions";
 import { DatasetPolygonHistory, type PolygonHistoryPreview } from "./DatasetPolygonHistory";
 import { useRememberedClass } from "./ClassNavigation";
@@ -2153,12 +2154,12 @@ export function DatasetEditorPage({
     setBandMenuOpen(false);
   };
 
-  const downloadDataset = async (layout: TestSampleAnnotationLayout = "single"): Promise<boolean> => {
+  const downloadDataset = async (layout: TestSampleAnnotationLayout = "single", includeImages = false): Promise<boolean> => {
     if (!datasetKey || downloading) return false;
     setDownloading(true);
     try {
       const result = await run(() =>
-        apiDownloadGet(testSampleId ? `/test-samples/${testSampleId}/download?annotation_layout=${layout}` : `${editorPath(datasetKey)}/download`),
+        apiDownloadGet(testSampleId ? testSampleDownloadUrl(testSampleId, layout, includeImages) : `${editorPath(datasetKey)}/download`),
       );
       if (result) downloadBlob(result.blob, result.filename || "датасет.zip");
       return Boolean(result);
@@ -2422,7 +2423,7 @@ export function DatasetEditorPage({
           type="button"
           disabled={busy || downloading || !datasetKey || Boolean(testSampleId && !scenes.length) || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
           aria-label={downloading ? "Скачивание разметки" : testSampleId ? "Скачать тестовую разметку" : "Скачать датасет"}
-          title={testSampleId ? "Скачать опубликованные TIFF и GeoJSON тестовой разметки" : "Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"}
+          title={testSampleId ? "Скачать опубликованную тестовую разметку: GeoJSON, снимки TIFF по выбору" : "Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"}
           onClick={() => testSampleId ? setDownloadOpen(true) : void downloadDataset()}
         >
           <Download size={16} /><span className="compact-control-label">{downloading ? "Скачивание…" : testSampleId ? "Скачать разметку" : "Скачать датасет"}</span>

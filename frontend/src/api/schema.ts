@@ -5236,6 +5236,11 @@ export interface components {
              * @enum {string}
              */
             annotation_layout: "per_image" | "single";
+            /**
+             * Include Images
+             * @default false
+             */
+            include_images: boolean;
         };
         /** TestSampleDraftPreview */
         TestSampleDraftPreview: {
@@ -9010,6 +9015,7 @@ export interface operations {
         parameters: {
             query?: {
                 annotation_layout?: "per_image" | "single";
+                include_images?: boolean;
             };
             header?: never;
             path: {

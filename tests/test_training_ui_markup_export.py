@@ -1865,6 +1865,9 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         ]["get"]["responses"]["200"]["content"]
         assert set(thumbnail_contract) == {"image/jpeg"}
         assert "post" in openapi["paths"]["/api/v1/test-samples/{sample_id}/download"]
+        assert openapi["components"]["schemas"]["TestSampleDownloadRequest"]["properties"]["include_images"]["default"] is False
+        download_parameters = openapi["paths"]["/api/v1/test-samples/{sample_id}/download"]["get"]["parameters"]
+        assert next(item for item in download_parameters if item["name"] == "include_images")["schema"]["default"] is False
         assert "/api/v1/test-samples/download" not in openapi["paths"]
         assert "TestSampleBulkDownloadRequest" not in openapi["components"]["schemas"]
         assert (
@@ -1986,15 +1989,25 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         assert archive_response.status_code == 200
         with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
             names = set(archive.namelist())
-            assert names == {"tile001.tif", "markup.geojson"}
-            assert archive.read("tile001.tif") == (sample_root / "tile_002.tif").read_bytes()
+            assert names == {"markup.geojson"}
             assert json.loads(archive.read("markup.geojson"))["features"]
         for query in ("per_image", "single"):
-            response = client.get(toggled["download_url"], params={"annotation_layout": query})
-            assert response.status_code == 200
-            with zipfile.ZipFile(BytesIO(response.content)) as archive:
-                annotation = "markup.geojson" if query == "single" else "tile001.geojson"
-                assert set(archive.namelist()) == {"tile001.tif", annotation}
+            for include_images in (False, True):
+                response = client.get(toggled["download_url"], params={
+                    "annotation_layout": query, "include_images": include_images,
+                })
+                assert response.status_code == 200
+                with zipfile.ZipFile(BytesIO(response.content)) as archive:
+                    annotation = "markup.geojson" if query == "single" else "tile001.geojson"
+                    assert set(archive.namelist()) == ({annotation, "tile001.tif"} if include_images else {annotation})
+                    if include_images:
+                        assert archive.read("tile001.tif") == (sample_root / "tile_002.tif").read_bytes()
+                response = client.post(toggled["download_url"], json={
+                    "enabled_tile_indices": [2], "annotation_layout": query, "include_images": include_images,
+                })
+                assert response.status_code == 200
+                with zipfile.ZipFile(BytesIO(response.content)) as archive:
+                    assert set(archive.namelist()) == ({annotation, "tile001.tif"} if include_images else {annotation})
         assert client.get(toggled["download_url"], params={"annotation_layout": "ошибка"}).status_code == 422
         assert client.post(toggled["download_url"], json={
             "enabled_tile_indices": [2], "annotation_layout": "ошибка",
@@ -2005,9 +2018,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         )
         assert draft_archive_response.status_code == 200
         with zipfile.ZipFile(BytesIO(draft_archive_response.content)) as archive:
-            assert set(archive.namelist()) == (
-                _downloaded_tile_names("tile001") | _downloaded_tile_names("tile002")
-            )
+            assert set(archive.namelist()) == {"tile001.geojson", "tile002.geojson"}
             assert (
                 archive.read("tile001.geojson") == (sample_root / "tile_001.geojson").read_bytes()
             )
@@ -2019,11 +2030,7 @@ def test_persistent_test_sample_http_catalog_editor_and_delete(
         )
         assert draft_single.status_code == 200
         with zipfile.ZipFile(BytesIO(draft_single.content)) as archive:
-            assert set(archive.namelist()) == {
-                "tile001.tif",
-                "tile002.tif",
-                "markup.geojson",
-            }
+            assert set(archive.namelist()) == {"markup.geojson"}
         second_sample_response = client.post(
             "/api/v1/test-samples",
             json={
@@ -2811,7 +2818,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
         artifact = build_test_sample_download(session, sample_id, config)
         try:
             with zipfile.ZipFile(artifact.path) as archive:
-                assert set(archive.namelist()) == {"tile001.tif", "markup.geojson"}
+                assert set(archive.namelist()) == {"markup.geojson"}
         finally:
             artifact.cleanup()
         artifact = build_test_sample_download(
@@ -2819,6 +2826,7 @@ def test_persistent_test_sample_metrics_and_stale_revision(
             sample_id,
             config,
             annotation_layout="per_image",
+            include_images=True,
         )
         try:
             with zipfile.ZipFile(artifact.path) as archive:
@@ -3890,9 +3898,48 @@ def test_primary_sample_is_unique_and_single_zip_uses_enabled_tiles(
         artifact = build_test_sample_download(session, samples[1].id, config)
         try:
             with zipfile.ZipFile(artifact.path) as archive:
-                assert set(archive.namelist()) == {"tile001.tif", "markup.geojson"}
+                assert set(archive.namelist()) == {"markup.geojson"}
         finally:
             artifact.cleanup()
+
+
+@pytest.mark.parametrize("annotation_layout", ["single", "per_image"])
+@pytest.mark.parametrize("include_images", [False, True])
+def test_test_sample_download_without_images_does_not_require_tiff(
+    tmp_path: Path, monkeypatch, annotation_layout: str, include_images: bool,
+) -> None:
+    config = _configure_export_environment(tmp_path, monkeypatch)
+    _write_export_dataset(config.mlmarkup_root, config.images_root)
+    configure_schema(None)
+    session_factory = create_session_factory(config)
+    Base.metadata.create_all(session_factory.kw["bind"])
+    with session_factory() as session:
+        sample = create_test_sample(session, _TestSampleCreate(
+            dataset_key="Вырубки\\main", tile_width=16, tile_height=16, image_count=1, object_count=1,
+        ), config)
+        root = config.stored_files_root / _test_samples.TEST_SAMPLE_ROOT_NAME / str(sample.id)
+        annotation = (root / "tile_001.geojson").read_bytes()
+        revision = sample.content_revision
+        (root / "tile_001.tif").unlink()
+        if include_images:
+            with pytest.raises(TrainingUIAPIError, match="Файл тестового тайла не найден"):
+                build_test_sample_download(session, sample.id, config,
+                    annotation_layout=annotation_layout, include_images=True)
+        else:
+            artifact = build_test_sample_download(session, sample.id, config, annotation_layout=annotation_layout)
+            try:
+                with zipfile.ZipFile(artifact.path) as archive:
+                    name = "markup.geojson" if annotation_layout == "single" else "tile001.geojson"
+                    assert archive.namelist() == [name]
+                    if annotation_layout == "per_image":
+                        assert archive.read(name) == annotation
+                    else:
+                        assert json.loads(archive.read(name))["features"]
+            finally:
+                artifact.cleanup()
+        assert sample.content_revision == revision
+        assert (root / "tile_001.geojson").read_bytes() == annotation
+    assert not list((config.scratch_root / _test_samples.TEST_SAMPLE_DOWNLOAD_ROOT_NAME).glob("*.zip"))
 
 
 def test_test_sample_download_removes_partial_archive_when_annotation_is_missing(
@@ -4404,7 +4451,7 @@ def test_annotations_merge_preserves_snapshot_and_is_idempotent(annotation_merge
     assert repeated.json()["id"] == updated["id"]
     assert queued == []
     archive_response = client.post(updated["download_url"], json={
-        "enabled_tile_indices": [1], "annotation_layout": "per_image",
+        "enabled_tile_indices": [1], "annotation_layout": "per_image", "include_images": True,
     })
     with zipfile.ZipFile(BytesIO(archive_response.content)) as archive:
         assert len(json.loads(archive.read("tile001.geojson"))["features"]) == 1

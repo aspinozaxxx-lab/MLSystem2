@@ -4032,6 +4032,16 @@
               "default": "single",
               "title": "Annotation Layout"
             }
+          },
+          {
+            "name": "include_images",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Images"
+            }
           }
         ],
         "responses": {
@@ -14517,6 +14527,11 @@
             ],
             "title": "Annotation Layout",
             "default": "single"
+          },
+          "include_images": {
+            "type": "boolean",
+            "title": "Include Images",
+            "default": false
           }
         },
         "additionalProperties": false,

@@ -96,7 +96,7 @@ def test_download_can_be_imported_with_same_pixels_masks_and_coverage(manual_cli
     source = config.stored_files_root / "test-samples" / sample["id"]
     before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in source.iterdir() if path.is_file()}
     saved = client.get(f"/api/v1/test-samples/{sample['id']}").json()
-    params = {"annotation_layout": layout} if layout == "per_image" else {}
+    params = {"annotation_layout": layout, "include_images": True}
     download = client.get(saved["download_url"], params=params)
     assert download.status_code == 200, download.text
     with zipfile.ZipFile(BytesIO(download.content)) as archive:
@@ -158,7 +158,7 @@ def test_archive_import_preserves_pixels_polygons_holes_and_editor_lifecycle(man
     updated = client.get(f"/api/v1/test-samples/{sample['id']}").json()
     assert updated["image_count"] == updated["actual_object_count"] == 1
     assert client.get(updated["tiles"][0]["thumbnail_url"]).status_code == 200
-    download = client.get(updated["download_url"])
+    download = client.get(updated["download_url"], params={"include_images": True})
     assert download.status_code == 200
     with zipfile.ZipFile(BytesIO(download.content)) as archive:
         assert len([name for name in archive.namelist() if name.endswith(".tif")]) == 1

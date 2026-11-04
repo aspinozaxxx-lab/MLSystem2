@@ -16,7 +16,17 @@ import {
   testMarkupDraft,
   testMarkupDraftChanged,
   testMarkupStats,
+  testSampleDownloadUrl,
 } from "./testMarkups";
+
+describe("параметры выгрузки тестовой разметки из редактора", () => {
+  it("по умолчанию запрашивает общий GeoJSON без снимков", () => {
+    expect(testSampleDownloadUrl("набор/1")).toBe("/test-samples/%D0%BD%D0%B0%D0%B1%D0%BE%D1%80%2F1/download?annotation_layout=single&include_images=false");
+  });
+  it.each(["single", "per_image"] as const)("передаёт включение TIFF для формата %s", layout => {
+    expect(testSampleDownloadUrl("набор", layout, true)).toContain(`annotation_layout=${layout}&include_images=true`);
+  });
+});
 
 function catalog(): TestSampleCatalogResponse {
   return {

@@ -2039,6 +2039,7 @@ def build_test_sample_download(
     *,
     enabled_tile_indices: list[int] | None = None,
     annotation_layout: Literal["per_image", "single"] = "single",
+    include_images: bool = False,
 ) -> TestSampleDownloadArtifact:
     with test_sample_storage_lock(config, sample_id):
         row = _sample_row(session, sample_id)
@@ -2065,7 +2066,7 @@ def build_test_sample_download(
             ) as archive:
                 for download_index, tile in enumerate(enabled, start=1):
                     stored_base = source_root / f"tile_{tile.tile_index:03d}"
-                    for suffix in (".tif", ".geojson"):
+                    for suffix in ((".tif", ".geojson") if include_images else (".geojson",)):
                         path = stored_base.with_suffix(suffix)
                         if not path.is_file():
                             raise TrainingUIAPIError(f"Файл тестового тайла не найден: {path.name}")
