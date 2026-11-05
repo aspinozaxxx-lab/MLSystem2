@@ -526,7 +526,11 @@ def _ensure_runtime_export(
     model_digest = hashlib.sha256(model_identity).hexdigest()
     pipeline_identity = json.dumps(
         {
-            "pipeline_contract": 9 if config.get("pipeline_variant") == "object_f1_v2" else 5 if external_oks else 4,
+            "pipeline_contract": (
+                9 if config.get("pipeline_variant") == "object_f1_v2"
+                else 5 if external_oks or config.get("pipeline_variant") in {"next_gen2", "next_gen3"}
+                else 4
+            ),
             **(_object_inference_metadata(config.get("pipeline_variant"))
                if config.get("pipeline_variant") in {"next_gen2", "next_gen3"} else {}),
             **({"batch_size": int(config.get("batch_size") or 1)}
@@ -556,6 +560,7 @@ def _ensure_runtime_export(
         and model_marker_path.is_file()
     ):
         model_marker = json.loads(model_marker_path.read_text(encoding="utf-8"))
+        cached_variant = model_marker.get("pipeline_variant", config.get("pipeline_variant"))
         if model_marker.get("identity_sha256") != model_digest:
             raise RuntimeError("Кеш Geoalert содержит модель с несовпадающей идентичностью.")
         if not pipeline_path.is_file() or not marker_path.is_file():
@@ -579,8 +584,8 @@ def _ensure_runtime_export(
                 ),
                 external_manifest=external_manifest,
                 probability_output=model_marker.get("output_kind") in {"probabilities", "object_probabilities"},
-                pad_edges=model_marker.get("pipeline_variant") in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"},
-                shift_edges=model_marker.get("pipeline_variant") in {"next_gen2", "next_gen3"},
+                pad_edges=cached_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"},
+                shift_edges=cached_variant in {"next_gen2", "next_gen3"},
                 object_output=model_marker.get("output_kind") == "object_probabilities",
                 object_separation=model_marker.get("object_separation"),
                 threshold=(
@@ -671,6 +676,7 @@ def _ensure_runtime_export(
                 "class_schema": list(metadata.get("class_schema") or []),
                 "task": str(metadata.get("task") or "binary"),
                 "output_kind": str(metadata.get("output_kind") or "binary_masks"),
+                "pipeline_variant": str(metadata.get("pipeline_variant") or config.get("pipeline_variant") or "legacy"),
                 "object_separation": metadata.get("object_separation")
                     if metadata.get("pipeline_variant") == "object_f1_v2" else None,
                 "threshold": (

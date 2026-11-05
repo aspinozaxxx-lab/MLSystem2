@@ -578,6 +578,7 @@ def test_cached_next_gen2_keeps_probability_pipeline_after_postprocess_change(tm
         "geoalert_model_repository": str(tmp_path / "models"),
         "geoalert_pipeline_root": str(tmp_path / "pipelines"),
         "tile_size": 512, "threshold": 0.73,
+        "pipeline_variant": "next_gen2",
     }
     first = _geoalert_runner._ensure_runtime_export(
         config, checkpoint, external_manifest=None, postprocess_config={},
@@ -593,9 +594,82 @@ def test_cached_next_gen2_keeps_probability_pipeline_after_postprocess_change(tm
     assert bricks[0]["apply_mask"] is False
     assert bricks[1]["_class"] == "SlidingWindowSegmentation"
     assert bricks[1]["stride"] == 256
+    assert bricks[1]["pad_edges"] is True
+    assert bricks[1]["shift_edges"] is True
     assert bricks[2]["thresholds"] == [0.73]
     assert bricks[2]["strict_more"] is True
     assert bricks[3]["min_size"] == 16
+    marker = json.loads((tmp_path / "pipelines" / f"{first.model_name}.model.json").read_text())
+    assert marker["pipeline_variant"] == "next_gen2"
+
+
+@pytest.mark.parametrize("variant", ["next_gen2", "next_gen3"])
+def test_cached_full_windows_rebuilds_old_marker_without_reexport(tmp_path, monkeypatch, variant):
+    checkpoint = tmp_path / "checkpoint.pt"
+    checkpoint.write_bytes(b"checkpoint")
+
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                         default=str).encode("utf-8")).hexdigest()
+
+    checkpoint_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    model_digest = digest({
+        "runtime_contract": 4, "inference_profile": "notebook_valid_data_v2",
+        "checkpoint_sha256": checkpoint_sha, "tile_size": 1024, "threshold": .9,
+        "external": None, "python_site_packages": None,
+    })
+    name = f"mls_ortho_{model_digest[:24]}"
+    model_dir = tmp_path / "models" / name
+    (model_dir / "1").mkdir(parents=True)
+    (model_dir / "config.pbtxt").write_text(f'name: "{name}"')
+    onnx = model_dir / "1" / "model.onnx"
+    onnx.write_bytes(b"unchanged-onnx")
+    old_mtime = onnx.stat().st_mtime_ns
+    pipeline_root = tmp_path / "pipelines"
+    pipeline_root.mkdir()
+    model_marker = {
+        "identity_sha256": model_digest, "checkpoint_sha256": checkpoint_sha,
+        "model_name": name, "input_channels": 3, "sample_size": 1024,
+        "class_schema": [], "task": "binary", "output_kind": "probabilities",
+        "threshold": .9,
+    }
+    marker_path = pipeline_root / f"{name}.model.json"
+    marker_path.write_text(json.dumps(model_marker))
+    identity = {
+        "pipeline_contract": 4, "inference_profile": "notebook_valid_data_full_windows_v4",
+        "model_sha256": model_digest, "context": 0, "resolution_m": None,
+        "postprocess": {}, "class_schema": [],
+    }
+    old_digest = digest(identity)
+    old_pipeline = pipeline_root / f"{name}_{old_digest[:12]}.yaml"
+    old_pipeline.write_text(_model_export.build_geoalert_pipeline_yaml(
+        model_name=name, sample_size=1024, input_channels=3, probability_output=True,
+        threshold=.9, pad_edges=False, shift_edges=False,
+    ), encoding="utf-8")
+    old_bytes = old_pipeline.read_bytes()
+    old_pipeline.with_suffix(".json").write_text(json.dumps({"identity_sha256": old_digest}))
+
+    def unexpected_export(**kwargs):
+        pytest.fail("Исправление кеша окон не должно повторно экспортировать сеть")
+
+    monkeypatch.setattr(_geoalert_runner, "build_triton_model_export_zip", unexpected_export)
+    config = {"pipeline_variant": variant, "tile_size": 1024, "threshold": .9,
+              "geoalert_model_repository": str(tmp_path / "models"),
+              "geoalert_pipeline_root": str(pipeline_root)}
+    current = _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None, postprocess_config={},
+    )
+    assert current.model_name == name and current.model_dir == model_dir
+    assert current.pipeline_path != old_pipeline
+    assert current.pipeline_path.name == f"{name}_{digest({**identity, 'pipeline_contract': 5})[:12]}.yaml"
+    brick = yaml.safe_load(current.pipeline_path.read_text())["config"]["bricks"][1]
+    assert brick["pad_edges"] is True and brick["shift_edges"] is True
+    assert onnx.read_bytes() == b"unchanged-onnx" and onnx.stat().st_mtime_ns == old_mtime
+    assert old_pipeline.read_bytes() == old_bytes
+    assert json.loads(marker_path.read_text()) == model_marker
+    assert _geoalert_runner._ensure_runtime_export(
+        config, checkpoint, external_manifest=None, postprocess_config={},
+    ) == current
 
 
 def test_cached_object_v2_rebuilds_compact_pipeline_without_reexporting_model(
