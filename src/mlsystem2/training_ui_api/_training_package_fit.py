@@ -78,7 +78,10 @@ def create_evaluator(config_path):
             "pixel_f1": pixel["f1"], "pixel_precision": pixel["precision"],
             "pixel_recall": pixel["recall"], "object_f1": objects["f1"],
             "object_precision": objects["precision"], "object_recall": objects["recall"],
-            "per_scene_metrics": report["tiles"],
+            "per_scene_metrics": [
+                {"scene_id": f"tile_{int(tile['index']):03d}", **_metric_values(tile)}
+                for tile in report["tiles"]
+            ],
             "object_separation": model.spec.parameters.get("object_separation", {}),
             "package_evaluation": evaluation,
             **({"macro_pixel_f1": structured["pixel"]["macro"]["f1"],

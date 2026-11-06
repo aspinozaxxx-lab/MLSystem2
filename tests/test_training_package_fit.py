@@ -201,6 +201,24 @@ def test_fitting_preserves_batchnorm_and_disables_dropout_while_weights_learn(fi
         assert model[1].num_batches_tracked == 1
 
 
+def test_fitting_keeps_learning_when_loss_improves_despite_flat_f1(tmp_path):
+    torch = pytest.importorskip("torch")
+    torch.set_num_threads(2)
+    core = torch.nn.Conv2d(4, 1, 1)
+    model = ModelHandle(spec=ModelSpec(name="smp_segformer_b0", input_channels=4, output_channels=1), model=core)
+    images, targets = torch.ones(2, 4, 8, 8), torch.ones(2, 1, 8, 8)
+    result = _trainer.train_model(TrainRequest(
+        model=model, train_loader=[(images, targets)], val_loader=None,
+        package_evaluator=lambda *_args: _values(0.8), checkpoint_dir=str(tmp_path),
+        config=TrainConfig(epochs=8, batch_size=2, device="cpu", learning_rate=0.01,
+                           weight_decay=0, loss="bce_dice", early_stopping_patience=1),
+    ))
+    assert result.epochs_total == 8
+    assert result.history[-1].train_loss < result.history[1].train_loss
+    assert all(item.learning_rate == 0.01 for item in result.history)
+    assert result.diagnostics["checkpoint_selection"]["baseline_selected"] is True
+
+
 @pytest.mark.parametrize("precisions,selected", [([0.8, 0.8, 0.7], 0), ([0.8, 0.9, 0.7], 1)])
 def test_mlflow_roundtrip_selects_same_package_checkpoint_including_epoch_zero(tmp_path, monkeypatch, precisions, selected):
     import mlflow

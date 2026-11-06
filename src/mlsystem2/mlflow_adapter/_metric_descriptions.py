@@ -65,6 +65,11 @@ def describe_metric(name: str, context: dict[str, str]) -> dict[str, str]:
         return _entry("F1 лучших сохранённых весов на полном обучаемом пакете после рабочего инференса.",
                       "Сводка подгонки, включая исходный вариант на эпохе 0. Не независимая оценка качества на новой территории.")
     if name.startswith("fit/"):
+        parts = name.split("/")
+        if len(parts) == 4 and parts[1] == "scene" and parts[3] in SCORES:
+            meaning, purpose = SCORES[parts[3]]
+            return _entry(f"{meaning} для обучаемого снимка «{parts[2]}» после рабочего инференса.",
+                          purpose + " Показывает невыученные снимки, скрытые общим F1 пакета. Не независимая оценка.")
         field = name.removeprefix("fit/")
         for prefix, title in (("pixel_", "пиксели"), ("object_", "объекты"), ("quality_", "основная метрика")):
             if field.startswith(prefix) and field.removeprefix(prefix) in SCORES:

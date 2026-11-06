@@ -779,7 +779,7 @@ def test_continuation_on_test_sample_freezes_current_enabled_reference_and_valid
         assert child.dataset_version == f"test-sample:{env.sample_id}:r2"
         result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == child.id))
         assert result.dataset_key == "образец" and result.dataset_version == child.dataset_version
-        assert payload["train"]["learning_rate"] == 1e-5
+        assert payload["train"]["learning_rate"] == 1e-4
         assert payload["tile_preparation"] == {**env.payload["tile_preparation"], "augmentation_level": 0}
         evaluation = json.loads(Path(payload["train"]["test_package_fit_config"]).read_text(encoding="utf-8"))
         assert evaluation["test_sample_revision"] == 2

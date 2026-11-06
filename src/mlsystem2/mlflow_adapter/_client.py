@@ -440,8 +440,12 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
                 "false_positive": evaluation["quality_counts"]["fp"],
                 "false_negative": evaluation["quality_counts"]["fn"],
             }
-            for name, value in values.items():
-                mlflow.log_metric(f"fit/{name}", value, step=metrics.epoch)
+            fitting_metrics = {f"fit/{name}": value for name, value in values.items()}
+            for scene in metrics.val_per_scene_metrics:
+                scene_id = _safe_metric_component(str(scene["scene_id"]))
+                for field in ("f1", "precision", "recall"):
+                    fitting_metrics[f"fit/scene/{scene_id}/{field}"] = scene[field]
+            mlflow.log_metrics(fitting_metrics, step=metrics.epoch)
             mlflow.log_metric("train/learning_rate", metrics.learning_rate, step=metrics.epoch)
             mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
             if hasattr(mlflow, "set_tag"):

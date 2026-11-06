@@ -518,10 +518,7 @@ def build_continuation_config(
         fit_path = config.stored_files_root / "training-data" / str(row.id) / "fit_evaluation.json"
         fit_path.parent.mkdir(parents=True, exist_ok=True)
         fit_path.write_text(json.dumps(fit_config, ensure_ascii=False, indent=2), encoding="utf-8")
-        learning_rate = min(float(payload["train"].get("learning_rate") or 1e-4) * 0.1, 1e-5)
-        # Повторный этап подгонки не уменьшает LR ещё в десять раз.
-        if prior_fit_config:
-            learning_rate = min(float(payload["train"].get("learning_rate") or 1e-5), 1e-5)
+        learning_rate = min(float(previous_fit.get("original_learning_rate") or payload["train"].get("learning_rate") or 1e-4), 1e-4)
         payload["train"].update(test_package_fit_config=str(fit_path), initial_checkpoint_weights_only=True,
                                 learning_rate=learning_rate, max_train_batches_per_epoch=None,
                                 max_val_batches_per_epoch=None)

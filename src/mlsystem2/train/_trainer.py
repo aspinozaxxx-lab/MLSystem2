@@ -159,7 +159,7 @@ def train_model(
         weight_decay=config.weight_decay,
     )
     if fit_package:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=3, factor=0.5, min_lr=1e-7)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=3, factor=0.5, min_lr=1e-7)
     elif config.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="min", patience=3, factor=0.5,
@@ -184,6 +184,7 @@ def train_model(
     best_metrics: EpochMetrics | None = None
     last_validation_metrics: EpochMetrics | None = None
     patience = 0
+    best_fit_loss = float("inf")
     checkpoint_dir = _checkpoint_dir(request.checkpoint_dir)
     best_checkpoint_path = checkpoint_dir / "best.pt"
     final_checkpoint_path = checkpoint_dir / "final.pt"
@@ -283,7 +284,7 @@ def train_model(
                         current["next_background_fraction"], current["reason"],
                     )
                 if fit_package:
-                    scheduler.step(float(val["quality_f1"]))
+                    scheduler.step(float(train_epoch["loss"]))
                 elif config.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
                     scheduler.step(float(val["loss"]))
                 elif config.pipeline_variant == "next_gen":
@@ -356,6 +357,10 @@ def train_model(
                     )
                 else:
                     patience += 1
+                if fit_package and train_epoch["loss"] < best_fit_loss * (1 - 1e-4):
+                    # Строгий рабочий порог может долго скрывать обучение сложного снимка.
+                    best_fit_loss = train_epoch["loss"]
+                    patience = 0
 
                 if diagnostic_interval is not None and perf_counter() - total_started >= next_diagnostic_time:
                     elapsed = perf_counter() - total_started

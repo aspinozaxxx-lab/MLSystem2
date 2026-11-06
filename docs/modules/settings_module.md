@@ -101,4 +101,4 @@ dataset:
 
 **Подгонка тестового пакета.**
 
-TrainSettings.test_package_fit_config — путь к зафиксированной конфигурации подгонки пакета; требует initial_checkpoint_weights_only=true. В фиксированном профиле next-gen2 и производных при подгонке LR=1e-5 и augmentation_level=0 вместо обычных 1e-4 и 3. В обычном обучении ограничения прежние.
+TrainSettings.test_package_fit_config — путь к зафиксированной конфигурации подгонки пакета; требует initial_checkpoint_weights_only=true. В фиксированном профиле next-gen2 и производных при подгонке сохраняется LR исходного профиля с верхней границей 1e-4, augmentation_level=0; обычный профиль сохраняет LR=1e-4 и augmentation_level=3. В обычном обучении ограничения прежние.
