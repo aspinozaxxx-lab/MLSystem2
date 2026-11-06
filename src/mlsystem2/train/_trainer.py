@@ -234,6 +234,7 @@ def train_model(
                     config,
                     epoch,
                     pause_controller=pause_controller,
+                    **({"fitting_package": True} if fit_package else {}),
                 )
                 _ensure_finite_scalar(train_epoch["loss"], "train_loss", epoch)
                 if config.pipeline_variant == "object_f1_v2":
@@ -783,8 +784,13 @@ def _train_epoch(
     config,
     epoch: int,
     pause_controller: "_TrainingPauseController | None" = None,
+    fitting_package: bool = False,
 ) -> dict[str, float]:
-    model.train()
+    if fitting_package:
+        # Градиенты активны; статистики BatchNorm и случайные слои совпадают с инференсом.
+        model.eval()
+    else:
+        model.train()
     region_total = boundary_total = 0.0
     total_loss = 0.0
     loss_denominator = 0

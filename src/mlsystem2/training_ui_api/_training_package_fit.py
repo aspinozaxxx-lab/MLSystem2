@@ -59,6 +59,7 @@ def create_evaluator(config_path):
         quality = objects if configuration["quality_metric"] == "objects" else pixel
         evaluation = {
             "scope": "training_package", "independent": False, "epoch": epoch,
+            "module_mode": "eval_with_gradients",
             "test_sample_id": configuration["test_sample_id"],
             "test_sample_revision": configuration["test_sample_revision"],
             "inference_config_hash": configuration["inference_config_hash"],

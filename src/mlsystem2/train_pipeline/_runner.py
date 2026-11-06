@@ -745,6 +745,7 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None, *,
             scheduler={"name": "reduce_lr_on_plateau", "mode": "max", "factor": 0.5, "patience": 3, "min_lr": 1e-7},
             checkpoint_selection_metric="fit/object_f1" if settings.train.quality_metric == "objects" else "fit/pixel_f1",
             augmentation_level=0,
+            fitting_module_mode="eval_with_gradients",
         )
     return ModelSpec(
         name=settings.train.model_name,

@@ -178,6 +178,29 @@ def test_fit_metric_descriptions_are_explicit_about_training_scope():
     assert "не независимая" in describe_metric("fit/pixel_f1", {})["purpose"]
 
 
+@pytest.mark.parametrize("fitting", [True, False])
+def test_fitting_preserves_batchnorm_and_disables_dropout_while_weights_learn(fitting):
+    torch = pytest.importorskip("torch")
+    torch.set_num_threads(2)
+    model = torch.nn.Sequential(torch.nn.Conv2d(4, 4, 1), torch.nn.BatchNorm2d(4),
+                                torch.nn.Dropout2d(0.9), torch.nn.Conv2d(4, 1, 1))
+    before = {key: value.clone() for key, value in model.state_dict().items()}
+    images, target = torch.randn(2, 4, 8, 8) + 10, torch.ones(2, 1, 8, 8)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    config = TrainConfig(epochs=1, batch_size=2, device="cpu", learning_rate=1e-3,
+                         weight_decay=0, loss="bce_dice", early_stopping_patience=2)
+    _trainer._train_epoch(torch, model, [(images, target)], optimizer, torch.device("cpu"),
+                          config, 1, fitting_package=fitting)
+    assert model.training is not fitting and model[2].training is not fitting
+    assert not torch.equal(before["0.weight"], model[0].weight)
+    assert model[0].weight.grad is not None
+    if fitting:
+        for key in ("1.running_mean", "1.running_var", "1.num_batches_tracked"):
+            assert torch.equal(before[key], model.state_dict()[key])
+    else:
+        assert model[1].num_batches_tracked == 1
+
+
 @pytest.mark.parametrize("precisions,selected", [([0.8, 0.8, 0.7], 0), ([0.8, 0.9, 0.7], 1)])
 def test_mlflow_roundtrip_selects_same_package_checkpoint_including_epoch_zero(tmp_path, monkeypatch, precisions, selected):
     import mlflow
