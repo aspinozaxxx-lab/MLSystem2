@@ -725,6 +725,10 @@ def training_sample(saved_training, request):
             "features": [{"type": "Feature", "id": "эталон", "properties": {"_mlsystem2_role": "positive"},
                           "geometry": mapping(box(4, 4, 10, 10))}],
         }), encoding="utf-8")
+        from PIL import Image
+        reference = np.zeros((16, 16), dtype=np.uint8)
+        reference[6:12, 4:10] = 1
+        Image.fromarray(reference).save(root / f"tile_{index:03d}_mask.png")
     env.payload["train"]["input_channels"] = channels
     (env.source_dir / "run.yml").write_text(yaml.safe_dump(env.payload, allow_unicode=True), encoding="utf-8")
     with env.factory() as session:
@@ -775,8 +779,13 @@ def test_continuation_on_test_sample_freezes_current_enabled_reference_and_valid
         assert child.dataset_version == f"test-sample:{env.sample_id}:r2"
         result = session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == child.id))
         assert result.dataset_key == "образец" and result.dataset_version == child.dataset_version
-        assert payload["train"]["learning_rate"] == env.payload["train"]["learning_rate"]
-        assert payload["tile_preparation"] == env.payload["tile_preparation"]
+        assert payload["train"]["learning_rate"] == 1e-5
+        assert payload["tile_preparation"] == {**env.payload["tile_preparation"], "augmentation_level": 0}
+        evaluation = json.loads(Path(payload["train"]["test_package_fit_config"]).read_text(encoding="utf-8"))
+        assert evaluation["test_sample_revision"] == 2
+        assert [tile["index"] for tile in evaluation["tiles"]] == [1]
+        assert Path(evaluation["tiles"][0]["mask_path"]).is_file()
+        assert evaluation["inference_template_id"] is not None
         assert Path(payload["train"]["initial_checkpoint_uri"]).read_bytes() == continuation.BEST_ARTIFACT.encode()
         session.commit()
         session.delete(sample)
@@ -789,6 +798,45 @@ def test_continuation_on_test_sample_freezes_current_enabled_reference_and_valid
     info = next(item for item in infos if item["job_id"] == response.json()["id"])
     assert info["continued_from_data_name"] == "Эталон после правки"
     assert info["training_test_sample_names"] == ["Эталон после правки"]
+    assert info["evaluation_scope"] == "training_package"
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_explicit_and_historical_split_keep_old_test_sample_training(training_sample, historical):
+    env = training_sample
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=_request(
+        dataset_source="test_sample", test_sample_id=str(env.sample_id), test_sample_training_mode="split",
+        run_inference_after_training=False))
+    assert response.status_code == 200, response.text
+    with env.factory() as session:
+        job = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        if historical:
+            lineage = dict(job.config[continuation.CONTINUATION_KEY])
+            lineage.pop("test_sample_training_mode")
+            job.config = {**job.config, continuation.CONTINUATION_KEY: lineage}
+        payload = _worker._build_training_config(session, job, env.config, env.config.scratch_root / str(job.id))
+        assert "test_package_fit_config" not in payload["train"]
+        assert payload["train"]["learning_rate"] == env.payload["train"]["learning_rate"]
+        assert payload["tile_preparation"] == env.payload["tile_preparation"]
+
+
+def test_return_from_fitting_to_split_restores_regular_profile(training_sample):
+    env = training_sample
+    previous = env.config.stored_files_root / "прежняя-подгонка.json"
+    previous.write_text(json.dumps({"original_learning_rate": 0.00037, "original_augmentation_level": 2}), encoding="utf-8")
+    env.payload["train"].update(test_package_fit_config=str(previous), learning_rate=1e-5)
+    env.payload["tile_preparation"]["augmentation_level"] = 0
+    (env.source_dir / "run.yml").write_text(yaml.safe_dump(env.payload, allow_unicode=True), encoding="utf-8")
+    response = env.client.post(f"/api/v1/results/training/{env.result_id}/continue", json=_request(
+        dataset_source="test_sample", test_sample_id=str(env.sample_id), test_sample_training_mode="split",
+        run_inference_after_training=False))
+    assert response.status_code == 200, response.text
+    with env.factory() as session:
+        job = session.get(JobRow, uuid.UUID(response.json()["id"]))
+        payload = _worker._build_training_config(session, job, env.config, env.config.scratch_root / str(job.id))
+        assert "test_package_fit_config" not in payload["train"]
+        assert payload["train"]["learning_rate"] == 0.00037
+        assert payload["tile_preparation"]["augmentation_level"] == 2
 
 
 @pytest.mark.parametrize("change", ["class", "schema", "channels", "disabled", "missing"])

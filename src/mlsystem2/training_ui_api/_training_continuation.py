@@ -26,7 +26,7 @@ from ._config import TrainingUIAPIConfig
 from ._dataset_catalog import dataset_class_row, find_managed_dataset
 from ._markup_lock import TestSampleStorageBusy, markup_read_lock, test_sample_storage_lock
 from ._models import JobRow, TrainingResultRow, TestSampleRow, TestSampleTileRow
-from ._test_samples import _sample_root, _sample_row
+from ._test_samples import _sample_root, _sample_row, _effective_inference_template, _test_f1_postprocess_profile_name
 from ._templates import NEXT_GEN2_EDITABLE_KEYS, sanitize_template_config
 from ._result_metadata import next_result_number
 from ._template_selection import effective_inference_template_row
@@ -198,7 +198,9 @@ def _test_sample_snapshot(
         annotations = run_dir / "dataset_snapshot"
         images.mkdir(parents=True, exist_ok=True)
         annotations.mkdir(parents=True, exist_ok=True)
-        for _tile, image, annotation in files:
+        evaluation_tiles = []
+        fit_package = lineage.get("test_sample_training_mode") == "fit_package"
+        for tile, image, annotation in files:
             destination = images / image.name
             shutil.copy2(image, destination)
             for suffix in (".msk", ".aux.xml"):
@@ -206,6 +208,18 @@ def _test_sample_snapshot(
                 if companion.is_file():
                     shutil.copy2(companion, Path(str(destination) + suffix))
             shutil.copy2(annotation, annotations / per_image_annotation_name(str(destination)))
+            if fit_package:
+                mask = image.with_name(f"{image.stem}_mask.png")
+                if not mask.is_file():
+                    raise TrainingUIAPIError("Не найдена эталонная маска тестового пакета.")
+                shutil.copy2(mask, images / mask.name)
+                shutil.copy2(annotation, destination.with_suffix(".geojson"))
+                evaluation_tiles.append({
+                    "index": tile.tile_index, "image_path": str(destination),
+                    "mask_path": str(images / mask.name),
+                    "geojson_path": str(destination.with_suffix(".geojson")),
+                    "clip_to_valid_data": True,
+                })
         if sample.task == "multiclass":
             (annotations / ".mlsystem2-dataset.json").write_text(json.dumps({
                 "schema_version": 1, "task": "multiclass", "classes": sample.class_schema,
@@ -213,6 +227,20 @@ def _test_sample_snapshot(
         revision = f"test-sample:{sample.id}:r{sample.content_revision}"
         record = {"id": str(sample.id), "name": sample.name, "revision": sample.content_revision,
                   "tile_indices": [tile.tile_index for tile, _, _ in files]}
+        if fit_package:
+            profile = _test_f1_postprocess_profile_name(session, sample, config)
+            template, template_config, config_hash = _effective_inference_template(
+                session, row.dataset_key or result.class_key, profile,
+                training_result=session.scalar(select(TrainingResultRow).where(TrainingResultRow.job_id == row.id)) or result,
+            )
+            lineage = {**lineage, "fit_evaluation": {
+                "tiles": evaluation_tiles, "test_sample_id": str(sample.id),
+                "test_sample_revision": sample.content_revision,
+                "inference_template_id": str(template.id) if template is not None else None,
+                "inference_template_version": template.version if template is not None else None,
+                "inference_config_hash": config_hash, "postprocess_config": template_config,
+                "postprocess_profile": profile,
+            }}
         previous = [item for item in row.config.get(TRAINING_TEST_SAMPLES_KEY, [])
                     if (item["id"], item["revision"]) != (record["id"], record["revision"])]
         row.config = {**row.config, TRAINING_TEST_SAMPLES_KEY: [*previous, record],
@@ -281,6 +309,7 @@ def create_continuation_job(
             or existing.config[CONTINUATION_KEY].get("dataset_key") != request.dataset_key
             or existing.config[CONTINUATION_KEY].get("pipeline_variant", source_variant) != selected_variant
             or existing.config[CONTINUATION_KEY].get("normalization_policy", "auto") != request.normalization_policy
+            or (request.dataset_source == "test_sample" and existing.config[CONTINUATION_KEY].get("test_sample_training_mode") != request.test_sample_training_mode)
             or existing.config[CONTINUATION_KEY].get("test_sample_id") != (str(request.test_sample_id) if request.test_sample_id else None)):
             raise TrainingUIAPIError("Параметры повторной отправки изменены. Откройте диалог заново.")
         return existing
@@ -300,6 +329,7 @@ def create_continuation_job(
         except TestSampleStorageBusy as exc:
             raise TrainingUIAPIError("Публикуется тестовая разметка. Повторите запуск после публикации.") from exc
     job_config = copy.deepcopy(source.config)
+    job_config.pop("train.test_package_fit_config", None)
     profile = _pipeline_profile(source, result, selected_variant) if selected_variant != source_variant else {}
     job_config.update(profile)
     for transient_key in (POST_TRAINING_INFERENCE_JOB_IDS_CONFIG_KEY, STOP_AND_SAVE_BEST_CONFIG_KEY,
@@ -322,6 +352,7 @@ def create_continuation_job(
         "source_pipeline_variant": source_variant, "pipeline_variant": selected_variant,
         "pipeline_config": profile,
         "normalization_policy": request.normalization_policy,
+        "test_sample_training_mode": request.test_sample_training_mode if sample is not None else None,
     }
     if sample is not None:
         job_config[CONTINUATION_KEY]["test_sample_revision"] = sample.content_revision
@@ -453,6 +484,53 @@ def build_continuation_config(
     else:
         payload["train"].pop("initial_checkpoint_recalculate_normalization", None)
     payload["mlflow"] = {**payload.get("mlflow", {}), "experiment_name": row.mlflow_experiment_name or "MLSystem2"}
+    prior_fit_config = payload["train"].pop("test_package_fit_config", None)
+    fit_evaluation = (row.config[CONTINUATION_KEY].get("fit_evaluation")
+                      if data_source == "test_sample" and lineage.get("test_sample_training_mode") == "fit_package"
+                      else None)
+    # Продолжение прежнего состава подгонки сохраняет зафиксированные данные и профиль.
+    if data_source == "original" and prior_fit_config:
+        fit_evaluation = json.loads(Path(prior_fit_config).read_text(encoding="utf-8"))
+    previous_fit = json.loads(Path(prior_fit_config).read_text(encoding="utf-8")) if prior_fit_config else {}
+    if previous_fit and fit_evaluation is None:
+        # Возврат к обычному датасету восстанавливает профиль обычного обучения.
+        fixed = str(payload["train"].get("pipeline_variant") or "legacy") not in {"legacy", "next_gen"}
+        payload["train"]["learning_rate"] = 1e-4 if fixed else previous_fit["original_learning_rate"]
+        payload["tile_preparation"]["augmentation_level"] = 3 if fixed else previous_fit["original_augmentation_level"]
+        row.config = {**row.config, "train.learning_rate": payload["train"]["learning_rate"],
+                      "tile_preparation.augmentation_level": payload["tile_preparation"]["augmentation_level"]}
+    if fit_evaluation is not None:
+        fit_config = {
+            **fit_evaluation, "initial_checkpoint_uri": str(checkpoint),
+            "pipeline_variant": payload["train"].get("pipeline_variant") or "legacy",
+            "quality_metric": payload["train"].get("quality_metric") or "pixel",
+            "task": payload["train"].get("task") or "binary",
+            "input_channels": int(payload["train"].get("input_channels") or 4),
+            "class_schema": list(source_result.class_schema or []) if data_source == "test_sample" else fit_evaluation.get("class_schema", []),
+            "device": payload["train"].get("device") or "cuda",
+            "tile_size": payload["tile_preparation"]["tile_size"],
+            "context": payload["tile_preparation"].get("context") or 0,
+            "stride": payload["tile_preparation"].get("stride") or payload["tile_preparation"]["tile_size"],
+            "evaluations_root": str(run_dir / "scratch" / "package_evaluations"),
+            "original_learning_rate": previous_fit.get("original_learning_rate", payload["train"]["learning_rate"]),
+            "original_augmentation_level": previous_fit.get("original_augmentation_level", payload["tile_preparation"]["augmentation_level"]),
+        }
+        fit_path = config.stored_files_root / "training-data" / str(row.id) / "fit_evaluation.json"
+        fit_path.parent.mkdir(parents=True, exist_ok=True)
+        fit_path.write_text(json.dumps(fit_config, ensure_ascii=False, indent=2), encoding="utf-8")
+        learning_rate = min(float(payload["train"].get("learning_rate") or 1e-4) * 0.1, 1e-5)
+        # Повторный этап подгонки не уменьшает LR ещё в десять раз.
+        if prior_fit_config:
+            learning_rate = min(float(payload["train"].get("learning_rate") or 1e-5), 1e-5)
+        payload["train"].update(test_package_fit_config=str(fit_path), initial_checkpoint_weights_only=True,
+                                learning_rate=learning_rate, max_train_batches_per_epoch=None,
+                                max_val_batches_per_epoch=None)
+        payload["tile_preparation"]["augmentation_level"] = 0
+        row.config = {**row.config, "train.learning_rate": learning_rate,
+                      "tile_preparation.augmentation_level": 0,
+                      "train.max_train_batches_per_epoch": None, "train.max_val_batches_per_epoch": None,
+                      "train.initial_checkpoint_weights_only": True,
+                      "train.test_package_fit_config": str(fit_path)}
     return payload
 
 

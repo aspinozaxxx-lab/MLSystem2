@@ -97,3 +97,8 @@ dataset:
   annotations_dir: /data/MLMarkup/Реки/test
   val_fraction: 0.2
 ```
+
+
+**Подгонка тестового пакета.**
+
+TrainSettings.test_package_fit_config — путь к зафиксированной конфигурации подгонки пакета; требует initial_checkpoint_weights_only=true. В фиксированном профиле next-gen2 и производных при подгонке LR=1e-5 и augmentation_level=0 вместо обычных 1e-4 и 3. В обычном обучении ограничения прежние.

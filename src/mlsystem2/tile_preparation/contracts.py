@@ -113,6 +113,7 @@ class TileDataloaderRequest(BaseModel):
     tile_split: TileSplitRequest | None = None
     max_batches_per_epoch: int | None = Field(default=None, gt=0)
     include_object_instances: bool = False
+    exhaustive_training: bool = False
     pipeline_variant: Literal["legacy", "next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"] = "legacy"
     collect_band_histogram: bool = False
     input_channels: int | None = Field(default=None, gt=0)
@@ -153,6 +154,15 @@ class TileDataloaderRequest(BaseModel):
             raise ValueError(
                 "include_object_instances поддерживается только для binary val loader"
             )
+        if self.exhaustive_training:
+            if self.mode != "train" or self.tile_split is not None or self.max_batches_per_epoch is not None:
+                raise ValueError("Подгонка пакета требует все train-окна без разбиения и лимита batch")
+            if self.pipeline_variant in {"object_f1", "object_f1_v2"} and (
+                has_legacy_multiclass or has_per_image_multiclass or self.input_channels not in (3, 4)
+                or not self.include_object_instances
+            ):
+                raise ValueError("Объектная подгонка требует binary, RGB или RGB+NIR и маски объектов")
+            return self
         if self.pipeline_variant == "next_gen":
             if self.tile_split is None or self.tile_split.strategy != "scene_fold":
                 raise ValueError("next_gen loader требует tile_split strategy=scene_fold")

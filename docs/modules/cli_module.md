@@ -25,3 +25,8 @@
 ## Алгоритм работы и его особенности
 
 `prepare_images` читает `.tif/.tiff`, перепроецирует в `EPSG:3857` с nearest resampling и сохраняет COG с исходными каналами, dtype, nodata, описаниями и тегами; alpha-интерпретация снимается без удаления канала. Относительная структура каталогов сохраняется, результат каждого файла попадает в JSON-отчёт. Локальный режим использует `D:\Projects\ImagesDeforestation` и отчёт `D:\Projects\test\prepare_images_report.json`; серверный — `s3://mlsystems/images/kanopus/`, `/data/mlsystem2/prepared_images/kanopus/` и `report/prepare_images_report.json`. `modules_test` пишет отчёты и до 100 batch, не создавая мозаик. `tiling_test_for_black` повторяет production split по независимым сценам и возвращает код `1` при пустом/non-finite тайле.
+
+
+**Подгонка тестового пакета.**
+
+Для подгонки пакета команда обучения через training_ui_api.api.create_training_package_evaluator собирает оценщик и передаёт его в TrainPipelineRequest. Это композиция публичных фасадов; зависимости train и train_pipeline на UI не возникают. Обычная команда обучения работает без оценщика.

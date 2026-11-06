@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol, Self, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -177,6 +177,7 @@ class EpochMetrics(BaseModel):
 
     epoch: int = Field(ge=0)
     validation_performed: bool = True
+    package_evaluation: dict[str, Any] | None = None
     train_region_loss: float | None = None
     train_boundary_loss: float | None = None
     val_region_loss: float | None = None
@@ -240,6 +241,13 @@ class TrainProgressSink(Protocol):
     def __call__(self, event: TrainProgressEvent) -> None: ...
 
 
+@runtime_checkable
+class TrainingPackageEvaluator(Protocol):
+    """Полный рабочий инференс обучаемого пакета с общей паузой обучения."""
+
+    def __call__(self, model: ModelHandle, epoch: int, pause: Callable[[], None]) -> dict[str, Any]: ...
+
+
 class TrainRequest(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -252,9 +260,15 @@ class TrainRequest(BaseModel):
     checkpoint_dir: str
     sample_size: int | None = Field(default=None, gt=0)
     run_metadata: dict[str, Any] = Field(default_factory=dict)
+    package_evaluator: TrainingPackageEvaluator | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def validate_inference_window(self) -> Self:
+        if self.package_evaluator is not None and (
+            self.val_loader is not None or self.test_loader is not None or self.dense_train_loader is not None
+            or self.config.max_train_batches_per_epoch is not None
+        ):
+            raise ValueError("Подгонка пакета требует полный train без отдельных val/test загрузчиков")
         if self.dense_train_loader is not None and self.config.pipeline_variant not in {"next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
             raise ValueError("Аудит плотных train-окон предусмотрен только для next-gen4-augmentation-v4")
         context = self.config.inference_context
@@ -289,6 +303,7 @@ __all__ = [
     "TrainError",
     "TrainProgressEvent",
     "TrainProgressSink",
+    "TrainingPackageEvaluator",
     "TrainRequest",
     "TrainResult",
 ]

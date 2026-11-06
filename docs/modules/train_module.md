@@ -13,11 +13,12 @@
 - `TrainError` - ошибка обучения.
 - `TrainClassDefinition` - `id`, `slug`, `name`, `color`, `priority`; полный класс checkpoint и MLflow.
 - `TrainConfig` - поля task/metric, `pipeline_variant`, `class_weights` (три веса для object_f1_v2, два для binary next-gen2/object_f1, N+1 для multiclass next-gen2, иначе пустой список), optional `object_separation` и `calibrate_object_threshold` для v2, validation interval, threshold mode, optional Gaussian A/B, optimizer/loss, threshold, patience, batch/time limits и class schema. Профиль разделения должен совпадать с вариантом; исторический object_f1 не допускает его переопределения.
-- `EpochMetrics` - поля эпохи, `validation_performed`, optional val loss/метрики, train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss, `val_object_separation`, `val_object_threshold_sweep`, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики. `learning_rate` содержит скорость обучения текущей эпохи до шага scheduler, в том числе на эпохах без validation.
+- `EpochMetrics` - поля эпохи, `validation_performed`, optional `package_evaluation` для подгонки, optional val loss/метрики, train_region_loss/train_boundary_loss/val_region_loss/val_boundary_loss, `val_object_separation`, `val_object_threshold_sweep`, learning rate, binary per-scene/pixel/object либо multiclass per-class, macro, micro и foreground метрики. `learning_rate` содержит скорость обучения текущей эпохи до шага scheduler, в том числе на эпохах без validation.
 - `CheckpointArtifact` - поля `uri`, `label`.
 - `TrainProgressEvent` - поля `epoch`, `message`, `metrics`.
 - `TrainProgressSink` - протокол приема событий прогресса.
-- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, optional `test_loader`, optional `dense_train_loader` (только v4: исходные плотные train-окна без аугментаций для eval лучших весов), `config`, `checkpoint_dir`, `sample_size`, `run_metadata`.
+- `TrainingPackageEvaluator` — runtime-протокол оценки всей обучаемой выборки рабочим инференсом; принимает ModelHandle, эпоху и общую функцию паузы.
+- `TrainRequest` - поля `model`, `train_loader`, `val_loader`, optional `test_loader`, optional `dense_train_loader` (только v4: исходные плотные train-окна без аугментаций для eval лучших весов), `config`, `checkpoint_dir`, `sample_size`, `run_metadata`, optional `package_evaluator` (при нём val/test/dense loaders отсутствуют).
 - `TrainResult` - история/checkpoint/порог/остановка и `diagnostics`.
 
 `TrainConfig.pipeline_variant=next_gen3|next_gen4|next_gen4_global_norm|next_gen4_augmentation_v3`: прежний loss и критерий next-gen2, обязательная valid-mask и адаптивный train-сэмплер. `EpochMetrics.adaptive_sampling` по умолчанию пуст: профили сохраняют квоты, нормированные ошибки полной validation, сглаживание и причину следующего решения. После test контроллер не вызывается. Checkpoint и итоговая диагностика сохраняют полное состояние и историю; продолжение от весов начинает новый контроллер. Различие сетки и защита аугментаций принадлежат tile_preparation, глобальная нормализация встроена в переданную модель, не реализуется в train. Правила — в `docs/architecture.md`.
@@ -153,3 +154,8 @@ DataLoader, scheduler, история эпох и MLflow-run не пересоз
 обучение не может быть выдано как успешный результат.
 
 Train loop проверяет `images`, `masks`, `logits`, `loss`, `train_loss` и `val_loss` на finite values, чтобы ошибка обучения была диагностируемой до создания `EpochMetrics`. После backward применяется фиксированный gradient clipping `max_norm=1.0`. Non-finite gradient skip - аварийная защита, а не нормальный путь обучения: один batch может быть пропущен, но этот счетчик не входит в публичные метрики; если пропусков больше внутреннего аварийного лимита, обучение завершается `TrainError`. Если за эпоху не выполнен ни один optimizer step, обучение также завершается `TrainError`.
+
+
+**Подгонка тестового пакета.**
+
+Подгонка тестового пакета: TrainRequest.package_evaluator — runtime-протокол TrainingPackageEvaluator, собранный CLI. Все данные идут в train; val_loader отсутствует. Оценщик использует полный рабочий инференс и возвращает EpochMetrics.package_evaluation. Начальные веса оцениваются на эпохе 0 и сохраняются как best. Выбор по F1 пакета, затем precision и меньшим FP/FN; scheduler ReduceLROnPlateau по F1, patience по оценкам. Эпоха 0 не входит в число обученных эпох. Оценки пакета не являются независимой validation. Модуль train не импортирует UI.

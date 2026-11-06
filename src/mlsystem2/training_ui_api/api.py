@@ -8,6 +8,7 @@ from ._app import create_app as _create_app
 from ._app import main as _main
 from ._app import worker_main as _worker_main
 from .contracts import NativeTileInferenceRequest, NativeTileInferenceResult
+from mlsystem2.train.contracts import TrainingPackageEvaluator
 
 
 def create_app() -> Any:
@@ -32,5 +33,12 @@ def infer_native_tile(request: NativeTileInferenceRequest) -> NativeTileInferenc
     return _infer_native_tile(request)
 
 
-__all__ = ["create_app", "get_openapi_schema", "main", "worker_main", "infer_native_tile"]
+def create_training_package_evaluator(config_path: str) -> TrainingPackageEvaluator:
+    """Собрать оценщик зафиксированного пакета для композиции CLI-обучения."""
+    from ._training_package_fit import create_evaluator
+
+    return create_evaluator(config_path)
+
+
+__all__ = ["create_app", "get_openapi_schema", "main", "worker_main", "infer_native_tile", "create_training_package_evaluator"]
 

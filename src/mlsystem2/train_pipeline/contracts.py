@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from mlsystem2.mlflow_adapter.contracts import MLflowRunRef
+from mlsystem2.train.contracts import TrainingPackageEvaluator
 
 
 class TrainPipelineError(RuntimeError):
@@ -45,9 +46,10 @@ class PipelineReport(BaseModel):
 
 
 class TrainPipelineRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     run_name: str | None = None
+    package_evaluator: TrainingPackageEvaluator | None = Field(default=None, exclude=True)
 
 
 class TrainPipelineResult(BaseModel):

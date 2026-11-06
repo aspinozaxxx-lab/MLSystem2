@@ -59,6 +59,7 @@ export function TrainingContinuationForm({ result, options, datasets = [], testS
       checkpoint,
       pipeline_variant: String(values.get("pipeline_variant") || result.pipeline_variant || "legacy"),
       normalization_policy: (values.get("normalization_policy") || "auto") as typeof normalizationPolicy,
+      test_sample_training_mode: "fit_package",
       dataset_source: (values.get("dataset_source") || "original") as typeof datasetSource,
       run_inference_after_training: values.get("run_inference_after_training") === "on",
       secondary_priority: values.get("secondary_priority") === "on",
@@ -114,7 +115,7 @@ export function TrainingContinuationForm({ result, options, datasets = [], testS
       <select name="test_sample_id" required disabled={busy} value={selectedSample} onChange={event => setSelectedSample(event.currentTarget.value)}>
         {classSamples.map(item => <option key={item.id} value={item.id}>{item.name} · снимков включено: {item.enabled_image_count}</option>)}
       </select></label>
-      <p className="info-box" role="note">В обучение войдут включённые снимки и эталонные полигоны выбранной разметки. После такого дообучения F1 на ней не является независимой оценкой качества. В результатах появится соответствующая пометка.</p></> : null}
+      <p className="info-box" role="note">Подгонка всего пакета: все включённые снимки участвуют в обучении, без разделения на train, val и test. Каждое окно используется раз за эпоху. После каждой эпохи весь пакет проверяется рабочим инференсом с зафиксированными настройками постобработки. Начальные веса сохраняются как лучший вариант, пока новые не покажут лучший F1. Скорость обучения уменьшается, аугментации выключены. Это оценка выученного пакета, а не независимая проверка качества на новых территориях.</p></> : null}
     <p className="muted">{datasetSource === "current" || datasetSource === "dataset"
       ? "При фактическом старте берётся опубликованный состав этого датасета: новые снимки и исправленные полигоны учитываются, удалённые снимки исключаются. Личные неопубликованные черновики не используются. После старта снимок разметки фиксируется."
       : datasetSource === "test_sample" ? "При старте фиксируются текущая ревизия тестовой разметки, включённые снимки и эталон. Дальнейшие изменения или удаление разметки не меняют данные уже запущенного обучения."
@@ -138,7 +139,7 @@ export function TrainingContinuationForm({ result, options, datasets = [], testS
       {globalSource && normalizationPolicy !== "recompute" ? <small className="muted">Сохраняются точные min/max чекпойнта, даже на маленьком датасете и при смене совместимого глобального профиля.</small> : null}
       {normalizationPolicy === "recompute" ? <p className="info-box">Меняется масштаб входа. Чтобы оценить сохранение прежних знаний, сравните результат на независимых старых и новых территориях. Прежняя сеть останется доступна.</p> : null}
     </section> : null}
-    <p className="muted">{pipeline === result.pipeline_variant ? "Параметры исходного конвейера сохраняются. " : "Применяется стандартный профиль выбранного конвейера. "}Новый этап начнётся от выбранных весов; счётчики и оптимизатор запускаются заново. Исходная сеть остаётся в результатах.</p>
+    <p className="muted">{datasetSource === "test_sample" ? "Для тестовой разметки применяется режим подгонки пакета. " : pipeline === result.pipeline_variant ? "Параметры исходного конвейера сохраняются. " : "Применяется стандартный профиль выбранного конвейера. "}Новый этап начнётся от выбранных весов; счётчики и оптимизатор запускаются заново. Исходная сеть остаётся в результатах.</p>
     <div className="continuation-fields">
       <label className="field"><span>Ещё времени, мин</span>
         <input name="minutes" type="number" min={1 / 60} step="any" required defaultValue={options.additional_time_sec / 60} disabled={busy} />

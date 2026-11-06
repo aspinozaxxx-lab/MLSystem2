@@ -114,3 +114,8 @@ gamma и независимый gain каналов. Для robust preprocessing
 только после появления `paused` с тем же token, что у `pause.request` в `MLSYSTEM2_TRAINING_CONTROL_DIR`.
 До подтверждения паузы чтение продолжается, чтобы train loop мог получить batch или сбросить итератор
 DataLoader и освободить GPU. Уже готовая очередь не очищается.
+
+
+**Подгонка тестового пакета.**
+
+TileDataloaderRequest.exhaustive_training разрешён только для train без tile_split: все доступные окна включаются ровно один раз за эпоху, порядок воспроизводимо меняется по seed и эпохе. В пакете до 32 окон workers=0 для загрузки и статистики. В split manifest явно указаны fit_package, отсутствие val/test и независимой оценки. Окна next-gen2/3 подгонки покрывают края сдвигом последнего окна; TIFF меньше окна дополняется padding, который не участвует в loss. Обычные sampler и split не изменены.

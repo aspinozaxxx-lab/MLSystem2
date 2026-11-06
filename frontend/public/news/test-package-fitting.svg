@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="540" viewBox="0 0 1200 540" role="img" aria-labelledby="title desc">
+<title id="title">Подгонка всего размеченного пакета</title><desc id="desc">Схема сравнения начальных и новых весов одинаковым рабочим инференсом. Лучший чекпойнт меняется только при улучшении.</desc>
+<rect width="1200" height="540" rx="24" fill="#10243a"/><g font-family="Arial, sans-serif" fill="#f4f8fc">
+<text x="50" y="63" font-size="32" font-weight="bold">Выучить весь пакет и сохранить лучший результат</text>
+<text x="50" y="98" font-size="18" fill="#a8c4de">Схема работы · дообучение на тестовой разметке</text>
+<rect x="50" y="150" width="300" height="220" rx="18" fill="#23435e"/>
+<text x="75" y="190" font-size="24">Весь пакет в обучении</text><text x="75" y="233" font-size="20">Все включённые снимки</text><text x="75" y="272" font-size="20">Каждое окно раз за эпоху</text><text x="75" y="311" font-size="20">Без внутреннего разбиения</text><text x="75" y="347" font-size="18" fill="#a8c4de">Фон тоже участвует</text>
+<path d="M362 260h63m-13-12 13 12-13 12" stroke="#54d6c6" stroke-width="4" fill="none"/>
+<rect x="440" y="150" width="325" height="220" rx="18" fill="#23435e"/>
+<text x="465" y="190" font-size="24">Один способ проверки</text><text x="465" y="233" font-size="20">Сначала исходные веса</text><text x="465" y="272" font-size="20">Затем каждая эпоха</text><text x="465" y="311" font-size="20">Полный рабочий инференс</text><text x="465" y="347" font-size="18" fill="#a8c4de">Порог и постобработка фиксированы</text>
+<path d="M777 260h55m-13-12 13 12-13 12" stroke="#54d6c6" stroke-width="4" fill="none"/>
+<rect x="847" y="150" width="303" height="220" rx="18" fill="#17685f"/>
+<text x="872" y="190" font-size="24">Лучшие веса</text><text x="872" y="233" font-size="20">Обновляются при росте F1</text><text x="872" y="272" font-size="20">Иначе остаются исходные</text><text x="872" y="311" font-size="20">Сравнение на всём пакете</text><text x="872" y="347" font-size="18" fill="#b7f5e8">Эпоха 0 — исходный результат</text>
+<text x="50" y="438" font-size="23" fill="#ffd38d">Это оценка выученного пакета.</text><text x="50" y="480" font-size="21" fill="#bdcee1">Для оценки качества на новых территориях нужна отдельная независимая выборка.</text>
+</g></svg>

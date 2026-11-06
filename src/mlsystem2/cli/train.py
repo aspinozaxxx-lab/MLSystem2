@@ -25,12 +25,18 @@ def main(argv: list[str] | None = None) -> int:
     _install_signal_handlers()
     if args.run:
         settings_path = args.settings or os.getenv("MLSYSTEM2_SETTINGS_PATH") or "configs/settings.server.yaml"
-        load_settings(settings_path, args.run)
+        settings = load_settings(settings_path, args.run)
     elif args.config:
-        load_settings(args.config)
+        settings = load_settings(args.config)
     else:
         parser.error("нужно указать либо --config, либо --run с опциональным --settings")
-    result = run_train_pipeline(TrainPipelineRequest(run_name=args.run_name))
+    package_evaluator = None
+    fit_config = getattr(getattr(settings, "train", None), "test_package_fit_config", None)
+    if fit_config:
+        from mlsystem2.training_ui_api.api import create_training_package_evaluator
+
+        package_evaluator = create_training_package_evaluator(fit_config)
+    result = run_train_pipeline(TrainPipelineRequest(run_name=args.run_name, package_evaluator=package_evaluator))
     print(f"status={result.status.value}")
     if result.mlflow_run is not None:
         print(f"mlflow_run={result.mlflow_run.run_id}")

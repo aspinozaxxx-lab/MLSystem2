@@ -81,6 +81,7 @@ class TileDataset:
         collect_band_histogram: bool = False,
         input_channels: int | None = None,
         statistics_workers: int = 0,
+        exhaustive_training: bool = False,
     ) -> None:
         if not scenes:
             raise TilePreparationError("Не задано ни одного TIFF для нарезки тайлов.")
@@ -117,6 +118,7 @@ class TileDataset:
         self._tile_split = tile_split
         self._include_object_instances = include_object_instances
         self._pipeline_variant = pipeline_variant
+        self._exhaustive_training = exhaustive_training
         self._statistics_workers = statistics_workers
         preparation_started = time.monotonic()
         if pipeline_variant == "object_f1_v2":
@@ -203,7 +205,9 @@ class TileDataset:
                         context,
                         full_windows_only=pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} and scene.region_geometry is None,
                     )
-                    if pipeline_variant in {"object_f1", "object_f1_v2"}:
+                    if pipeline_variant in {"object_f1", "object_f1_v2"} or (
+                        exhaustive_training and pipeline_variant in {"next_gen2", "next_gen3"}
+                    ):
                         candidate_windows = [TileWindow(x, y, tile_size, tile_size) for y in object_window_origins(height, tile_size) for x in object_window_origins(width, tile_size)]
                     candidate_windows = [TileWindow(item.x + offset_x, item.y + offset_y, item.width, item.height) for item in candidate_windows]
                     if pipeline_variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
@@ -296,6 +300,15 @@ class TileDataset:
         if self._tile_split is not None:
             self._apply_tile_split(self._tile_split)
         self._split_window_count = len(self._windows)
+        if exhaustive_training:
+            self._tile_split_manifest = {
+                "strategy": "fit_package", "evaluation_scope": "training_package", "independent": False,
+                "train_scene_ids": sorted({window.scene_id for window in self._windows}),
+                "selected_window_count": len(self._windows), "replacement": False,
+                "validation_scene_ids": [], "test_scene_ids": [],
+            }
+            if len(self._windows) <= 32:
+                self._statistics_workers = 0
         self._record_scene_selected_counts()
         if pipeline_variant == "object_f1_v2":
             LOGGER.info("object f1 v2: разбиение %s готово, выбрано окон=%s, %.1f с",
@@ -326,7 +339,7 @@ class TileDataset:
         window = Window(tile_window.x, tile_window.y, tile_window.width, tile_window.height)
         nodata = self._scene_nodata[scene_window.scene_index]
         zoned = self._scenes[scene_window.scene_index].region_geometry is not None
-        masked = zoned or self._has_rgb_alpha or self._pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}
+        masked = self._exhaustive_training or zoned or self._has_rgb_alpha or self._pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}
         input_nodata = 0 if self._pipeline_variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else nodata
         notebook_transform = self._zone_transform if masked else self._notebook_transform
 
@@ -647,7 +660,7 @@ class TileDataset:
             zoned = self._scenes[item.scene_index].region_geometry is not None
             invalid = (
                 self._region_invalid(item.scene_index, dataset, window) if zoned
-                else self._read_invalid_data_pixels(dataset, window) if self._has_rgb_alpha
+                else self._read_invalid_data_pixels(dataset, window) if self._has_rgb_alpha or self._exhaustive_training
                 else np.zeros((self._tile_size, self._tile_size), dtype=bool)
             )
             mask = self._read_supervision_mask(

@@ -3052,6 +3052,7 @@ def _training_result_info(
         continued_from_dataset_source=continuation.get("dataset_source", "original") if continuation else None,
         continued_from_data_name=continuation.get("data_name"),
         training_test_sample_names=list(dict.fromkeys(item["name"] for item in (job.config or {}).get(TRAINING_TEST_SAMPLES_KEY, []))) if job else [],
+        evaluation_scope="training_package" if job and job.config.get("train.test_package_fit_config") else "validation",
         input_channels=_job_input_channels(job),
         quality_metric=row.quality_metric,
         task=row.task,

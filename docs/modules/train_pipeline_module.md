@@ -21,7 +21,7 @@
 - `ModuleTiming` — `module`, `elapsed_sec`, `details`.
 - `TimingReport` — `total_pipeline_time_sec`, `modules`.
 - `PipelineReport` — `status`, `message`, `dataset_status`, `errors`, `warnings`, `artifacts`.
-- `TrainPipelineRequest` — optional `run_name`.
+- `TrainPipelineRequest` — optional `run_name` и исключённый из сериализации runtime `package_evaluator`.
 - `TrainPipelineResult` — `status`, `mlflow_run`, `timings`, `report`.
 
 Next-gen3 использует те же публичные запросы: три полных части оконного разбиения next-gen2, но ограниченный адаптивный train. ModelSpec фиксирует реальную политику сэмплера, а не веса 7/8/1, и `valid_pixel_policy`; отчёты содержат квоты и неизменный бюджет шагов. Validation/test полные; их индексы не передаются train-контроллеру. Сохранена оговорка о географических пересечениях окон.
@@ -120,3 +120,8 @@ preprocessing, runtime/commit/CUDA/packages, зафиксированную data
 Для next-gen2 действует отдельный ограниченный prefetch_factor=2. Фактические num_workers,
 prefetch_factor, persistent_workers и pin_memory каждого train/val/test-загрузчика сохраняются
 в loader_runtime существующего отчёта tile_preparation в MLflow.
+
+
+**Подгонка тестового пакета.**
+
+TrainPipelineRequest.package_evaluator передаёт оценщик зафиксированного пакета в train. При train.test_package_fit_config разбиение выключено, создаётся единственный полный train-loader с exhaustive_training. Сам конвейер не импортирует training_ui_api; оценщик собирает CLI. В metadata фиксируются фактический sampler без повторов, scheduler по F1 и область оценки training_package. Обычные датасеты сохраняют прежние правила.

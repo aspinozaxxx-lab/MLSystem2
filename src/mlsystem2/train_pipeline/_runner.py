@@ -140,6 +140,9 @@ def run_train_pipeline(
         )
         timings.append(timing)
         settings = _expect_settings(settings)
+        fit_package = bool(getattr(settings.train, "test_package_fit_config", None))
+        if fit_package != (request.package_evaluator is not None):
+            raise TrainPipelineError("Подгонка пакета требует полного оценщика рабочего инференса.")
 
         run = deps.start_run(_mlflow_start_request(settings, request))
         measure_mlflow(lambda: deps.log_run_config(run, deps.get_settings_path()))
@@ -199,6 +202,7 @@ def run_train_pipeline(
                         include_object_instances=settings.train.pipeline_variant in {"object_f1", "object_f1_v2"},
                         pipeline_variant=settings.train.pipeline_variant,
                         input_channels=settings.train.input_channels,
+                        exhaustive_training=fit_package,
                         collect_band_histogram=(
                             settings.train.pipeline_variant in {"next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}
                             or (settings.train.pipeline_variant == "next_gen"
@@ -206,7 +210,7 @@ def run_train_pipeline(
                         ),
                     )
                 ),
-                deps.create_tile_dataloader(
+                None if fit_package else deps.create_tile_dataloader(
                     _tile_request(
                         dataset_result.dataset,
                         settings.train.batch_size,
@@ -223,7 +227,7 @@ def run_train_pipeline(
         timings.append(timing)
         train_loader, val_loader = loaders
         test_loader = None
-        if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
+        if not fit_package and settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
             test_loader, test_timing = timed_call(
                 "tile_preparation_test",
                 lambda: deps.create_tile_dataloader(_tile_request(
@@ -267,7 +271,7 @@ def run_train_pipeline(
             ),
         )
         val_sampling_mode = _sampling_mode(settings, val_loader)
-        val_loader = _CountingLoader(
+        val_loader = None if fit_package else _CountingLoader(
             val_loader,
             "val",
             sampling_mode=val_sampling_mode,
@@ -290,6 +294,7 @@ def run_train_pipeline(
                     val_loader,
                     dataset=dataset_result.dataset,
                     test_loader=test_loader,
+                    package_evaluator=request.package_evaluator,
                 ),
                 progress_sink=progress_sink,
             ),
@@ -308,6 +313,14 @@ def run_train_pipeline(
                 val_loader,
                 tile_report,
             )
+        if fit_package:
+            train_result.diagnostics.update(
+                resolved_train_config=settings.model_dump(mode="json"),
+                split_manifest={"train": getattr(train_loader.dataset, "tile_split_manifest", {}),
+                                "validation": {}, "test": {}},
+            )
+            train_result.diagnostics.pop("validation_by_scene", None)
+            train_result.diagnostics.pop("validation_fold", None)
         measure_mlflow(lambda: deps.log_training_metrics(run, train_result))
         measure_mlflow(lambda: deps.log_training_artifacts(run, train_result))
         measure_mlflow(lambda: deps.log_tile_preparation(run, tile_report))
@@ -408,6 +421,9 @@ def _mlflow_start_request(
             "seed": str(settings.tile_preparation.seed),
             **({"checkpoint_selection_metric": "val/object_f1" if settings.train.pipeline_variant in {"object_f1", "object_f1_v2"} else "val_loss"}
                if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"} else {}),
+            **({"evaluation_scope": "training_package", "independent_evaluation": "false",
+                "checkpoint_selection_metric": "fit/object_f1" if settings.train.quality_metric == "objects" else "fit/pixel_f1"}
+               if getattr(settings.train, "test_package_fit_config", None) else {}),
         },
     )
 
@@ -491,7 +507,9 @@ def _dataset_artifact_files(settings: SystemSettings) -> dict[str, str]:
     return files
 
 
-def _tile_split_request(settings: SystemSettings) -> TileSplitRequest:
+def _tile_split_request(settings: SystemSettings) -> TileSplitRequest | None:
+    if getattr(settings.train, "test_package_fit_config", None):
+        return None
     return TileSplitRequest(
         val_fraction=settings.dataset.val_fraction,
         test_fraction=0.2 if settings.train.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"} else 0.0,
@@ -516,6 +534,7 @@ def _tile_request(
     collect_band_histogram: bool = False,
     pipeline_variant: str = "legacy",
     input_channels: int | None = None,
+    exhaustive_training: bool = False,
 ) -> TileDataloaderRequest:
     scenes = [
         TileSceneSource(
@@ -550,6 +569,7 @@ def _tile_request(
             tile_split=tile_split,
             max_batches_per_epoch=max_batches_per_epoch,
             include_object_instances=include_object_instances,
+            exhaustive_training=exhaustive_training,
             pipeline_variant=pipeline_variant,
             collect_band_histogram=collect_band_histogram,
         )
@@ -572,6 +592,7 @@ def _tile_request(
             tile_split=tile_split,
             max_batches_per_epoch=max_batches_per_epoch,
             include_object_instances=include_object_instances,
+            exhaustive_training=exhaustive_training,
             pipeline_variant=pipeline_variant,
             collect_band_histogram=collect_band_histogram,
         )
@@ -588,6 +609,7 @@ def _tile_request(
         tile_split=tile_split,
         max_batches_per_epoch=max_batches_per_epoch,
         include_object_instances=include_object_instances,
+        exhaustive_training=exhaustive_training,
         input_channels=input_channels,
         pipeline_variant=pipeline_variant,
         collect_band_histogram=collect_band_histogram,
@@ -623,7 +645,7 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None, *,
     if settings.train.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
         sampling_loader = train_loader.loader if isinstance(train_loader, _CountingLoader) else train_loader
         sampler = getattr(sampling_loader, "sampler", None)
-        parameters["sampler"] = sampler.snapshot()["policy"] if sampler is not None else {"version": "adaptive_background_v1"}
+        parameters["sampler"] = sampler.snapshot()["policy"] if hasattr(sampler, "snapshot") else {"version": "adaptive_background_v1"}
         parameters["valid_pixel_policy"] = "raster_mask_and_annotation_region"
         if settings.train.pipeline_variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
             parameters["preprocessing"]["mask_output_nodata"] = True
@@ -716,6 +738,14 @@ def _model_spec(settings: SystemSettings, train_loader: object | None = None, *,
                 ),
             },
         }
+    if getattr(settings.train, "test_package_fit_config", None) and settings.train.pipeline_variant != "legacy":
+        parameters.update(
+            evaluation_scope="training_package", independent_evaluation=False,
+            sampler={"version": "all_windows_once", "replacement": False},
+            scheduler={"name": "reduce_lr_on_plateau", "mode": "max", "factor": 0.5, "patience": 3, "min_lr": 1e-7},
+            checkpoint_selection_metric="fit/object_f1" if settings.train.quality_metric == "objects" else "fit/pixel_f1",
+            augmentation_level=0,
+        )
     return ModelSpec(
         name=settings.train.model_name,
         input_channels=settings.train.input_channels,
@@ -738,6 +768,10 @@ def _load_or_create_model(
         preserve = not getattr(settings.train, "initial_checkpoint_recalculate_normalization", False)
         override = previous if preserve and previous.get("mode") == "global_minmax" else None
         spec = _model_spec(settings, train_loader, preprocessing_override=override)
+        if getattr(settings.train, "test_package_fit_config", None) and settings.train.pipeline_variant == "object_f1_v2":
+            separation = loaded.model.spec.parameters.get("object_separation")
+            if separation:
+                spec.parameters["object_separation"] = separation
         initializer = getattr(deps, "initialize_model", None) or initialize_model
         return initializer(loaded.model, spec, preserve_global_preprocessing=preserve)
     spec = _model_spec(settings, train_loader)
@@ -797,7 +831,7 @@ def _attach_next_gen_diagnostics(
         "validation": getattr(val_dataset, "tile_split_manifest", {}),
     }
     validation_events = [
-        item for item in result.history if item.validation_performed
+        item for item in result.history if item.validation_performed and item.package_evaluation is None
     ]
     validation_by_scene = {
         "validation_fold": settings.next_gen.validation_fold,
@@ -1272,7 +1306,7 @@ def _tile_preparation_report(
                 key: _loader_attr(loader, key)
                 for key in ("num_workers", "prefetch_factor", "persistent_workers", "pin_memory", "start_method", "timeout")
             }
-            for split, loader in (("train", train_loader.loader), ("val", val_loader.loader), ("test", test_loader))
+            for split, loader in (("train", train_loader.loader), ("val", val_loader.loader if val_loader is not None else None), ("test", test_loader))
             if loader is not None
         },
         "augmentation_level": settings.tile_preparation.augmentation_level,
@@ -1283,12 +1317,14 @@ def _tile_preparation_report(
         "class_balance": settings.tile_preparation.class_balance,
         "splits": {
             "train": train_loader.snapshot(),
-            "val": val_loader.snapshot(),
+            "val": val_loader.snapshot() if val_loader is not None else {"selected_tiles": 0, "selected_batches": 0},
         },
     }
 
 
 def _sampling_mode(settings: SystemSettings, loader: object) -> str:
+    if getattr(settings.train, "test_package_fit_config", None) and loader is not None:
+        return "all_windows_once"
     if settings.train.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
         return "adaptive_background_v1" if hasattr(_loader_attr(loader, "sampler"), "update_feedback") else "full_natural_validation"
     if settings.train.pipeline_variant in {"next_gen", "next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"} and _loader_attr(loader, "cache_mode"):
@@ -1375,6 +1411,7 @@ def _train_request(
     val_loader: object,
     dataset: PreparedDataset | None = None,
     test_loader: object | None = None,
+    package_evaluator=None,
 ) -> TrainRequest:
     prepared_classes = list(dataset.classes) if dataset is not None else []
     prepared_annotations = list(dataset.class_annotations) if dataset is not None else []
@@ -1383,6 +1420,7 @@ def _train_request(
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=test_loader,
+        package_evaluator=package_evaluator,
         dense_train_loader=_loader_attr(
             train_loader.loader if isinstance(train_loader, _CountingLoader) else train_loader,
             "dense_window_loader",

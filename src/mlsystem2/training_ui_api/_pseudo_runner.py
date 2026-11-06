@@ -286,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if result["status"] == "ok" else 1
 
 
-def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
+def run_test_sample_f1(config: dict[str, Any], *, loaded_checkpoint=None, pause_controller_override=None) -> dict[str, Any]:
     """Считает пиксельный и объектовый F1 на независимых TIFF-тайлах разметки."""
 
     started = time.time()
@@ -349,7 +349,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             task = str(config.get("task") or "binary")
             object_types = list(config.get("object_types") or [])
             config = {**config, "task": task, "object_types": object_types}
-        else:
+        elif loaded_checkpoint is None:
             checkpoint_path = _resolve_checkpoint(config, run_root / "checkpoint")
         if not precomputed and external_manifest is not None:
             external_loaded = load_external_model(
@@ -363,7 +363,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             _validate_configured_input_channels(config, input_channels)
         elif not precomputed:
             torch = _torch()
-            loaded = load_checkpoint(
+            loaded = loaded_checkpoint or load_checkpoint(
                 LoadCheckpointRequest(checkpoint_uri=str(checkpoint_path), map_location=device)
             )
             config = _native_inference_config(loaded, config)
@@ -400,7 +400,7 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
         class_ids = [int(item["id"]) for item in object_types] if task == "multiclass" else []
         class_pixel_counts = {class_id: _empty_metric_counts() for class_id in class_ids}
         class_object_counts = {class_id: _empty_metric_counts() for class_id in class_ids}
-        pause_controller = _InferencePauseController(
+        pause_controller = pause_controller_override or _InferencePauseController(
             torch,
             [getattr(external_loaded, "model", None) if external_loaded is not None else model],
             device,
@@ -694,6 +694,9 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
                 started=started,
             )
     except Exception as exc:  # noqa: BLE001
+        if loaded_checkpoint is not None:
+            # Сигналы остановки и ошибки оценки должны дойти до владельца обучения.
+            raise
         _write_test_f1_progress(
             progress_path,
             current=len(reports),
@@ -725,7 +728,8 @@ def run_test_sample_f1(config: dict[str, Any]) -> dict[str, Any]:
             del external_loaded
         except UnboundLocalError:
             pass
-        _release_cuda_cache(torch, device)
+        if loaded_checkpoint is None:
+            _release_cuda_cache(torch, device)
 
     structured_metrics = (
         _structured_multiclass_metrics(

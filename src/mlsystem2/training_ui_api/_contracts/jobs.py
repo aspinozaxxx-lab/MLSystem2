@@ -55,6 +55,7 @@ class TrainingContinuationCreate(TrainingContinuationDataSelection):
     additional_time_sec: int = Field(gt=0, strict=True)
     early_stopping_patience: int = Field(gt=0, strict=True)
     normalization_policy: Literal["auto", "preserve", "recompute"] = "auto"
+    test_sample_training_mode: Literal["fit_package", "split"] = "fit_package"
     run_inference_after_training: bool | None = None
     secondary_priority: bool | None = None
     request_id: UUID

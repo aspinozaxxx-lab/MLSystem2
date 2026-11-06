@@ -5544,6 +5544,12 @@ export interface components {
              * @enum {string}
              */
             normalization_policy: "auto" | "preserve" | "recompute";
+            /**
+             * Test Sample Training Mode
+             * @default fit_package
+             * @enum {string}
+             */
+            test_sample_training_mode: "fit_package" | "split";
             /** Run Inference After Training */
             run_inference_after_training?: boolean | null;
             /** Secondary Priority */
@@ -5802,6 +5808,12 @@ export interface components {
             continued_from_data_name?: string | null;
             /** Training Test Sample Names */
             training_test_sample_names?: string[];
+            /**
+             * Evaluation Scope
+             * @default validation
+             * @enum {string}
+             */
+            evaluation_scope: "validation" | "training_package";
             /**
              * Input Channels
              * @default 4

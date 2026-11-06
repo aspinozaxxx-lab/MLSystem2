@@ -41,7 +41,7 @@ describe("результаты класса на одной странице", (
       status: "ok", source: "manual", created_at: "2026-10-18T12:00:00Z", started_by: "Alex",
       trained_at: "2026-10-18T13:30:00Z", runtime_minutes: 90,
       pipeline_variant: "legacy", validation_fold: 0, is_primary: false, can_continue_training: false,
-      input_channels: 4, quality_metric: "pixel", task: "binary",
+      input_channels: 4, quality_metric: "pixel", task: "binary", evaluation_scope: "validation",
     };
     const html = renderToStaticMarkup(<ResultsTable payload={{
       dataset_key: "учебный", dataset_name: "Учебный", quality_metric: "pixel", test_f1_status: "unavailable",

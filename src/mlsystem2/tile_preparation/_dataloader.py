@@ -42,6 +42,9 @@ def create_tile_dataloader(
         ) from exc
 
     tile_settings = get_settings().tile_preparation
+    exhaustive_training = getattr(request, "exhaustive_training", False)
+    if exhaustive_training and (request.mode != "train" or request.tile_split is not None):
+        raise TilePreparationError("Подгонка пакета использует все обучающие окна без разбиения.")
     try:
         dataset = TileDataset(
             scenes=request.scenes,
@@ -65,11 +68,28 @@ def create_tile_dataloader(
             collect_band_histogram=request.collect_band_histogram,
             input_channels=getattr(request, "input_channels", None),
             statistics_workers=tile_settings.num_workers,
+            **({"exhaustive_training": True} if exhaustive_training else {}),
         )
     except TilePreparationError:
         raise
     except Exception as exc:
         raise TilePreparationError("Не удалось подготовить Dataset тайлов") from exc
+
+    if exhaustive_training:
+        workers = 0 if len(dataset) <= 32 else tile_settings.num_workers
+        kwargs = {
+            "dataset": dataset, "batch_size": request.batch_size,
+            "sampler": _AllWindowSampler(len(dataset), tile_settings.seed),
+            "num_workers": workers, "collate_fn": _collate_tile_batch,
+            "worker_init_fn": _seed_tile_worker, "pin_memory": torch.cuda.is_available(),
+        }
+        if workers:
+            kwargs.update(multiprocessing_context="spawn", timeout=TILE_LOADER_TIMEOUT_SEC, prefetch_factor=2)
+        loader = DataLoader(**kwargs)
+        loader.selected_tiles = len(dataset)
+        loader.selected_batches = len(loader)
+        LOGGER.info("Подгонка пакета: окон=%s, каждое один раз за эпоху, workers=%s", len(dataset), workers)
+        return loader
 
     if request.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
         # Сохраняем порядок и потребление генератора случайных чисел исходных DataLoader.
@@ -677,6 +697,23 @@ def _legacy_category(meta: dict[str, object]) -> str:
     if bool(meta.get("hard_negative", False)):
         return TILE_CATEGORY_HARD_NEGATIVE
     return TILE_CATEGORY_BACKGROUND
+
+
+class _AllWindowSampler:
+    """Каждое окно пакета ровно один раз; порядок воспроизводимо меняется по эпохам."""
+
+    def __init__(self, length: int, seed: int):
+        self.length, self.seed, self.epoch = length, seed, 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def __len__(self):
+        return self.length
+
+    def __iter__(self):
+        order = np.random.default_rng(self.seed + self.epoch).permutation(self.length)
+        return iter((int(index), self.epoch, draw) for draw, index in enumerate(order))
 
 
 def _seed_tile_worker(worker_id: int) -> None:

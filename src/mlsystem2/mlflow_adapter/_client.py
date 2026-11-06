@@ -88,7 +88,10 @@ def get_best_training_checkpoint(
         run = client.get_run(run_id)
         tags = getattr(getattr(run, "data", None), "tags", {})
         quality_metric = str(tags.get("quality_metric") or "")
+        fitting = tags.get("evaluation_scope") == "training_package"
         metric_names = []
+        if fitting:
+            metric_names.append("fit/object_f1" if quality_metric == "objects" else "fit/pixel_f1")
         if quality_metric in {"pixel", "objects"}:
             # Исторические запуски сохраняют прежний критерий без перезаписи данных.
             metric_names.append(QUALITY_CHECKPOINT_METRIC)
@@ -101,7 +104,11 @@ def get_best_training_checkpoint(
             history = client.get_metric_history(run_id, metric_name)
             if history:
                 break
-        thresholds = client.get_metric_history(run_id, BEST_THRESHOLD_METRIC)
+        thresholds = client.get_metric_history(run_id, "fit/threshold" if fitting else BEST_THRESHOLD_METRIC)
+        fit_tiebreak = {
+            name: {int(item.step): float(item.value) for item in client.get_metric_history(run_id, f"fit/{name}")}
+            for name in ("quality_precision", "false_positive", "false_negative")
+        } if fitting else {}
         notebook_losses = (
             client.get_metric_history(run_id, "val/loss")
             # Старые запуски действительно сохраняли best по loss; их веса не переписываем.
@@ -124,7 +131,13 @@ def get_best_training_checkpoint(
             return None
         best = selected_history[-1]
     else:
-        best = max(history, key=lambda item: (float(item.value), -int(item.step)))
+        best = max(history, key=lambda item: (
+            float(item.value),
+            fit_tiebreak.get("quality_precision", {}).get(int(item.step), 0.0),
+            -fit_tiebreak.get("false_positive", {}).get(int(item.step), 0.0),
+            -fit_tiebreak.get("false_negative", {}).get(int(item.step), 0.0),
+            -int(item.step),
+        ))
     threshold = _metric_value_at_step(thresholds, int(best.step))
     artifact_root = getattr(run.info, "artifact_uri", None)
     artifact_uri = (
@@ -411,6 +424,32 @@ def log_training_epoch(run: MLflowRunRef, metrics: EpochMetrics) -> None:
         return
     mlflow = _ensure_run_active(run)
     try:
+        if metrics.package_evaluation is not None:
+            evaluation = metrics.package_evaluation
+            if metrics.epoch > 0:
+                mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
+            values = {
+                "pixel_f1": metrics.val_best_threshold_pixel_f1,
+                "pixel_precision": metrics.val_best_threshold_pixel_precision,
+                "pixel_recall": metrics.val_best_threshold_pixel_recall,
+                "object_f1": metrics.val_best_threshold_object_f1,
+                "object_precision": metrics.val_best_threshold_object_precision,
+                "object_recall": metrics.val_best_threshold_object_recall,
+                "quality_precision": metrics.val_quality_precision,
+                "threshold": metrics.val_best_threshold,
+                "false_positive": evaluation["quality_counts"]["fp"],
+                "false_negative": evaluation["quality_counts"]["fn"],
+            }
+            for name, value in values.items():
+                mlflow.log_metric(f"fit/{name}", value, step=metrics.epoch)
+            mlflow.log_metric("train/learning_rate", metrics.learning_rate, step=metrics.epoch)
+            mlflow.log_metric("train/epoch_time_sec", metrics.epoch_time_sec, step=metrics.epoch)
+            if hasattr(mlflow, "set_tag"):
+                mlflow.set_tag("quality_metric", metrics.quality_metric)
+                mlflow.set_tag("evaluation_scope", "training_package")
+            _log_dict(evaluation, f"reports/package_fit/epoch_{metrics.epoch:04d}.json")
+            _try_log_metric_descriptions(run)
+            return
         mlflow.log_metric("train/loss", metrics.train_loss, step=metrics.epoch)
         for field, name in (("train_region_loss", "train/region_loss"), ("train_boundary_loss", "train/boundary_loss"), ("val_region_loss", "val/region_loss"), ("val_boundary_loss", "val/boundary_loss")):
             value = getattr(metrics, field, None)
@@ -560,7 +599,7 @@ def log_training_metrics(run: MLflowRunRef, result: TrainResult) -> None:
                 if item.val_macro_pixel_f1 is not None
             ]
             if macro_values:
-                mlflow.log_metric("train/best_macro_pixel_f1", max(macro_values))
+                mlflow.log_metric("train/best_macro_pixel_f1", selected.get("macro_pixel_f1", max(macro_values)))
         if result.best_threshold is not None:
             mlflow.log_metric("train/best_confidence_threshold", result.best_threshold)
         for name, value in result.diagnostics.get("test_metrics", {}).items():
@@ -585,7 +624,7 @@ def log_metric_descriptions(run: MLflowRunRef) -> None:
             return
         tags = stored.data.tags
         context = {key: str(tags[key]) for key in (
-            "pipeline_variant", "task", "quality_metric", "checkpoint_selection_metric",
+            "pipeline_variant", "task", "quality_metric", "checkpoint_selection_metric", "evaluation_scope",
         ) if key in tags}
         catalog = build_catalog(stored.data.metrics, context)
         html = render_html(catalog)
@@ -645,6 +684,7 @@ def log_training_artifacts(run: MLflowRunRef, result: TrainResult) -> None:
         "dense_train_windows": "reports/dense_train_windows.json",
         "test_dense_windows": "reports/test_dense_windows.json",
         "diagnostic_checkpoints": "reports/diagnostic_checkpoints.json",
+        "training_package_fit": "reports/training_package_fit.json",
     }
     for key, artifact_path in diagnostic_artifacts.items():
         value = diagnostics.get(key)

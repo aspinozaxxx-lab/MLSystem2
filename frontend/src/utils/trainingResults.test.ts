@@ -7,7 +7,7 @@ const result = (id: string, day: number, parent?: string): TrainingResultInfo =>
   id, created_at: `2026-10-${String(day).padStart(2, "0")}T12:00:00Z`, model_name: "Сеть",
   architecture: "smp_unet_resnet34", status: "ok", continued_from_result_id: parent,
   source: "manual", pipeline_variant: "legacy", validation_fold: 0, is_primary: false,
-  can_continue_training: true, input_channels: 4, quality_metric: "pixel", task: "binary",
+  can_continue_training: true, input_channels: 4, quality_metric: "pixel", task: "binary", evaluation_scope: "validation",
 });
 
 describe("автор обучения", () => {

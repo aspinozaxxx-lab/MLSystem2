@@ -134,6 +134,7 @@ class TrainSettings(BaseModel):
     initial_checkpoint_uri: str | None = None
     initial_checkpoint_weights_only: bool = False
     initial_checkpoint_recalculate_normalization: bool = False
+    test_package_fit_config: str | None = Field(default=None, min_length=1)
     epochs: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     device: str = "cuda"
@@ -155,6 +156,8 @@ class TrainSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_loss(self) -> Self:
+        if self.test_package_fit_config and not self.initial_checkpoint_weights_only:
+            raise ValueError("Подгонка тестового пакета требует инициализации исходными весами.")
         if self.initial_checkpoint_weights_only and not self.initial_checkpoint_uri:
             raise ValueError("Инициализация весами требует исходный чекпойнт.")
         if self.initial_checkpoint_recalculate_normalization and not self.initial_checkpoint_weights_only:
@@ -264,10 +267,10 @@ class SystemSettings(BaseModel):
             fixed = (
                 (self.dataset.val_fraction, 0.2),
                 (self.tile_preparation.stride, self.tile_preparation.tile_size if self.train.pipeline_variant in {"next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else self.tile_preparation.tile_size // 2),
-                (self.tile_preparation.context, 0), (self.tile_preparation.augmentation_level, 3),
+                (self.tile_preparation.context, 0), (self.tile_preparation.augmentation_level, 0 if self.train.test_package_fit_config else 3),
                 (self.tile_preparation.seed, 42),
                 (self.train.batch_size, batch_sizes[self.train.model_name][(512, 768, 1024, 1536).index(self.tile_preparation.tile_size)]),
-                (self.train.learning_rate, 1e-4),
+                (self.train.learning_rate, 1e-5 if self.train.test_package_fit_config else 1e-4),
                 (self.train.weight_decay, 0.01), (self.train.threshold, 0.5),
                 (self.train.tversky_alpha, 0.75), (self.train.tversky_beta, 0.25),
             )

@@ -15499,6 +15499,15 @@
             "title": "Normalization Policy",
             "default": "auto"
           },
+          "test_sample_training_mode": {
+            "type": "string",
+            "enum": [
+              "fit_package",
+              "split"
+            ],
+            "title": "Test Sample Training Mode",
+            "default": "fit_package"
+          },
           "run_inference_after_training": {
             "anyOf": [
               {
@@ -16135,6 +16144,15 @@
             },
             "type": "array",
             "title": "Training Test Sample Names"
+          },
+          "evaluation_scope": {
+            "type": "string",
+            "enum": [
+              "validation",
+              "training_package"
+            ],
+            "title": "Evaluation Scope",
+            "default": "validation"
           },
           "input_channels": {
             "type": "integer",

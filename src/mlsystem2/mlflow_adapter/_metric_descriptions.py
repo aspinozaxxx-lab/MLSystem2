@@ -56,6 +56,26 @@ STATIC = {
 
 
 def describe_metric(name: str, context: dict[str, str]) -> dict[str, str]:
+    if context.get("evaluation_scope") == "training_package" and name == "train/epoch_time_sec":
+        return _entry("Время обучения эпохи и рабочей оценки всего обучаемого пакета; на эпохе 0 — только исходная оценка.",
+                      "Сравнение затрат подгонки; включает постобработку и не включает подготовку данных.", "секунды", "меньше — быстрее при сопоставимом объёме")
+    if context.get("evaluation_scope") == "training_package" and name in {
+        "train/best_quality_f1", "train/best_threshold_pixel_f1", "train/best_macro_pixel_f1",
+    }:
+        return _entry("F1 лучших сохранённых весов на полном обучаемом пакете после рабочего инференса.",
+                      "Сводка подгонки, включая исходный вариант на эпохе 0. Не независимая оценка качества на новой территории.")
+    if name.startswith("fit/"):
+        field = name.removeprefix("fit/")
+        for prefix, title in (("pixel_", "пиксели"), ("object_", "объекты"), ("quality_", "основная метрика")):
+            if field.startswith(prefix) and field.removeprefix(prefix) in SCORES:
+                meaning, purpose = SCORES[field.removeprefix(prefix)]
+                return _entry(f"{meaning}: {title} всего обучаемого пакета после рабочего инференса и постобработки. Эпоха 0 — начальные веса.",
+                              purpose + " Подгонка по известному эталону; это не независимая оценка обобщения.")
+        if field == "threshold":
+            return _entry("Порог рабочего инференса, зафиксированный для всего этапа подгонки.", "Сопоставимость исходных и новых весов; порог не оптимизируется по эпохам.", "порог 0–1", "справочное значение")
+        if field in {"false_positive", "false_negative"}:
+            return _entry("Число ложных срабатываний." if field == "false_positive" else "Число пропусков.",
+                          "Ошибки основной метрики всего обучаемого пакета; разрешают ничью F1 и precision.", "пиксели или объекты", "меньше — лучше")
     """Расшифровать точное имя; неизвестные метрики нельзя молча выдумывать."""
     variant = context.get("pipeline_variant", "legacy")
     multiclass = context.get("task") == "multiclass"

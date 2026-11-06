@@ -24,6 +24,7 @@ from mlsystem2.tile_preparation.contracts import HARD_NEGATIVE_LABEL
 from ._object_f1 import object_loss, validate_objects
 from ._sampling_feedback import BackgroundErrors, adaptive_controller
 from ._dense_windows import DenseWindowMetrics
+from ._package_fit import evaluate_package, package_epoch_metrics, package_rank, package_selection, set_package_epoch
 from .contracts import CheckpointArtifact, EpochMetrics, TrainError, TrainProgressEvent
 from .contracts import TrainProgressSink, TrainRequest, TrainResult
 
@@ -143,8 +144,9 @@ def train_model(
 
     model = request.model.model
     config = request.config
+    fit_package = request.package_evaluator is not None
     sampling = adaptive_controller(request.train_loader) if config.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else None
-    if config.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} and sampling is None:
+    if not fit_package and config.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} and sampling is None:
         raise TrainError("next-gen3 требует адаптивный train-сэмплер")
     device = torch.device(config.device)
     if config.pipeline_variant in {"next_gen", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"} and str(device).startswith("cuda"):
@@ -156,7 +158,9 @@ def train_model(
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
     )
-    if config.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
+    if fit_package:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=3, factor=0.5, min_lr=1e-7)
+    elif config.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="min", patience=3, factor=0.5,
         )
@@ -196,9 +200,21 @@ def train_model(
     next_diagnostic_time = diagnostic_interval
 
     try:
+        baseline_metrics = None
+        if fit_package:
+            evaluated = evaluate_package(request, 0, pause_controller.pause_if_requested)
+            baseline_metrics = package_epoch_metrics(request, evaluated, 0, 0.0, config.learning_rate, perf_counter() - total_started)
+            history.append(baseline_metrics)
+            best_metrics = last_validation_metrics = baseline_metrics
+            best_score = float(baseline_metrics.val_quality_f1)
+            _save_training_checkpoint(request, str(best_checkpoint_path), baseline_metrics, "best")
+            _emit(progress_sink, 0, "package_baseline_evaluated", baseline_metrics)
+            logging.getLogger(__name__).info("Подгонка пакета: исходная F1=%.6f, начальные веса сохранены", best_score)
         try:
             for epoch in range(1, config.epochs + 1):
                 pause_controller.pause_if_requested()
+                if fit_package:
+                    set_package_epoch(request.train_loader, epoch)
                 if sampling is not None:
                     sampling.set_epoch(epoch)
                 _emit(progress_sink, epoch, "epoch_started", None)
@@ -224,7 +240,7 @@ def train_model(
                     logging.getLogger(__name__).info("Эпоха %s: обучение завершено за %.1f с, loss=%.6f; начинается проверка",
                                                      epoch, perf_counter() - epoch_started, train_epoch["loss"])
                 validate_now = (
-                    config.pipeline_variant == "legacy"
+                    fit_package or config.pipeline_variant == "legacy"
                     or epoch == 1
                     or epoch % config.validation_interval_epochs == 0
                     or epoch == config.epochs
@@ -244,7 +260,7 @@ def train_model(
                     _emit(progress_sink, epoch, "epoch_finished", metrics)
                     continue
 
-                val = _validate_epoch(
+                val = evaluate_package(request, epoch, pause_controller.pause_if_requested) if fit_package else _validate_epoch(
                     torch,
                     model,
                     request.val_loader,
@@ -253,7 +269,8 @@ def train_model(
                     epoch,
                     pause_controller=pause_controller,
                 )
-                _ensure_finite_scalar(float(val["loss"]), "val_loss", epoch)
+                if not fit_package:
+                    _ensure_finite_scalar(float(val["loss"]), "val_loss", epoch)
                 if sampling is not None:
                     from mlsystem2.tile_preparation.contracts import SamplingFeedback
 
@@ -264,14 +281,16 @@ def train_model(
                         epoch, current["foreground_draws"], current["background_draws"],
                         current["next_background_fraction"], current["reason"],
                     )
-                if config.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
+                if fit_package:
+                    scheduler.step(float(val["quality_f1"]))
+                elif config.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7", "object_f1", "object_f1_v2"}:
                     scheduler.step(float(val["loss"]))
                 elif config.pipeline_variant == "next_gen":
                     scheduler.step(float(val["quality_f1"]))
                 else:
                     scheduler.step()
 
-                metrics = EpochMetrics(
+                metrics = package_epoch_metrics(request, val, epoch, train_epoch["loss"], epoch_learning_rate, perf_counter() - epoch_started) if fit_package else EpochMetrics(
                     epoch=epoch,
                     validation_performed=True,
                     adaptive_sampling=sampling.snapshot() if sampling is not None else {},
@@ -322,8 +341,9 @@ def train_model(
                 history.append(metrics)
                 last_validation_metrics = metrics
 
-                score = -float(metrics.val_loss) if config.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else _checkpoint_score(metrics)
-                if score > best_score:
+                score = float(metrics.val_quality_f1) if fit_package else -float(metrics.val_loss) if config.pipeline_variant in {"next_gen2", "next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"} else _checkpoint_score(metrics)
+                improved = package_rank(metrics) > package_rank(best_metrics) if fit_package else score > best_score
+                if improved:
                     best_score = score
                     best_metrics = metrics
                     patience = 0
@@ -399,6 +419,14 @@ def train_model(
                 "metric": "val/object_f1", "mode": "max", "epoch": best_metrics.epoch,
                 "object_f1": best_metrics.val_quality_f1, "val_loss": best_metrics.val_loss,
             }
+        if fit_package:
+            diagnostics["checkpoint_selection"] = package_selection(best_metrics, baseline_metrics)
+            diagnostics["training_package_fit"] = {
+                "scope": "training_package", "independent": False,
+                "baseline": baseline_metrics.package_evaluation,
+                "best": best_metrics.package_evaluation,
+                "best_epoch": best_metrics.epoch,
+            }
         if (request.test_loader is not None or request.dense_train_loader is not None) and not stopped_early and best_metrics is not None:
             # Test не участвует в scheduler, выборе весов или ранней остановке.
             model.to(torch.device("cpu"))
@@ -448,7 +476,7 @@ def train_model(
                 if str(device).startswith("cuda")
                 else 0
             )
-        if config.pipeline_variant == "next_gen" and config.evaluate_gaussian_blend:
+        if not fit_package and config.pipeline_variant == "next_gen" and config.evaluate_gaussian_blend:
             if best_metrics is None:
                 raise TrainError("Gaussian A/B требует сохранённый best checkpoint.")
             model.to(torch.device("cpu"))
@@ -463,7 +491,7 @@ def train_model(
             )
         return TrainResult(
             history=history,
-            epochs_total=len(history),
+            epochs_total=sum(item.epoch > 0 for item in history),
             training_time_sec=perf_counter() - total_started,
             best_checkpoint_path=str(best_checkpoint_path),
             final_checkpoint_path=final_checkpoint,
@@ -2499,7 +2527,13 @@ def _save_training_checkpoint(
         metadata["object_separation"] = metrics.val_object_separation
         metadata["object_threshold_sweep"] = metrics.val_object_threshold_sweep
         metadata["train_config"]["object_separation"] = metrics.val_object_separation
-    if request.config.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
+    if metrics.package_evaluation is not None:
+        metadata.update(
+            evaluation_scope="training_package", independent=False,
+            training_package_fit=metrics.package_evaluation,
+            checkpoint_selection_metric="fit/object_f1" if metrics.quality_metric == "objects" else "fit/pixel_f1",
+        )
+    elif request.config.pipeline_variant in {"next_gen3", "next_gen4", "next_gen4_global_norm", "next_gen4_augmentation_v3", "next_gen4_augmentation_v4", "next_gen4_consistency_v1", "next_gen4_consistency_v2", "next_gen4_consistency_v3", "next_gen4_consistency_v4", "next_gen4_consistency_v5", "next_gen4_consistency_v6", "next_gen4_consistency_v7"}:
         metadata["adaptive_sampling"] = adaptive_controller(request.train_loader).snapshot(include_state=True)
     if extra_metadata:
         metadata.update(extra_metadata)

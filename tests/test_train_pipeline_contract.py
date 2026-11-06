@@ -190,8 +190,9 @@ def test_train_pipeline_result_fields() -> None:
     assert {"status", "mlflow_run", "timings", "report"} <= set(TrainPipelineResult.model_fields)
 
 
-def test_train_pipeline_request_has_only_run_name() -> None:
-    assert set(TrainPipelineRequest.model_fields) == {"run_name"}
+def test_train_pipeline_request_has_run_name_and_runtime_evaluator() -> None:
+    assert set(TrainPipelineRequest.model_fields) == {"run_name", "package_evaluator"}
+    assert TrainPipelineRequest().model_dump() == {"run_name": None}
 
 
 def test_train_pipeline_sets_mlflow_dataset_from_binary_annotation_stem() -> None:

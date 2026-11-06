@@ -10,7 +10,7 @@ const result: TrainingResultInfo = {
   comment: "",
   id: "учебная-сеть", model_name: "SegFormer B0", architecture: "smp_segformer_b0", input_channels: 4,
   created_at: "2026-10-15T09:00:00Z", source: "manual", status: "ok", pipeline_variant: "next_gen2",
-  quality_metric: "pixel", validation_fold: 0, is_primary: false, can_continue_training: true, task: "binary",
+  quality_metric: "pixel", validation_fold: 0, is_primary: false, can_continue_training: true, task: "binary", evaluation_scope: "validation",
 };
 const props = () => ({
   result, options: { additional_epochs: 10, additional_time_sec: 600, early_stopping_patience: 3,
@@ -61,6 +61,7 @@ describe("состав датасета при дообучении", () => {
     expect(body.checkpoint).toBe("best");
     expect(body.pipeline_variant).toBe("next_gen4");
     expect(body.normalization_policy).toBe("auto");
+    expect(body.test_sample_training_mode).toBe("fit_package");
     expect(body.dataset_key).toBe(source === "dataset" ? "другой-датасет" : undefined);
     expect(body.test_sample_id).toBe(source === "test_sample" ? "пробная-разметка" : undefined);
     expect(input.closeModal).toHaveBeenCalledOnce();

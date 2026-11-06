@@ -269,6 +269,7 @@ class TrainingResultInfo(BaseModel):
     continued_from_dataset_source: Literal["original", "current", "dataset", "test_sample"] | None = None
     continued_from_data_name: str | None = None
     training_test_sample_names: list[str] = Field(default_factory=list)
+    evaluation_scope: Literal["validation", "training_package"] = "validation"
     input_channels: int = Field(default=4, gt=0)
     quality_metric: Literal["pixel", "objects"] = "pixel"
     task: Literal["binary", "multiclass"] = "binary"
