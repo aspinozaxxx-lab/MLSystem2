@@ -6662,6 +6662,169 @@
           }
         }
       }
+    },
+    "/api/v1/personal-note": {
+      "get": {
+        "summary": "Get Note",
+        "operationId": "get_note_api_v1_personal_note_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalNoteInfo"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Note",
+        "operationId": "put_note_api_v1_personal_note_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonalNoteUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalNoteInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/personal-note/attachments": {
+      "post": {
+        "summary": "Upload Attachment",
+        "operationId": "upload_attachment_api_v1_personal_note_attachments_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_attachment_api_v1_personal_note_attachments_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonalNoteAttachment"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/personal-note/attachments/{file_id}/download": {
+      "get": {
+        "summary": "Download Attachment",
+        "operationId": "download_attachment_api_v1_personal_note_attachments__file_id__download_get",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/personal-note/attachments/{file_id}": {
+      "delete": {
+        "summary": "Delete Attachment",
+        "operationId": "delete_attachment_api_v1_personal_note_attachments__file_id__delete",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7418,6 +7581,20 @@
         },
         "type": "object",
         "title": "Body_post_training_result_triton_zip_api_v1_results_training__result_id__triton_zip_post"
+      },
+      "Body_upload_attachment_api_v1_personal_note_attachments_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_attachment_api_v1_personal_note_attachments_post"
       },
       "BootstrapInfo": {
         "properties": {
@@ -11182,6 +11359,83 @@
           "models"
         ],
         "title": "ModelListResponse"
+      },
+      "PersonalNoteAttachment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "original_name": {
+            "type": "string",
+            "title": "Original Name"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "download_url": {
+            "type": "string",
+            "title": "Download Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "original_name",
+          "size_bytes",
+          "download_url"
+        ],
+        "title": "PersonalNoteAttachment"
+      },
+      "PersonalNoteInfo": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/PersonalNoteAttachment"
+            },
+            "type": "array",
+            "title": "Attachments"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "content",
+          "revision",
+          "attachments"
+        ],
+        "title": "PersonalNoteInfo"
+      },
+      "PersonalNoteUpdate": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "content",
+          "expected_revision"
+        ],
+        "title": "PersonalNoteUpdate"
       },
       "PrimaryTestSampleInfo": {
         "properties": {

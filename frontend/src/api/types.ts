@@ -1,5 +1,8 @@
 import type { components } from "./schema";
 
+export type PersonalNoteInfo = components["schemas"]["PersonalNoteInfo"];
+export type PersonalNoteAttachment = components["schemas"]["PersonalNoteAttachment"];
+
 export type TrainingResultCommentInfo = components["schemas"]["TrainingResultCommentInfo"];
 
 export type UsageConfig = components["schemas"]["UsageConfig"];

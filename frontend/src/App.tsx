@@ -25,6 +25,7 @@ import {
   Settings,
   Square,
   Star,
+  StickyNote,
   Trash2,
   X,
   ZoomIn,
@@ -87,6 +88,7 @@ import { TrainingContinuationForm } from "./TrainingContinuationForm";
 import { PseudoComparisonProvider, PseudoComparisonTray, PseudoCompareButton } from "./PseudoComparisonSelection";
 import { pseudoCheckpointLabel, trainingAuthorLabel, trainingResultFamilies } from "./utils/trainingResults";
 import { TrainingResultComment } from "./TrainingResultComment";
+import { PersonalNotePage } from "./PersonalNotePage";
 import {
   defaultTrainingZipModelName,
   displayStoredFileName,
@@ -199,7 +201,7 @@ export function App() {
   }, [run]);
   const loadBootstrap = useCallback(async () => { await fetchBootstrap(); }, [fetchBootstrap]);
   const getBootstrap = useCallback(() => bootstrap ? Promise.resolve(bootstrap) : fetchBootstrap(), [bootstrap, fetchBootstrap]);
-  const independentCatalogPage = route[0] === "test-markups" || route[0] === "results" || route[0] === "test-f1";
+  const independentCatalogPage = route[0] === "test-markups" || route[0] === "results" || route[0] === "test-f1" || route[0] === "notes";
 
   useEffect(() => {
     const onHashChange = () => {
@@ -315,6 +317,9 @@ function RoutedPage(context: {
   registerRouteGuard: (guard: (() => boolean) | null) => void;
 }) {
   const [head, second] = context.route;
+  if (head === "notes") return context.username.toLowerCase() === "aspinoza"
+    ? <PersonalNotePage key={context.username} run={context.run} registerRouteGuard={context.registerRouteGuard} />
+    : <p role="alert">Нет доступа к личной заметке</p>;
   if (head === "test-markups" && second === "create") return <TestMarkupCreatePage run={context.run} />;
   if (head === "test-markups" && !second) return <TestMarkupCatalogPage {...context} />;
   if (head === "test-markups" && second && context.route[2] === "edit") return <Suspense fallback={<LoadingPage text="Загрузка редактора тестовой разметки" />}><DatasetEditorPage key={second} run={context.run} registerRouteGuard={context.registerRouteGuard} testSampleId={second} /></Suspense>;
@@ -374,7 +379,7 @@ function Shell({
     return () => window.clearInterval(timer);
   }, [loadQueueCount, route]);
   const exportRouteActive =
-    route[0] === "model-export" || route[0] === "scene-list-export" || route[0] === "test-markups";
+    route[0] === "model-export" || route[0] === "scene-list-export" || route[0] === "test-markups" || route[0] === "notes";
   const navItems = [
     { href: "#/start", key: "start", label: "Запуск", icon: Play },
     { href: "#/queue", key: "queue", label: "Очередь", icon: ListChecks },
@@ -463,6 +468,15 @@ function Shell({
                 <Check size={16} />
                 Тестовые разметки
               </a>
+              {user.toLowerCase() === "aspinoza" ? <a
+                className={route[0] === "notes" ? "active" : ""}
+                href="#/notes"
+                role="menuitem"
+                onClick={() => setExportMenuOpen(false)}
+              >
+                <StickyNote size={16} />
+                Заметки
+              </a> : null}
             </div>
           </div>
           <a className={route[0] === "results" ? "active" : ""} href="#/results" aria-label="Результаты" title="Результаты" aria-current={route[0] === "results" ? "page" : undefined}>

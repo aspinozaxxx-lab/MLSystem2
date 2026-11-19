@@ -4,6 +4,22 @@ import importlib
 from pathlib import Path
 
 
+def test_personal_note_contract(monkeypatch):
+    from mlsystem2.training_ui_api.api import get_openapi_schema
+    from mlsystem2.training_ui_api.contracts import PersonalNoteAttachment, PersonalNoteInfo, PersonalNoteUpdate
+
+    assert set(PersonalNoteInfo.model_fields) == {"content", "revision", "attachments"}
+    assert set(PersonalNoteUpdate.model_fields) == {"content", "expected_revision"}
+    assert set(PersonalNoteAttachment.model_fields) == {"id", "original_name", "size_bytes", "download_url"}
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MLSYSTEM2_TRAINING_UI_DATABASE_SCHEMA", "")
+    paths = get_openapi_schema()["paths"]
+    assert {"get", "put"} <= paths["/api/v1/personal-note"].keys()
+    assert "multipart/form-data" in paths["/api/v1/personal-note/attachments"]["post"]["requestBody"]["content"]
+    assert "get" in paths["/api/v1/personal-note/attachments/{file_id}/download"]
+    assert "delete" in paths["/api/v1/personal-note/attachments/{file_id}"]
+
+
 def test_test_region_editor_contract(monkeypatch):
     from mlsystem2.training_ui_api.api import get_openapi_schema
     from mlsystem2.training_ui_api.contracts import AnnotationVersionDraft, DatasetEditorSceneInfo, DatasetEditorSceneDetail, TestSampleDetail

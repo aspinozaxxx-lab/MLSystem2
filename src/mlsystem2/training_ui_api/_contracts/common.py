@@ -73,6 +73,30 @@ class StoredFileInfo(BaseModel):
     download_url: str
 
 
+class PersonalNoteAttachment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    original_name: str
+    size_bytes: int
+    download_url: str
+
+
+class PersonalNoteInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
+    revision: int
+    attachments: list[PersonalNoteAttachment]
+
+
+class PersonalNoteUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
+    expected_revision: int = Field(ge=0)
+
+
 class ConfigField(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -105,6 +129,9 @@ __all__ = [
     "JobStatus",
     "JobType",
     "JsonDict",
+    "PersonalNoteAttachment",
+    "PersonalNoteInfo",
+    "PersonalNoteUpdate",
     "ResultStatus",
     "RuntimeProgress",
     "StoredFileInfo",

@@ -29,6 +29,7 @@ from ._routes.export import register_export_routes
 from ._routes.files import register_file_routes
 from ._routes.frontend import register_frontend_routes
 from ._routes.jobs import register_job_routes
+from ._routes.personal_note import register_personal_note_routes
 from ._routes.pseudolabel import register_pseudolabel_routes
 from ._routes.results import register_result_routes
 from ._routes.templates import register_template_routes
@@ -215,6 +216,7 @@ def create_app() -> FastAPI:
     register_pseudolabel_routes(app, route_context)
     register_result_routes(app, route_context)
     register_file_routes(app, route_context)
+    register_personal_note_routes(app, route_context)
     register_frontend_routes(app, config)
     return app
 

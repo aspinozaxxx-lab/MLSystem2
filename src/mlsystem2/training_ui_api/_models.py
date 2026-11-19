@@ -33,6 +33,27 @@ def _json_type():
     return JSON().with_variant(JSONB, "postgresql")
 
 
+class PersonalNoteRow(Base):
+    """Единственное текущее состояние личной заметки, без журнала изменений."""
+
+    __tablename__ = "personal_note"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_personal_note_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class PersonalNoteAttachmentRow(Base):
+    """Вложения единственной заметки; недоступны через общий каталог файлов."""
+
+    __tablename__ = "personal_note_attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    original_name: Mapped[str] = mapped_column(String(255))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+
+
 class DatasetClassRow(Base):
     __tablename__ = "dataset_classes"
     __table_args__ = (
