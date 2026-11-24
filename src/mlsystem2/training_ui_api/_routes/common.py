@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from mlsystem2.training_ui_api._annotation_versions import AnnotationVersionConflict
 from mlsystem2.training_ui_api._config import TrainingUIAPIConfig
+from mlsystem2.training_ui_api._dataset_editor import (
+    DatasetEditorConflict,
+    DatasetEditorGitError,
+    recover_annotation_publications,
+)
+from mlsystem2.training_ui_api._markup_lock import markup_write_lock
 
 
 @dataclass(frozen=True)
@@ -22,9 +29,6 @@ class RouteContext:
 
 @contextmanager
 def editor_errors() -> Iterator[None]:
-    from .._annotation_versions import AnnotationVersionConflict
-    from .._dataset_editor import DatasetEditorConflict, DatasetEditorGitError
-
     try:
         yield
     except (DatasetEditorConflict, AnnotationVersionConflict) as exc:
@@ -35,9 +39,6 @@ def editor_errors() -> Iterator[None]:
 
 @contextmanager
 def editor_transaction(session: Session, config: TrainingUIAPIConfig) -> Iterator[None]:
-    from .._dataset_editor import recover_annotation_publications
-    from .._markup_lock import markup_write_lock
-
     with editor_errors(), markup_write_lock(config):
         recover_annotation_publications(session, config)
         yield
