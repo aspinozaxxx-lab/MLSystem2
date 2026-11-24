@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
-from fastapi import Request
+from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from mlsystem2.training_ui_api._config import TrainingUIAPIConfig
@@ -19,4 +20,28 @@ class RouteContext:
     pseudolabel_authenticated: Callable[[Request], str]
 
 
-__all__ = ["RouteContext"]
+@contextmanager
+def editor_errors() -> Iterator[None]:
+    from .._annotation_versions import AnnotationVersionConflict
+    from .._dataset_editor import DatasetEditorConflict, DatasetEditorGitError
+
+    try:
+        yield
+    except (DatasetEditorConflict, AnnotationVersionConflict) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DatasetEditorGitError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@contextmanager
+def editor_transaction(session: Session, config: TrainingUIAPIConfig) -> Iterator[None]:
+    from .._dataset_editor import recover_annotation_publications
+    from .._markup_lock import markup_write_lock
+
+    with editor_errors(), markup_write_lock(config):
+        recover_annotation_publications(session, config)
+        yield
+        session.commit()
+
+
+__all__ = ["RouteContext", "editor_errors", "editor_transaction"]

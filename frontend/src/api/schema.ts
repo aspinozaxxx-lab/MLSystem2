@@ -311,6 +311,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/managed-datasets/{dataset_key}/detach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Detach Composition */
+        post: operations["detach_composition_api_v1_managed_datasets__dataset_key__detach_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/managed-datasets/{dataset_key}": {
         parameters: {
             query?: never;
@@ -2805,6 +2822,12 @@ export interface components {
         DatasetEditorCopyRequest: {
             /** Name */
             name: string;
+            /** Composition Mode */
+            composition_mode?: ("dynamic" | "snapshot") | null;
+            /** Inherit Hard Negatives */
+            inherit_hard_negatives?: boolean | null;
+            /** Inherit Annotation Zones */
+            inherit_annotation_zones?: boolean | null;
         };
         /** DatasetEditorCopyResult */
         DatasetEditorCopyResult: {
@@ -2828,6 +2851,11 @@ export interface components {
              * @default false
              */
             managed: boolean;
+            /**
+             * Snapshot Pending
+             * @default false
+             */
+            snapshot_pending: boolean;
         };
         /** DatasetEditorDatasetInfo */
         DatasetEditorDatasetInfo: {
@@ -2866,6 +2894,10 @@ export interface components {
              * @default false
              */
             managed: boolean;
+            /** Composition Mode */
+            composition_mode?: ("dynamic" | "snapshot") | null;
+            /** Snapshot Discardable */
+            snapshot_discardable?: boolean | null;
             /** Managed Sources */
             managed_sources?: components["schemas"]["ManagedDatasetSourceInfo"][];
             /**
@@ -3415,6 +3447,20 @@ export interface components {
              * @default false
              */
             managed: boolean;
+            /** Composition Mode */
+            composition_mode?: ("dynamic" | "snapshot") | null;
+            /** Snapshot Discardable */
+            snapshot_discardable?: boolean | null;
+            /**
+             * Inherit Hard Negatives
+             * @default true
+             */
+            inherit_hard_negatives: boolean;
+            /**
+             * Inherit Annotation Zones
+             * @default true
+             */
+            inherit_annotation_zones: boolean;
             /** Managed Sources */
             managed_sources?: components["schemas"]["ManagedDatasetSourceInfo"][];
             /**
@@ -3860,6 +3906,22 @@ export interface components {
             name: string;
             /** Sources */
             sources: components["schemas"]["ManagedDatasetCompositionSourceCreate"][];
+            /**
+             * Composition Mode
+             * @default dynamic
+             * @enum {string}
+             */
+            composition_mode: "dynamic" | "snapshot";
+            /**
+             * Inherit Hard Negatives
+             * @default true
+             */
+            inherit_hard_negatives: boolean;
+            /**
+             * Inherit Annotation Zones
+             * @default true
+             */
+            inherit_annotation_zones: boolean;
         };
         /** ManagedDatasetCompositionSourceCreate */
         ManagedDatasetCompositionSourceCreate: {
@@ -4575,6 +4637,11 @@ export interface components {
             name: string;
             /** Dataset Name */
             dataset_name?: string | null;
+            /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
             /** Class Key */
             class_key?: string | null;
             /** Class Name */
@@ -6615,6 +6682,37 @@ export interface operations {
                 "application/json": components["schemas"]["ManagedDatasetCompositionCreate"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetCatalogInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detach_composition_api_v1_managed_datasets__dataset_key__detach_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

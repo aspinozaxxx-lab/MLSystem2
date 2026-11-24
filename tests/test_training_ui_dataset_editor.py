@@ -59,6 +59,7 @@ from mlsystem2.training_ui_api._managed_datasets import (
     process_next_managed_materialization,
 )
 from mlsystem2.training_ui_api._markup_lock import markup_read_lock
+from mlsystem2.training_ui_api._composition_snapshots import process_next_snapshot
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,188 @@ def editor_environment(
             database_path=database_path,
             release_marker=release_marker,
         )
+
+
+@pytest.mark.parametrize(("mode", "negatives", "zones"), [
+    ("snapshot", False, True), ("snapshot", True, False), ("snapshot", False, False), ("dynamic", True, True),
+])
+def test_combo_snapshot_freezes_published_sources_and_edits_its_own_files(
+    editor_environment, monkeypatch, mode, negatives, zones,
+):
+    env = editor_environment
+    client = env.client
+    config = get_config()
+    annotation = env.live_annotation.name
+    second = Path("Озёра") / "main"
+    features = [
+        _feature(7, "positive", [[4, 2], [5, 2], [5, 3], [4, 3], [4, 2]]),
+        _feature(8, "annotation_zone", [[1, 1], [6, 1], [6, 6], [1, 6], [1, 1]]),
+    ]
+    for root in (config.mlmarkup_root, env.editor_root):
+        (root / second).mkdir(parents=True)
+        (root / second / annotation).write_text(json.dumps(_annotation_payload(features)), encoding="utf-8")
+    _git(env.editor_root, "add", "--", second.as_posix())
+    _git(env.editor_root, "commit", "-m", "Опубликовать озёра")
+    _git(env.editor_root, "push", "origin", "HEAD:main")
+    catalog = client.post("/api/v1/dataset-catalog/sync").json()["classes"]
+    lakes = next(c for c in catalog if c["name"] == "Озёра")
+    result = client.post("/api/v1/dataset-classes", json={"name": "Комбо", "imagery_type": "kanopus"})
+    target = next(c for c in result.json()["classes"] if c["name"] == "Комбо")
+    request = {
+        "class_key": target["key"], "name": "main", "composition_mode": mode,
+        "inherit_hard_negatives": negatives, "inherit_annotation_zones": zones,
+        "sources": [{"dataset_key": env.dataset_key, "priority": 100}, {"dataset_key": lakes["datasets"][0]["key"]}],
+    }
+    result = client.post("/api/v1/managed-datasets/compose", json=request)
+    assert result.status_code == 200, result.text
+    item = next(c for c in result.json()["classes"] if c["key"] == target["key"])["datasets"][0]
+    key = item["key"]
+    assert item["composition_mode"] == mode
+    factory = create_session_factory(config)
+    if mode == "dynamic":
+        from mlsystem2.training_ui_api._models import DatasetEditorDraftRow
+
+        with factory() as session:
+            draft = DatasetEditorDraftRow(dataset_key=key, annotation_name=annotation, username="редактор",
+                                          base_revision="123", geojson=_annotation_payload([]))
+            session.add(draft)
+            session.commit()
+            blocked = client.post(f"/api/v1/managed-datasets/{key}/detach")
+            assert blocked.status_code == 400 and "черновики" in blocked.json()["detail"]
+            session.delete(draft)
+            session.commit()
+        result = client.post(f"/api/v1/managed-datasets/{key}/detach")
+        assert result.status_code == 200, result.text
+        raster = config.images_root / "kanopus" / "Olskij" / "SCN01.part.tif"
+        saved = raster.rename(raster.with_suffix(".проверка"))
+        try:
+            with factory() as session:
+                assert process_next_snapshot(session, config)
+                session.commit()
+                row = session.scalar(select(DatasetRow).where(DatasetRow.key == key))
+                assert row.source_type == "managed" and row.composition["detach_error"]
+                assert len(session.scalars(select(ManagedDatasetSourceRow).where(
+                    ManagedDatasetSourceRow.managed_dataset_id == row.id)).all()) == 2
+        finally:
+            saved.rename(raster)
+    assert client.post(f"/api/v1/managed-datasets/{key}/detach").status_code == 200
+
+    source = env.editor_root / second / annotation
+    source.write_text(json.dumps(_annotation_payload([])), encoding="utf-8")
+    _git(env.editor_root, "add", "--", second.as_posix())
+    _git(env.editor_root, "commit", "-m", "Изменить источник после создания копии")
+    _git(env.editor_root, "push", "origin", "HEAD:main")
+    with factory() as session:
+        if not negatives and not zones:
+            from mlsystem2.training_ui_api import _composition_snapshots
+
+            def stop_before_commit(*args):
+                raise InterruptedError("Остановка после переноса готовой папки")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(_composition_snapshots, "_commit_snapshot", stop_before_commit)
+                assert process_next_snapshot(session, config)
+                # Имитируем остановку до фиксации транзакции worker.
+                session.rollback()
+        assert process_next_snapshot(session, config)
+        row = session.scalar(select(DatasetRow).where(DatasetRow.key == key))
+        assert row.source_type == "mlmarkup", row.composition
+        if mode == "dynamic":
+            published = _git(env.editor_root, "rev-parse", "HEAD").stdout
+            session.rollback()
+            assert process_next_snapshot(session, config)
+            assert row.source_type == "mlmarkup"
+            assert _git(env.editor_root, "rev-parse", "HEAD").stdout == published
+        assert len(row.composition["classes"]) == 2
+        assert not session.scalars(select(ManagedDatasetSourceRow).where(
+            ManagedDatasetSourceRow.managed_dataset_id == row.id)).all()
+        path = Path(row.source_path)
+        session.commit()
+        assert not process_next_snapshot(session, config)
+    folder = env.editor_root / path
+    data = json.loads((folder / annotation).read_text(encoding="utf-8"))
+    roles = [f["properties"]["_mlsystem2_role"] for f in data["features"]]
+    assert roles.count("positive") >= 2
+    assert any(f["properties"]["_mlsystem2_class"] == lakes["technical_name"]
+               for f in data["features"] if f["properties"]["_mlsystem2_role"] == "positive")
+    assert ("hard_negative" in roles) == negatives
+    assert ("annotation_zone" in roles) == zones
+    assert not any(k.startswith("_mlsystem2_source_") for f in data["features"] for k in f["properties"])
+    from mlsystem2.dataset_preparing.api import load_dataset_manifest, prepare_dataset
+    from mlsystem2.dataset_preparing.contracts import DatasetPreparationRequest
+    manifest = load_dataset_manifest(folder)
+    assert manifest.snapshot_key == key and not manifest.sources and not manifest.combined
+    prepared = prepare_dataset(DatasetPreparationRequest(
+        images_dir=str(config.images_root / "kanopus"), annotations_dir=str(folder), val_fraction=0.2,
+    ))
+    assert prepared.dataset is not None, prepared.report.errors
+    assert prepared.dataset.format == "per_image_multiclass"
+    from mlsystem2.training_ui_api._test_samples import _training_result_test_plan
+
+    with factory() as session:
+        row = session.scalar(select(DatasetRow).where(DatasetRow.key == key))
+        samples = {entry["class_key"]: SimpleNamespace(task="binary", tiles=[SimpleNamespace(enabled=True)])
+                   for entry in row.composition["classes"]}
+        plan = _training_result_test_plan(
+            session, SimpleNamespace(class_key=target["key"], dataset_key=key, task="multiclass",
+                                     class_schema=[c.model_dump() for c in manifest.classes]),
+            read_context=SimpleNamespace(datasets={key: row}, primary_samples=samples),
+        )
+        assert plan.error is None and plan.managed and len(plan.targets) == 2
+        assert all(samples[t.class_key] is t.sample for t in plan.targets)
+    shutil.copytree(folder, config.mlmarkup_root / path)
+    url = f"/api/v1/dataset-editor/datasets/{key}/scenes/{quote(annotation, safe='')}"
+    details = client.get(url)
+    assert details.status_code == 200, details.text
+    details = details.json()
+    data = details["geojson"]
+    data["features"] = [f for f in data["features"] if not (
+        f["properties"]["_mlsystem2_role"] == "positive" and f["properties"]["_mlsystem2_class"] == lakes["technical_name"])]
+    before = {p: p.read_bytes() for p in (source, env.editor_dataset / annotation)}
+    result = client.put(url, json={"revision": details["scene"]["revision"], "geojson": data})
+    assert result.status_code == 200, result.text
+    assert all(p.read_bytes() == original for p, original in before.items())
+    assert len(json.loads((folder / annotation).read_text(encoding="utf-8"))["features"]) == len(data["features"])
+    if mode == "dynamic":
+        duplicated = client.post(f"/api/v1/dataset-editor/datasets/{key}/copy", json={"name": "Сравнение"})
+        assert duplicated.status_code == 200, duplicated.text
+        duplicate = duplicated.json()
+        assert load_dataset_manifest(env.editor_root / duplicate["source_path"]).snapshot_key == duplicate["dataset_key"]
+    if not negatives and not zones:
+        failed = client.post("/api/v1/managed-datasets/compose", json={**request, "name": "Неполный"})
+        assert failed.status_code == 200, failed.text
+        items = next(c["datasets"] for c in failed.json()["classes"] if c["key"] == target["key"])
+        failed_key = next(i["key"] for i in items if i["dataset_name"] == "Неполный")
+        raster = config.images_root / "kanopus" / "Olskij" / "SCN01.part.tif"
+        saved = raster.rename(raster.with_suffix(".проверка"))
+        try:
+            with factory() as session:
+                assert process_next_snapshot(session, config)
+                session.commit()
+                assert not process_next_snapshot(session, config)
+            catalog = client.get("/api/v1/dataset-catalog").json()["classes"]
+            failed_item = next(i for c in catalog for i in c["datasets"] if i["key"] == failed_key)
+            assert failed_item["snapshot_discardable"] and failed_item["materialization_status"] == "failed"
+            assert client.delete(f"/api/v1/dataset-editor/datasets/{failed_key}").status_code == 200
+        finally:
+            saved.rename(raster)
+        assert client.post("/api/v1/managed-datasets/compose", json={**request, "name": "Неполный"}).status_code == 200
+
+
+def test_excluded_negative_under_an_owned_negative_survives_geometric_removal():
+    from pyproj import CRS
+
+    ring = [[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]
+    external = _feature(3, "hard_negative", ring)
+    owned = _feature(4, "hard_negative", ring)
+    owned["properties"]["_mlsystem2_composition_key"] = "комбо"
+    payload = _annotation_payload([external, owned])
+    result = _dataset_editor._remove_managed_source_feature(
+        payload, source_identity=None, source_origin_key=None,
+        fallback_geometry=owned["geometry"], fallback_crs=CRS.from_epsg(3857),
+        fallback_role="hard_negative", owner_keys={"комбо"},
+    )
+    assert result["features"] == [external]
 
 
 def test_dataset_editor_requires_auth_and_lists_counts_and_raster_ranges(
@@ -1739,6 +1922,23 @@ def test_dataset_editor_reuses_deleted_managed_copy_name(
         assert new is not None and new.deleted_at is None
         relations = session.scalars(select(ManagedDatasetSourceRow).where(ManagedDatasetSourceRow.managed_dataset_id == new.id)).all()
         assert {(row.priority, row.color) for row in relations} == {(10, "#123456"), (0, "#654321")}
+    detached_copy = env.client.post(copy_url, json={
+        "name": "Отдельный", "composition_mode": "snapshot",
+        "inherit_hard_negatives": False, "inherit_annotation_zones": True,
+    })
+    assert detached_copy.status_code == 200, detached_copy.text
+    assert detached_copy.json()["snapshot_pending"] and not detached_copy.json()["managed"]
+    with create_session_factory(get_config())() as session:
+        assert process_next_snapshot(session, get_config())
+        snapshot = session.scalar(select(DatasetRow).where(DatasetRow.key == detached_copy.json()["dataset_key"]))
+        original = session.scalar(select(DatasetRow).where(DatasetRow.key == source["key"]))
+        assert snapshot.source_type == "mlmarkup", snapshot.composition
+        assert original.source_type == "managed"
+        assert original.composition["inherit_hard_negatives"] is True
+        assert snapshot.composition["inherit_hard_negatives"] is False
+        assert snapshot.composition["inherit_annotation_zones"] is True
+        assert len(session.scalars(select(ManagedDatasetSourceRow).where(
+            ManagedDatasetSourceRow.managed_dataset_id == original.id)).all()) == 2
 
 
 def test_dataset_editor_does_not_overwrite_unowned_existing_copy_folder(
@@ -2083,7 +2283,7 @@ def test_dataset_editor_reuses_migrated_pseudo_when_legacy_scene_list_is_deleted
         )
 
 
-@pytest.mark.parametrize("new_role", ["positive", "annotation_zone"])
+@pytest.mark.parametrize("new_role", ["positive", "annotation_zone", "hard_negative"])
 def test_managed_dataset_publication_writes_new_object_to_selected_source(
     editor_environment: _EditorEnvironment,
     new_role: str,
@@ -2123,6 +2323,8 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         json={
             "class_key": target_class["key"],
             "name": "main",
+            "inherit_hard_negatives": new_role != "hard_negative",
+            "inherit_annotation_zones": new_role != "annotation_zone",
             "sources": [
                 {
                     "dataset_key": next(
@@ -2182,6 +2384,8 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
     )
     assert detail_response.status_code == 200
     payload = detail_response.json()["geojson"]
+    if new_role == "hard_negative":
+        assert all(f["properties"]["_mlsystem2_role"] != new_role for f in payload["features"])
     polygon_history = env.client.get(
         f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes/{quote(annotation_name, safe='')}/polygon-history",
         params={"feature_id": str(payload["features"][0]["id"])},
@@ -2232,13 +2436,13 @@ def test_managed_dataset_publication_writes_new_object_to_selected_source(
         assert process_next_managed_materialization(session, get_config()) is True
         session.commit()
 
-    if new_role == "annotation_zone":
+    if new_role in ("annotation_zone", "hard_negative"):
         refreshed = env.client.get(
             f"/api/v1/dataset-editor/datasets/{quote(managed['key'], safe='')}/scenes/{quote(annotation_name, safe='')}"
         ).json()
-        rebuilt_zone = next(item for item in refreshed["geojson"]["features"]
-                            if item["properties"]["_mlsystem2_role"] == "annotation_zone")
-        assert shape(rebuilt_zone["geometry"]).bounds == pytest.approx(new_geometry.intersection(shape(detail_response.json()["valid_data_footprint"])).bounds)
+        rebuilt = next(item for item in refreshed["geojson"]["features"]
+                       if item["properties"]["_mlsystem2_role"] == new_role)
+        assert shape(rebuilt["geometry"]).bounds == pytest.approx(new_geometry.intersection(shape(detail_response.json()["valid_data_footprint"])).bounds)
 
     added_image = env.editor_root.parent / "images" / "kanopus" / "batch" / "MANAGED04.tif"
     _write_raster(added_image, value=44)

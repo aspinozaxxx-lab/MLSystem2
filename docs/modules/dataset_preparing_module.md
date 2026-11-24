@@ -6,6 +6,11 @@
 
 ## Публичный интерфейс
 
+Независимая копия комбо-датасета читается как обычная многоклассовая поснимочная разметка.
+Манифест содержит собственный ключ копии и упорядоченные классы. При проверке GeoJSON допустимы
+сложные отрицательные примеры и зоны с областью действия по классу, как в исходном комбо.
+Подготовке обучения достаточно папки копии и общих снимков.
+
 - `prepare_dataset(request: DatasetPreparationRequest) -> DatasetPreparationResult` — подготовить legacy binary, per-image binary, legacy multiclass или manifest-backed per-image multiclass датасет.
 - `annotation_regions(payload: dict, class_slugs: list[str] | None = None) -> list[AnnotationRegion] | None` — независимые зоны с учётом пересечения покрытий классов; `None` означает отсутствие зон, пустой список — отсутствие общей территории.
 - `resolve_scene_images(request: SceneImageResolutionRequest) -> SceneImageResolution` — сопоставить legacy TXT либо per-image GeoJSON с TIFF.

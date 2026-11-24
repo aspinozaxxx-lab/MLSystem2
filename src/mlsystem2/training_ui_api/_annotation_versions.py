@@ -65,7 +65,7 @@ class AnnotationCatalog:
         self.image = image
         self.rows = {row.id: row for row in session.scalars(select(DatasetRow).where(
             DatasetRow.class_id == self.dataset_row.class_id,
-            DatasetRow.source_type != "managed", DatasetRow.deleted_at.is_(None))).all()}
+            DatasetRow.source_type.not_in(("managed", "snapshot_pending")), DatasetRow.deleted_at.is_(None))).all()}
         self.versions = {str(row.id): row for row in session.scalars(select(AnnotationVersionRow).where(
             AnnotationVersionRow.image_id == image.id,
             AnnotationVersionRow.class_id == self.dataset_row.class_id,

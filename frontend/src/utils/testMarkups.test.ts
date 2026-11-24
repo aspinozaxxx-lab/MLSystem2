@@ -96,6 +96,7 @@ describe("тестовые разметки", () => {
       task: "binary",
       combined: false,
       managed: false,
+      inherit_annotation_zones: true, inherit_hard_negatives: true,
       source_status: "current",
       hard_negative_count: 0,
       materialization_status: "not_applicable",

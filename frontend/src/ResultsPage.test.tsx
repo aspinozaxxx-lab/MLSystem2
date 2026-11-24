@@ -62,11 +62,12 @@ describe("результаты класса на одной странице", (
 
   it("выделяет выбранный датасет, сохраняя основную отметку и действующие ссылки", () => {
     const item: ResultClassInfo = { key: "лес", name: "Границы леса", quality_metric: "pixel", is_custom: false, datasets: [
-      { key: "основной", name: "main", quality_metric: "pixel", is_primary: true },
-      { key: "второй", name: "Копия для сравнения", quality_metric: "pixel", is_primary: false },
+      { key: "основной", name: "main", quality_metric: "pixel", is_primary: true, managed: true },
+      { key: "второй", name: "Копия для сравнения", quality_metric: "pixel", is_primary: false, managed: false },
     ] };
     const html = renderToStaticMarkup(<ResultClassCard item={item} selectedDatasetKey="второй" />);
     expect(html).toContain('class="dataset-link primary-dataset"');
+    expect(html.match(/aria-label="Динамическая связь с источниками"/g)).toHaveLength(1);
     expect(html).toContain('class="dataset-link selected-dataset"');
     expect(html).toContain(`href="#/results/${encodeURIComponent("второй")}" aria-current="true"`);
     expect(html).toContain(`href="#/dataset-editor/${encodeURIComponent("второй")}"`);

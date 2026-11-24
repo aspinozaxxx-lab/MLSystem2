@@ -128,6 +128,8 @@ type EditorDataset = {
   object_types: EditorObjectType[];
   combined: boolean;
   managed: boolean;
+  composition_mode?: "dynamic" | "snapshot" | null;
+  snapshot_discardable?: boolean | null;
   managed_sources: EditorManagedSource[];
   source_status: "current" | "stale" | "unknown" | "unavailable";
   source_changes: string[];
@@ -152,6 +154,7 @@ type EditorManagedSource = {
 
 type ObjectSelectionDataset = Pick<EditorDataset, "task" | "object_types"> & {
   managed?: boolean;
+  composition_mode?: "dynamic" | "snapshot" | null;
 };
 
 type EditorObjectType = {
@@ -432,6 +435,9 @@ export function DatasetEditorPage({
     () => datasets.find((item) => item.key === datasetKey) || null,
     [datasetKey, datasets],
   );
+  const scopedRoles = Boolean(selectedDataset?.managed || selectedDataset?.composition_mode === "snapshot");
+  const preparing = selectedDataset && selectedDataset.materialization_status !== "not_applicable"
+    && selectedDataset.materialization_status !== "current";
   const draftSceneNames = useMemo(() => new Set([
     ...scenes.filter((scene) => scene.draft).map((scene) => scene.annotation_name),
     ...Object.values(drafts)
@@ -682,13 +688,13 @@ export function DatasetEditorPage({
 
   useEffect(() => {
     if (!datasetKey || !selectedDataset) return;
-    if (!selectedDataset.managed || selectedDataset.materialization_status === "current") {
+    if (!preparing) {
       void loadScenes(datasetKey);
       return;
     }
     if (
       selectedDataset.materialization_status === "missing"
-      || selectedDataset.materialization_status === "failed"
+      || (selectedDataset.materialization_status === "failed" && selectedDataset.composition_mode !== "snapshot")
     ) {
       void apiJson(
         `${editorPath(datasetKey)}/scenes`,
@@ -697,15 +703,12 @@ export function DatasetEditorPage({
   }, [datasetKey, loadScenes, selectedDataset?.key, selectedDataset?.materialization_status]);
 
   useEffect(() => {
-    if (
-      !selectedDataset?.managed
-      || selectedDataset.materialization_status === "current"
-    ) return undefined;
+    if (!preparing || selectedDataset?.snapshot_discardable) return undefined;
     const timer = window.setInterval(() => {
       void loadDatasets(false);
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [loadDatasets, selectedDataset?.key, selectedDataset?.managed, selectedDataset?.materialization_status]);
+  }, [loadDatasets, selectedDataset?.key, selectedDataset?.snapshot_discardable, preparing]);
 
   const loadScene = useCallback(
     async (key: string, name: string) => {
@@ -1422,7 +1425,7 @@ export function DatasetEditorPage({
       const selectedRole = selected.get(ROLE_PROPERTY) === "annotation_zone"
         ? selectedClass ? `annotation_zone:${selectedClass}` : "annotation_zone"
         : selected.get(ROLE_PROPERTY) === "hard_negative"
-        ? selectedDataset?.managed && selectedClass
+        ? scopedRoles && selectedClass
           ? hardNegativeSelection(selectedClass)
           : "hard_negative"
         : typeof selected.get(CLASS_PROPERTY) === "string"
@@ -1879,7 +1882,7 @@ export function DatasetEditorPage({
     const before = captureActiveSnapshot();
     if (!before) return;
     const features = selected.getArray().flatMap((feature) => {
-      if (pseudoTarget === "hard_negative" && selectedDataset.managed) {
+      if (pseudoTarget === "hard_negative" && (selectedDataset.managed || (scopedRoles && pseudoNegativeDatasetKeys.size < selectedDataset.managed_sources.length))) {
         const sharedSourceOrigin = `pseudo:${crypto.randomUUID()}`;
         return selectedDataset.managed_sources.flatMap((managedSource) => {
           if (!pseudoNegativeDatasetKeys.has(managedSource.dataset_key)) return [];
@@ -2376,7 +2379,7 @@ export function DatasetEditorPage({
           <span>Датасет</span>
           <select value={datasetKey} onChange={selectDataset}>
             {classDatasets.map((item) => (
-              <option key={item.key} value={item.key}>{item.dataset_name} ({item.scene_count})</option>
+              <option key={item.key} value={item.key}>{item.dataset_name}{item.managed ? " 🔗" : ""} ({item.scene_count})</option>
             ))}
           </select>
         </label></> : null}
@@ -2385,10 +2388,7 @@ export function DatasetEditorPage({
           type="button"
           disabled={
             !datasetKey
-            || Boolean(
-              selectedDataset?.managed
-              && selectedDataset.materialization_status !== "current"
-            )
+            || Boolean(preparing)
           }
           aria-label="Добавить снимки"
           title="Открыть список серверных TIFF для добавления в датасет"
@@ -2407,7 +2407,7 @@ export function DatasetEditorPage({
         <button
           className="secondary"
           type="button"
-          disabled={busy || !datasetKey || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
+          disabled={busy || !datasetKey || Boolean(preparing)}
           aria-label="Загрузить GeoJSON"
           title="Загрузить один или несколько GeoJSON новых снимков в личные черновики"
           onClick={() => { setImportFiles([]); setImportError(""); setImportClippingRequired(false); setImportOpen(true); }}
@@ -2421,7 +2421,7 @@ export function DatasetEditorPage({
         <button
           className="secondary"
           type="button"
-          disabled={busy || downloading || !datasetKey || Boolean(testSampleId && !scenes.length) || Boolean(selectedDataset?.managed && selectedDataset.materialization_status !== "current")}
+          disabled={busy || downloading || !datasetKey || Boolean(testSampleId && !scenes.length) || Boolean(preparing)}
           aria-label={downloading ? "Скачивание разметки" : testSampleId ? "Скачать тестовую разметку" : "Скачать датасет"}
           title={testSampleId ? "Скачать опубликованную тестовую разметку: GeoJSON, снимки TIFF по выбору" : "Скачать опубликованную разметку и структуру датасета в ZIP, без TIFF и черновиков"}
           onClick={() => testSampleId ? setDownloadOpen(true) : void downloadDataset()}
@@ -2458,11 +2458,12 @@ export function DatasetEditorPage({
         <section className="panel empty-state">Загружаем каталог датасетов…</section>
       ) : !datasets.length ? (
         <section className="panel empty-state">Per-image датасеты в editor-клоне не найдены.</section>
-      ) : selectedDataset?.managed && selectedDataset.materialization_status !== "current" ? (
+      ) : selectedDataset && preparing ? (
         <section className="panel empty-state" role="status">
           <strong>
             {selectedDataset.materialization_status === "failed"
-              ? "Не удалось подготовить управляемый датасет. Повтор будет выполнен автоматически."
+              ? "Не удалось подготовить разметку."
+              : selectedDataset.composition_mode === "snapshot" ? "Готовится независимая копия разметки…"
               : selectedDataset.materialization_status === "building"
                 ? "Управляемый датасет пересобирается в фоне…"
                 : "Управляемый датасет поставлен на фоновую пересборку…"}
@@ -2470,7 +2471,7 @@ export function DatasetEditorPage({
           {selectedDataset.materialization_error ? (
             <p>{selectedDataset.materialization_error}</p>
           ) : (
-            <p>Страница остаётся доступной; список снимков появится сразу после готовности кэша.</p>
+            <p>Список снимков появится здесь по окончании подготовки.</p>
           )}
         </section>
       ) : (
@@ -2753,7 +2754,7 @@ export function DatasetEditorPage({
                         <option value={0}>Свободный контур</option>
                       </select>
                     </label> : zoneMode ? (
-                      selectedDataset?.managed ? <select className="dataset-editor-zone-target" aria-label="Классы размеченной зоны" value={role} onChange={(event) => changeRole(event.target.value)}>
+                      scopedRoles ? <select className="dataset-editor-zone-target" aria-label="Классы размеченной зоны" value={role} onChange={(event) => changeRole(event.target.value)}>
                         <option value="annotation_zone">Все классы</option>
                         {objectTypeChoices.map((item) => <option key={item.slug} value={`annotation_zone:${item.slug}`}>{item.name}</option>)}
                       </select> : <span className="muted">Территория обучения</span>
@@ -2772,7 +2773,7 @@ export function DatasetEditorPage({
                             <span className="dataset-editor-color-dot" />{item.name}
                           </button>
                         ))}
-                        {selectedDataset.managed ? (
+                        {scopedRoles ? (
                           objectTypeChoices.map((item) => {
                             const selection = hardNegativeSelection(item.slug);
                             const source = selectedDataset.managed_sources.find(
@@ -2784,7 +2785,7 @@ export function DatasetEditorPage({
                                 key={selection}
                                 className={role === selection ? "active" : ""}
                                 aria-pressed={role === selection}
-                                title={`Hard negative для датасета ${source?.dataset_name || item.name}`}
+                                title={`Сложный отрицательный пример класса «${source?.class_name || item.name}»`}
                                 style={{ "--object-color": HARD_NEGATIVE_COLOR } as CSSProperties}
                                 onClick={() => changeRole(selection)}
                               >
@@ -3028,7 +3029,7 @@ export function DatasetEditorPage({
                               <option value="hard_negative">Hard negative</option>
                             </select>
                           </label>
-                          {pseudoTarget === "hard_negative" && selectedDataset?.managed ? (
+                          {pseudoTarget === "hard_negative" && selectedDataset && scopedRoles ? (
                             <div className="dataset-editor-pseudo-negative-targets">
                               <span>Классы:</span>
                               <label>
@@ -3067,7 +3068,7 @@ export function DatasetEditorPage({
                               selectedPseudoCount === 0
                               || (
                                 pseudoTarget === "hard_negative"
-                                && Boolean(selectedDataset?.managed)
+                                && scopedRoles
                                 && pseudoNegativeDatasetKeys.size === 0
                               )
                             }
@@ -3450,7 +3451,7 @@ function applyObjectSelection(
   if (isZoneSelection(selection)) {
     feature.set(ROLE_PROPERTY, "annotation_zone", true);
     const slug = selection.slice("annotation_zone:".length);
-    if (dataset?.managed && dataset.object_types.some((item) => item.slug === slug)) feature.set(CLASS_PROPERTY, slug, true);
+    if ((dataset?.managed || dataset?.composition_mode === "snapshot") && dataset.object_types.some((item) => item.slug === slug)) feature.set(CLASS_PROPERTY, slug, true);
     else feature.unset(CLASS_PROPERTY, true);
     return;
   }
@@ -3458,7 +3459,7 @@ function applyObjectSelection(
   if (selection === "hard_negative" || negativeClass) {
     feature.set(ROLE_PROPERTY, "hard_negative", true);
     if (
-      dataset?.managed
+      (dataset?.managed || dataset?.composition_mode === "snapshot")
       && negativeClass
       && dataset.object_types.some((item) => item.slug === negativeClass)
     ) {

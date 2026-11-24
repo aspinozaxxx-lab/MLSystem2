@@ -538,6 +538,45 @@
         }
       }
     },
+    "/api/v1/managed-datasets/{dataset_key}/detach": {
+      "post": {
+        "summary": "Detach Composition",
+        "operationId": "detach_composition_api_v1_managed_datasets__dataset_key__detach_post",
+        "parameters": [
+          {
+            "name": "dataset_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Dataset Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetCatalogInfo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/managed-datasets/{dataset_key}": {
       "patch": {
         "summary": "Patch Managed Dataset",
@@ -8051,6 +8090,43 @@
             "maxLength": 240,
             "minLength": 1,
             "title": "Name"
+          },
+          "composition_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "dynamic",
+                  "snapshot"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composition Mode"
+          },
+          "inherit_hard_negatives": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inherit Hard Negatives"
+          },
+          "inherit_annotation_zones": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inherit Annotation Zones"
           }
         },
         "additionalProperties": false,
@@ -8096,6 +8172,11 @@
           "managed": {
             "type": "boolean",
             "title": "Managed",
+            "default": false
+          },
+          "snapshot_pending": {
+            "type": "boolean",
+            "title": "Snapshot Pending",
             "default": false
           }
         },
@@ -8170,6 +8251,32 @@
             "type": "boolean",
             "title": "Managed",
             "default": false
+          },
+          "composition_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "dynamic",
+                  "snapshot"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composition Mode"
+          },
+          "snapshot_discardable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Discardable"
           },
           "managed_sources": {
             "items": {
@@ -9727,6 +9834,42 @@
             "title": "Managed",
             "default": false
           },
+          "composition_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "dynamic",
+                  "snapshot"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composition Mode"
+          },
+          "snapshot_discardable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Discardable"
+          },
+          "inherit_hard_negatives": {
+            "type": "boolean",
+            "title": "Inherit Hard Negatives",
+            "default": true
+          },
+          "inherit_annotation_zones": {
+            "type": "boolean",
+            "title": "Inherit Annotation Zones",
+            "default": true
+          },
           "managed_sources": {
             "items": {
               "$ref": "#/components/schemas/ManagedDatasetSourceInfo"
@@ -10954,6 +11097,25 @@
             "type": "array",
             "minItems": 2,
             "title": "Sources"
+          },
+          "composition_mode": {
+            "type": "string",
+            "enum": [
+              "dynamic",
+              "snapshot"
+            ],
+            "title": "Composition Mode",
+            "default": "dynamic"
+          },
+          "inherit_hard_negatives": {
+            "type": "boolean",
+            "title": "Inherit Hard Negatives",
+            "default": true
+          },
+          "inherit_annotation_zones": {
+            "type": "boolean",
+            "title": "Inherit Annotation Zones",
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -12868,6 +13030,11 @@
               }
             ],
             "title": "Dataset Name"
+          },
+          "managed": {
+            "type": "boolean",
+            "title": "Managed",
+            "default": false
           },
           "class_key": {
             "anyOf": [

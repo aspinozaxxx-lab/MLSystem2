@@ -64,6 +64,7 @@ from ._inference_backend import (
     inference_backend_for_imagery,
 )
 from ._managed_datasets import (
+    SOURCE_SNAPSHOT_PENDING,
     has_pending_managed_materialization,
     process_next_managed_materialization,
 )
@@ -177,8 +178,12 @@ async def run_queue_worker(
                 except Exception:
                     LOGGER.exception("Managed dataset materialization failed")
                 materialization_task = None
+            snapshot_pending = False
             try:
                 with session_factory() as session:
+                    from ._composition_snapshots import has_pending_snapshot
+
+                    snapshot_pending = has_pending_snapshot(session)
                     now = asyncio.get_running_loop().time()
                     if now >= next_automation_at:
                         sync_automation_once(session, config)
@@ -189,7 +194,7 @@ async def run_queue_worker(
                 raise
             except Exception:
                 LOGGER.exception("Training UI worker tick failed")
-            if materialization_task is None and has_pending_managed_materialization(config):
+            if materialization_task is None and (snapshot_pending or has_pending_managed_materialization(config)):
                 materialization_task = asyncio.create_task(
                     asyncio.to_thread(
                         _process_managed_materialization_request,
@@ -213,7 +218,9 @@ def _process_managed_materialization_request(
     config: TrainingUIAPIConfig,
 ) -> bool:
     with session_factory() as session:
-        processed = process_next_managed_materialization(session, config)
+        from ._composition_snapshots import process_next_snapshot
+
+        processed = process_next_snapshot(session, config) or process_next_managed_materialization(session, config)
         session.commit()
         return processed
 
@@ -1477,6 +1484,11 @@ def _dataset_config(
                 ),
                 None,
             )
+        if dataset is not None and dataset.composition_mode == "snapshot" and not dataset.source_available:
+            if dataset.source_type == SOURCE_SNAPSHOT_PENDING or (
+                dataset.source_path and (config.mlmarkup_editor_root / dataset.source_path / ".mlsystem2-dataset.json").is_file()
+            ):
+                raise _ManagedDatasetNotReady(f"Подготавливается независимая копия: {row.dataset_name}")
         if dataset is None or not dataset.source_available or dataset.images_dir is None:
             raise RuntimeError(f"Датасет не найден или неполный: {row.dataset_name}")
         if dataset.managed and dataset.annotations_dir is None:

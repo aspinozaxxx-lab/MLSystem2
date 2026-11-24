@@ -63,7 +63,7 @@ from ._markup_export import (
     generate_markup_files,
     generate_markup_pool_files,
 )
-from ._managed_datasets import SOURCE_MANAGED, managed_sources
+from ._managed_datasets import SOURCE_MANAGED, composition_control_sources
 from ._models import (
     DatasetClassRow,
     DatasetEditorDraftRow,
@@ -2828,7 +2828,7 @@ def _dependent_managed_dataset_keys(
     managed_dataset_ids = select(ManagedDatasetSourceRow.managed_dataset_id).where(
         ManagedDatasetSourceRow.source_dataset_id.in_(source_dataset_ids)
     )
-    return set(
+    keys = set(
         session.scalars(
             select(DatasetRow.key).where(
                 DatasetRow.id.in_(managed_dataset_ids),
@@ -2836,8 +2836,12 @@ def _dependent_managed_dataset_keys(
             )
         ).all()
     )
-
-
+    for key, options in session.execute(select(DatasetRow.key, DatasetRow.composition).where(
+        DatasetRow.composition.is_not(None), DatasetRow.deleted_at.is_(None),
+    )):
+        if any(source["class_key"] == class_row.key for source in (options or {}).get("classes", [])):
+            keys.add(key)
+    return keys
 
 
 def _mark_training_test_metrics_stale(
@@ -3190,6 +3194,11 @@ def _test_f1_read_context(
                 ManagedDatasetSourceRow, ManagedDatasetSourceRow.source_dataset_id == DatasetRow.id,
             ).where(ManagedDatasetSourceRow.managed_dataset_id.in_(managed_ids))
         ).all())
+    for dataset in dataset_rows:
+        if dataset.key in result_keys:
+            for source in (dataset.composition or {}).get("classes", []):
+                if source["class_key"] in classes:
+                    relevant_class_ids.add(classes[source["class_key"]].id)
     sample_keys = result_keys | {key for key, row in classes.items() if row.id in relevant_class_ids}
     samples = session.scalars(
         select(TestSampleRow).where(TestSampleRow.is_primary.is_(True), TestSampleRow.class_key.in_(sample_keys))
@@ -3264,7 +3273,7 @@ def _training_result_test_plan(
         read_context.datasets.get(result.dataset_key or "") or read_context.datasets.get(result.class_key)
         if read_context is not None else _training_result_dataset_row(session, result)
     )
-    if dataset is None or dataset.source_type != SOURCE_MANAGED:
+    if dataset is None or (dataset.source_type != SOURCE_MANAGED and not (dataset.composition or {}).get("classes")):
         sample = (
             read_context.primary_samples.get(result.class_key) if read_context is not None
             else _primary_sample(session, result.class_key)
@@ -3299,7 +3308,7 @@ def _training_result_test_plan(
             targets=(),
             error="Сеть управляемого датасета должна быть multiclass.",
         )
-    sources = managed_sources(session, dataset.id)
+    sources = composition_control_sources(session, dataset)
     schema_by_slug = {
         str(item.get("slug")): item
         for item in (result.class_schema or [])
@@ -3307,40 +3316,40 @@ def _training_result_test_plan(
     }
     targets: list[_TrainingResultTestTarget] = []
     errors: list[str] = []
-    source_slugs = {source.relation.object_type_slug for source in sources}
+    source_slugs = {source.object_type_slug for source in sources}
     for source in sources:
-        slug = source.relation.object_type_slug
+        slug = source.object_type_slug
         schema_item = schema_by_slug.get(slug)
         if schema_item is None:
-            errors.append(f"В схеме сети отсутствует тип {source.relation.object_type_name}.")
+            errors.append(f"В схеме сети отсутствует тип {source.class_name}.")
             continue
         try:
             class_id = int(schema_item["id"])
         except (KeyError, TypeError, ValueError):
-            errors.append(f"В схеме сети повреждён ID типа {source.relation.object_type_name}.")
+            errors.append(f"В схеме сети повреждён ID типа {source.class_name}.")
             continue
-        if class_id != source.relation.object_type_id:
+        if class_id != source.object_type_id:
             errors.append(
-                f"ID типа {source.relation.object_type_name} не совпадает с управляемым датасетом."
+                f"ID типа {source.class_name} не совпадает с управляемым датасетом."
             )
             continue
         sample = (
-            read_context.primary_samples.get(source.dataset_class.key) if read_context is not None
-            else _primary_sample(session, source.dataset_class.key)
+            read_context.primary_samples.get(source.class_key) if read_context is not None
+            else _primary_sample(session, source.class_key)
         )
         if sample is None:
             errors.append(
-                f"Для класса «{source.dataset_class.name}» не назначена основная тестовая разметка."
+                f"Для класса «{source.class_name}» не назначена основная тестовая разметка."
             )
             continue
         if sample.task != "binary":
             errors.append(
-                f"Основная тестовая разметка класса «{source.dataset_class.name}» должна быть binary."
+                f"Основная тестовая разметка класса «{source.class_name}» должна быть binary."
             )
             continue
         if not any(tile.enabled for tile in sample.tiles):
             errors.append(
-                f"В основной тестовой разметке класса «{source.dataset_class.name}» нет включённых тайлов."
+                f"В основной тестовой разметке класса «{source.class_name}» нет включённых тайлов."
             )
             continue
         targets.append(
@@ -3348,9 +3357,9 @@ def _training_result_test_plan(
                 sample=sample,
                 class_id=class_id,
                 class_slug=slug,
-                class_name=source.relation.object_type_name,
-                class_key=source.dataset_class.key,
-                color=source.relation.color,
+                class_name=source.class_name,
+                class_key=source.class_key,
+                color=source.color,
             )
         )
     extra_slugs = sorted(set(schema_by_slug) - source_slugs)
@@ -3548,7 +3557,7 @@ def _queue_training_results_test_f1(
         raise TrainingUIAPIError(first_error or "Для расчёта F1 нет основных тестовых разметок.")
     if not results:
         dataset = session.scalar(select(DatasetRow).where(DatasetRow.key == dataset_key))
-        if dataset is None or dataset.source_type != SOURCE_MANAGED:
+        if dataset is None or (dataset.source_type != SOURCE_MANAGED and not (dataset.composition or {}).get("classes")):
             sample = _primary_sample(session, dataset_key)
             if sample is None:
                 raise TrainingUIAPIError("Для датасета не назначена основная тестовая разметка.")

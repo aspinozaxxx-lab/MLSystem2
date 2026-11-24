@@ -13,6 +13,8 @@ import {
   FileText,
   Images,
   Layers3,
+  Link2,
+  Unlink2,
   ListChecks,
   LoaderCircle,
   LogOut,
@@ -953,7 +955,7 @@ function ModelExportPage({ bootstrap, run, showModal }: RoutedPageProps) {
                       </td>
                       <td>
                         <span className="source-lines">
-                          <strong>{row.dataset.name}</strong>
+                          <strong>{row.dataset.name}{row.dataset.managed && <DynamicDatasetIcon />}</strong>
                           {row.dataset.version ? <small className="muted technical-value">{shortVersion(row.dataset.version)}</small> : null}
                         </span>
                       </td>
@@ -2135,6 +2137,12 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     void loadUserDrafts();
   }, [loadCatalog, loadUserDrafts]);
 
+  useEffect(() => {
+    if (!catalog?.classes?.some((item) => item.datasets?.some((dataset) => dataset.source_type === "snapshot_pending" && !dataset.snapshot_discardable))) return;
+    const timer = window.setTimeout(() => void loadCatalog(), PROGRESS_REFRESH_MS);
+    return () => window.clearTimeout(timer);
+  }, [catalog, loadCatalog]);
+
   const applyCatalog = async (payload: DatasetCatalogInfo | undefined) => {
     if (!payload) return;
     setCatalog(payload);
@@ -2221,7 +2229,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
             const data = new FormData(event.currentTarget);
             const request = {
               name: String(data.get("name") || "").trim(),
-              source_path: String(data.get("source_path") || ""),
+              ...(dataset?.composition_mode === "snapshot" ? {} : { source_path: String(data.get("source_path") || "") }),
             };
             const payload = await run(() =>
               apiJson<DatasetCatalogInfo>(
@@ -2248,7 +2256,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
           </label>
           <label>
             Источник MLMarkup
-            <select name="source_path" defaultValue={dataset?.source_path || sources[0]?.key || ""} required>
+            <select name="source_path" defaultValue={dataset?.source_path || sources[0]?.key || ""} disabled={dataset?.composition_mode === "snapshot"} required>
               {sources.map((source) => (
                 <option key={source.key} value={source.key}>
                   {source.name}
@@ -2281,8 +2289,8 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
     if (!catalog) return;
     showModal({
       title: dataset
-        ? `Управляемый датасет «${dataset.dataset_name || dataset.name}»`
-        : "Новый управляемый датасет",
+        ? `Параметры комбо-датасета «${dataset.dataset_name || dataset.name}»`
+        : "Новый комбо-датасет",
       wide: true,
       body: (
         <ManagedDatasetForm
@@ -2330,7 +2338,9 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
             if (!name) return;
             const result = await run(() => apiJson<DatasetEditorCopyResult>(
               `/dataset-editor/datasets/${encodeURIComponent(dataset.key)}/copy`,
-              { method: "POST", body: { name } },
+              { method: "POST", body: { name, ...(dataset.managed ? {
+                composition_mode: data.get("composition_mode"), ...compositionInheritance(data),
+              } : {}) } },
             ));
             if (!result) return;
             closeModal();
@@ -2338,7 +2348,9 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
             await reloadBootstrap();
             showModal({
               title: "Копия датасета создана",
-              body: result.managed ? (
+              body: result.snapshot_pending ? (
+                <p>Гровика готовит независимую копию «{result.dataset_name}» из зафиксированной разметки.</p>
+              ) : result.managed ? (
                 <p>
                   Управляемый датасет <strong>{result.dataset_name}</strong> создан с теми же
                   источниками, приоритетами и добавленными снимками.
@@ -2360,11 +2372,17 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
             Название нового датасета
             <input name="name" defaultValue={suggestedName} maxLength={240} autoFocus required />
           </label>
+          {dataset.managed && <label>Связь с исходными датасетами
+            <select name="composition_mode" defaultValue="dynamic">
+              <option value="dynamic">Сохранить динамическую связь</option>
+              <option value="snapshot">Создать независимую копию</option>
+            </select>
+          </label>}
+          {dataset.managed && <CompositionInheritanceFields dataset={dataset} />}
           <div className="notice">
             {dataset.managed ? (
               <>
-                Копируются параметры управляемого датасета. Исходные датасеты остаются общими,
-                задания, результаты обучения и черновики не переносятся.
+                В динамическом режиме правки публикуются в общие источники. У независимой копии своя разметка.
               </>
             ) : (
               <>
@@ -2392,7 +2410,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
       body: (
         <div className="form-stack">
           <p>
-            {dataset.managed ? (
+            {dataset.snapshot_discardable ? "Будет удалена заявка на создание копии." : dataset.managed ? (
               <>Управляемый датасет будет удалён из каталога. Исходные датасеты и их разметка останутся.</>
             ) : (
               <>Папка <strong>{dataset.source_path}</strong> будет удалена из MLMarkup отдельным Git-коммитом.</>
@@ -2571,7 +2589,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                   <option value="">Не назначен</option>
                   {datasets.map((dataset) => (
                     <option key={dataset.key} value={dataset.key}>
-                      {dataset.dataset_name || dataset.name}
+                      {dataset.dataset_name || dataset.name}{dataset.managed ? " 🔗" : ""}
                     </option>
                   ))}
                 </select>
@@ -2584,26 +2602,28 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                     <div className="source-lines">
                       <a className="dataset-card-name" href={`#/dataset-editor/${encodeURIComponent(dataset.key)}`} title="Открыть разметку датасета">
                         <strong>{dataset.dataset_name || dataset.name}</strong>
+                        {dataset.managed && <DynamicDatasetIcon />}
                       </a>
                       {dataset.managed ? (
                         <>
-                          <span className="badge neutral">управляемый</span>
                           <span className="muted">
                             Источники: {(dataset.managed_sources || []).map((source) => (
                               `${source.class_name}\\${source.dataset_name} · ${source.priority}`
                             )).join("; ")}
                           </span>
                         </>
-                      ) : <span className="muted">MLMarkup: {dataset.source_path}</span>}
+                      ) : <span className="muted">{dataset.composition_mode === "snapshot" ? "Независимая копия" : "MLMarkup"} · {dataset.source_path}</span>}
                     </div>
                     <div className="inline-row">
                       {dataset.is_primary ? <span className="badge ok">основной</span> : null}
                       <span className={`badge ${(dataset.diagnostics || []).length ? "warning" : "ok"}`}>
-                        {(dataset.diagnostics || []).length ? "требует внимания" : "источник доступен"}
+                        {dataset.source_type === "snapshot_pending" && dataset.materialization_status === "queued"
+                          ? "идёт подготовка" : (dataset.diagnostics || []).length ? "требует внимания" : "источник доступен"}
                       </span>
                       <button
                         className="secondary"
                         type="button"
+                        disabled={dataset.source_type === "snapshot_pending"}
                         onClick={() => dataset.managed
                           ? openManagedDatasetParameters(classInfo, dataset)
                           : openDatasetEditor(classInfo.key, dataset)}
@@ -2614,6 +2634,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                         className="secondary icon-button"
                         type="button"
                         aria-label={`Создать копию датасета ${dataset.dataset_name || dataset.name}`}
+                        disabled={dataset.source_type === "snapshot_pending"}
                         title="Создать копию под новым именем"
                         onClick={() => openDatasetCopy(classInfo, dataset)}
                       >
@@ -2623,6 +2644,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                         className="danger icon-button"
                         type="button"
                         aria-label={`Удалить датасет ${dataset.dataset_name || dataset.name}`}
+                        disabled={dataset.source_type === "snapshot_pending" && !dataset.snapshot_discardable}
                         title="Удалить папку датасета из MLMarkup"
                         onClick={() => confirmDatasetDeletion(dataset)}
                       >
@@ -2655,7 +2677,7 @@ function ClassEditorPage({ run, reloadBootstrap, showModal, closeModal }: Routed
                 type="button"
                 onClick={() => openManagedDatasetParameters(classInfo)}
               >
-                <Layers3 size={15} /> Создать управляемый
+                <Layers3 size={15} /> Создать комбо-датасет
               </button>
             </div>
           </section>
@@ -2812,7 +2834,7 @@ function AutomationPage({ run, showModal, closeModal }: RoutedPageProps) {
               {snapshot.datasets.map((dataset) => (
                 <tr key={dataset.key}>
                   <td>
-                    <strong>{dataset.name}</strong>
+                    <strong>{dataset.name}{dataset.managed && <DynamicDatasetIcon />}</strong>
                     <div className="muted">{shortVersion(dataset.version)}</div>
                   </td>
                   {snapshot.models.map((model) => {
@@ -3685,7 +3707,7 @@ export function ResultClassCard({ item, selectedDatasetKey, onF1Queued }: { item
             >
               <div className="dataset-result-link">
                 <a className="dataset-result-identity" href={`#/results/${encodeURIComponent(dataset.key)}`} aria-current={dataset.key === selectedDatasetKey ? "true" : undefined}>
-                  <span className="dataset-result-name">{dataset.dataset_name || dataset.name}</span>
+                  <span className="dataset-result-name">{dataset.dataset_name || dataset.name}{dataset.managed && <DynamicDatasetIcon />}</span>
                   <small>{integerOrNull(dataset.image_count) ?? "—"} снимков</small>
                 </a>
                 {dataset.test_f1 !== null && dataset.test_f1 !== undefined ? (
@@ -4303,7 +4325,13 @@ function hasActiveDatasetResults(payload: DatasetResultsResponse): boolean {
 
 function datasetOptionLabel(item: DatasetInfo): string {
   const count = integerOrNull(item.image_count);
-  return count === null ? item.name : `${item.name} (${count} img)`;
+  const name = item.name + (item.managed ? " 🔗" : "");
+  return count === null ? name : `${name} (${count} снимков)`;
+}
+
+function DynamicDatasetIcon() {
+  return <span className="dynamic-dataset-icon" role="img" aria-label="Динамическая связь с источниками"
+    title="Динамическая связь с исходными датасетами"><Link2 size={14} aria-hidden="true" /></span>;
 }
 
 function imageFolderOptionLabel(item: ImageFolderInfo): string {
@@ -4386,6 +4414,21 @@ type ManagedDatasetDraftSource = {
   color: string;
 };
 
+function compositionInheritance(data: FormData) {
+  return {
+    inherit_hard_negatives: data.has("inherit_hard_negatives"),
+    inherit_annotation_zones: data.has("inherit_annotation_zones"),
+  };
+}
+
+function CompositionInheritanceFields({ dataset, disabled = false }: { dataset?: DatasetInfo; disabled?: boolean }) {
+  return <fieldset className="composition-options" disabled={disabled}>
+    <legend>Наследование разметки</legend>
+    <label><input type="checkbox" name="inherit_hard_negatives" defaultChecked={dataset?.inherit_hard_negatives ?? true} />Сложные отрицательные примеры</label>
+    <label><input type="checkbox" name="inherit_annotation_zones" defaultChecked={dataset?.inherit_annotation_zones ?? true} />Размеченные зоны</label>
+  </fieldset>;
+}
+
 function ManagedDatasetForm({
   targetClass,
   catalog,
@@ -4414,6 +4457,8 @@ function ManagedDatasetForm({
     [catalog.classes, targetClass.imagery_type],
   );
   const [name, setName] = useState(dataset?.dataset_name || "main");
+  const [mode, setMode] = useState<"dynamic" | "snapshot">("dynamic");
+  const [submitting, setSubmitting] = useState(false);
   const [sources, setSources] = useState<ManagedDatasetDraftSource[]>(() => {
     const existing = new Map(
       (dataset?.managed_sources || []).map((source) => [source.dataset_key, source]),
@@ -4441,37 +4486,61 @@ function ManagedDatasetForm({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!valid) return;
-    const payload = await run(() => apiJson<DatasetCatalogInfo>(
-      dataset
-        ? `/managed-datasets/${encodeURIComponent(dataset.key)}`
-        : "/managed-datasets/compose",
-      {
-        method: dataset ? "PATCH" : "POST",
-        body: {
-          ...(dataset ? {} : { class_key: targetClass.key }),
-          name: name.trim(),
-          sources: selected.map((item) => ({
-            dataset_key: item.dataset.key,
-            priority: item.priority,
-            color: item.color,
-          })),
+    if (!valid || submitting) return;
+    const form = new FormData(event.currentTarget);
+    setSubmitting(true);
+    try {
+      const payload = await run(() => apiJson<DatasetCatalogInfo>(
+        dataset ? `/managed-datasets/${encodeURIComponent(dataset.key)}` : "/managed-datasets/compose",
+        {
+          method: dataset ? "PATCH" : "POST",
+          body: {
+            ...(dataset ? {} : {
+              class_key: targetClass.key, composition_mode: mode,
+              ...compositionInheritance(form),
+            }),
+            name: name.trim(),
+            sources: selected.map((item) => ({
+              dataset_key: item.dataset.key, priority: item.priority, color: item.color,
+            })),
+          },
         },
-      },
-    ));
-    if (payload) await onSaved(payload);
+      ));
+      if (payload) await onSaved(payload);
+    } finally { setSubmitting(false); }
+  };
+
+  const detach = async () => {
+    if (!dataset || submitting || !window.confirm(
+      `Отключить связь для «${dataset.dataset_name || dataset.name}»? Опубликованная разметка станет независимой. История обучений сохранится.`,
+    )) return;
+    setSubmitting(true);
+    try {
+      const payload = await run(() => apiJson<DatasetCatalogInfo>(
+        `/managed-datasets/${encodeURIComponent(dataset.key)}/detach`, { method: "POST" },
+      ));
+      if (payload) await onSaved(payload);
+    } finally { setSubmitting(false); }
   };
 
   return (
     <form className="form-stack" onSubmit={submit}>
       <p className="muted">
-        Разметка строится из выбранных binary per-image датасетов. Большее число означает более высокий
+        Выберите по одному датасету каждого исходного класса. Большее число означает более высокий
         приоритет в местах наложения.
       </p>
       <label>
         Название датасета
         <input value={name} onChange={(event) => setName(event.target.value)} maxLength={240} required />
       </label>
+      {!dataset && <label>Связь с исходными датасетами
+        <select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}>
+          <option value="dynamic">Сохранить динамическую связь</option>
+          <option value="snapshot">Создать независимую копию</option>
+        </select>
+        <small>{mode === "dynamic" ? "Опубликованные правки переходят между комбо и источниками." : "Гровика зафиксирует опубликованную разметку на момент создания."}</small>
+      </label>}
+      <CompositionInheritanceFields dataset={dataset} disabled={Boolean(dataset)} />
       <div className="managed-source-picker">
         {sources.map((item) => {
           const sourceClass = candidates.find(({ dataset }) => dataset.key === item.dataset.key)?.classInfo;
@@ -4490,7 +4559,7 @@ function ManagedDatasetForm({
                 onChange={(event) => updateSource(item.dataset.key, { selected: event.target.checked })}
               />
               <span className="managed-source-name">
-                <strong>{sourceClass?.name}\\{item.dataset.dataset_name}</strong>
+                <strong>{sourceClass?.name}{"\\"}{item.dataset.dataset_name}</strong>
                 <small>{item.dataset.image_count ?? 0} снимков</small>
               </span>
               <span>
@@ -4525,7 +4594,8 @@ function ManagedDatasetForm({
       ) : null}
       <div className="button-row modal-form-actions">
         <button className="secondary" type="button" onClick={onCancel}>Отмена</button>
-        <button className="primary" type="submit" disabled={!valid}>
+        {dataset && <button className="secondary" type="button" disabled={submitting} onClick={() => void detach()}><Unlink2 size={15} /> Отключить связь</button>}
+        <button className="primary" type="submit" disabled={!valid || submitting}>
           {dataset ? "Сохранить" : "Создать"}
         </button>
       </div>

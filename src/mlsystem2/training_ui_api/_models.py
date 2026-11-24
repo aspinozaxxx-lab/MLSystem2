@@ -118,6 +118,7 @@ class DatasetRow(Base):
     source_path: Mapped[str] = mapped_column(String(1024))
     model_name_stem: Mapped[str | None] = mapped_column(String(160), nullable=True)
     config_revision: Mapped[int] = mapped_column(Integer, default=1)
+    composition: Mapped[dict[str, Any] | None] = mapped_column(_json_type(), nullable=True)
     test_sample_settings: Mapped[dict[str, Any] | None] = mapped_column(_json_type(), nullable=True)
     legacy_version: Mapped[bool] = mapped_column(Boolean, default=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

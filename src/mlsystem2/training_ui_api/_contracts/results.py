@@ -326,6 +326,7 @@ class ResultDatasetInfo(BaseModel):
     key: str
     name: str
     dataset_name: str | None = None
+    managed: bool = False
     class_key: str | None = None
     class_name: str | None = None
     quality_metric: Literal["pixel", "objects"] = "pixel"

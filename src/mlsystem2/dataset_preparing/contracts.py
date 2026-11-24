@@ -113,6 +113,10 @@ class DatasetManifest(BaseModel):
     task: Literal["multiclass"]
     combined: bool = False
     managed: bool = False
+    snapshot_key: str | None = None
+    role_origin_keys: list[str] = Field(default_factory=list)
+    inherit_hard_negatives: bool = True
+    inherit_annotation_zones: bool = True
     classes: list[DatasetClassDefinition] = Field(min_length=2)
     sources: list[DatasetSourceRevision] = Field(default_factory=list)
     build_id: str | None = None

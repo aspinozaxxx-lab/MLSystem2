@@ -35,6 +35,8 @@ class DatasetEditorDatasetInfo(BaseModel):
     object_types: list[DatasetEditorObjectType] = Field(default_factory=list)
     combined: bool = False
     managed: bool = False
+    composition_mode: Literal["dynamic", "snapshot"] | None = None
+    snapshot_discardable: bool | None = None
     managed_sources: list[ManagedDatasetSourceInfo] = Field(default_factory=list)
     source_status: Literal["current", "stale", "unknown", "unavailable"] = "unknown"
     source_changes: list[str] = Field(default_factory=list)
@@ -332,6 +334,9 @@ class DatasetEditorCopyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=240)
+    composition_mode: Literal["dynamic", "snapshot"] | None = None
+    inherit_hard_negatives: bool | None = None
+    inherit_annotation_zones: bool | None = None
 
 
 class DatasetEditorMutationResult(BaseModel):
@@ -349,6 +354,7 @@ class DatasetEditorCopyResult(DatasetEditorMutationResult):
     dataset_name: str
     source_path: str
     managed: bool = False
+    snapshot_pending: bool = False
 
 
 class DatasetEditorPublicationInfo(BaseModel):

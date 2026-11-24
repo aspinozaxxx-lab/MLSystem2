@@ -15,6 +15,43 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [
 {
+  slug: "combo-datasets-dynamic-and-snapshot",
+  date: "2026-11-24",
+  title: "Комбо-датасеты с общей и независимой разметкой",
+  summary: "В редакторе классов можно собрать несколько классов в один датасет и выбрать, как они будут обмениваться правками. Для сложных отрицательных примеров и размеченных зон появились отдельные переключатели.",
+  image: {
+    src: "/news/combo-datasets-dynamic-and-snapshot.svg",
+    alt: "Схема двух режимов. В динамическом наборе опубликованные правки переходят между комбо и исходниками в обе стороны. Независимая копия получает разметку один раз.",
+    caption: "Схема обмена опубликованной разметкой. Снимки в обоих режимах берутся из общего хранилища.",
+  },
+  sections: [
+    {
+      title: "Когда оставить связь",
+      paragraphs: ["Допустим, реки и озёра размечают разные специалисты, а сеть должна различать оба класса. Создайте динамический комбо-датасет. Когда специалист уточнит берег озера и опубликует правку в исходном датасете, та же граница появится в комбо. Если исправить и опубликовать контур озера в комбо, изменение попадёт в выбранный исходный датасет озёр.", "Динамический набор можно узнать по маленькой цепочке после названия. Такой режим выбран по умолчанию при создании комбо."],
+    },
+    {
+      title: "Когда выбрать независимую копию",
+      paragraphs: ["Копия подходит для эксперимента с другой методикой разметки. Например, можно зафиксировать реки и озёра на сегодня, а затем по-другому провести спорные границы для следующего обучения. Гровика запоминает опубликованную версию в момент запроса и собирает из неё собственные файлы разметки. Исходные датасеты в это время можно продолжать редактировать.", "Когда копия готова, её объекты, сложные отрицательные примеры и зоны редактируются отдельно. Последующие публикации в исходниках также остаются там. Сами растровые снимки повторно копировать не требуется."],
+    },
+    {
+      title: "Как собрать комбо",
+      steps: [
+        "Откройте «Редактор классов», выберите целевой класс и нажмите «Создать комбо-датасет».",
+        "Укажите название и выберите по одному датасету каждого исходного класса. Если объекты разных классов перекрываются, задайте приоритеты.",
+        "В поле «Связь с исходными датасетами» выберите динамическую связь или независимую копию. В разделе «Наследование разметки» выставьте два переключателя и сохраните.",
+      ],
+    },
+    {
+      title: "Что переносить из источников",
+      paragraphs: ["Размеченные объекты исходных классов входят в комбо всегда. «Сложные отрицательные примеры» добавляют места, где сеть легко путает фон с объектом. Например, тень от леса могла быть отмечена как ложное озеро. «Размеченные зоны» добавляют границы территорий, которые разметчик проверил для соответствующего класса.", "Оба переключателя изначально включены. Если исходные зоны подходят для нового набора, а примеры ошибок вы хотите подобрать заново, оставьте только «Размеченные зоны». Можно выбрать и обратное сочетание. Собственные зоны и сложные отрицательные примеры можно добавить в редакторе и при выключенном наследовании."],
+    },
+    {
+      title: "Как отделить уже существующий набор",
+      paragraphs: ["В «Редакторе классов» откройте «Параметры» у динамического датасета, нажмите «Отключить связь» и подтвердите действие. Если в комбо есть неопубликованные черновики, сначала опубликуйте или отмените их. Гровика сохранит опубликованную разметку в отдельной папке. У набора останутся прежние имя, идентификатор и история обучений. Если в исходных данных обнаружится ошибка, редактор покажет причину и сохранит динамическую связь.", "Если нужны сразу оба варианта, воспользуйтесь копированием динамического датасета и выберите для нового набора независимую копию. В диалоге копирования можно сразу изменить наследование сложных отрицательных примеров и зон. Исходный комбо-датасет продолжит получать правки."],
+    },
+  ],
+},
+{
   slug: "test-package-fitting",
   date: "2026-11-06",
   title: "Дообучение на тестовой разметке: выучить весь пакет и сохранить лучший результат",
@@ -2018,6 +2055,15 @@ export function NewsSection() {
   </section>;
 }
 
+function newsDestination(slug: string): [string, string] {
+  if (slug === "combo-datasets-dynamic-and-snapshot") return ["#/classes", "Открыть редактор классов"];
+  if (["training-continuation-dataset-source", "training-continuation-class-data"].includes(slug)) return ["#/results", "Открыть результаты обучения"];
+  if (["fast-test-markup-catalog", "test-regions-from-class-annotations", "test-markup-zip-import"].includes(slug)) return ["#/test-markups", "Открыть каталог тестовых разметок"];
+  if (slug === "shared-inference-templates") return ["#/templates/inference", "Открыть шаблоны инференса"];
+  if (["test-markup-creation-queue", "manual-test-markup-editor"].includes(slug)) return ["#/test-markups/create", "Создать тестовую разметку"];
+  return ["#/dataset-editor", "Открыть редактор датасетов"];
+}
+
 export function NewsPage({ slug }: { slug?: string }) {
   const article = newsArticles.find((item) => item.slug === slug);
   if (!slug) return <NewsSection />;
@@ -2027,6 +2073,7 @@ export function NewsPage({ slug }: { slug?: string }) {
     <header><time dateTime={article.date}>{articleDate(article.date)}</time><h1>{article.title}</h1></header>
     <ul>{article.updates.map((text) => <li key={text}>{text}</li>)}</ul>
   </article>;
+  const [href, action] = newsDestination(article.slug);
   return <article className="panel news-article">
     <a className="news-back" href="#/"><ArrowLeft size={16} /> Все новости на главной</a>
     <header><time dateTime={article.date}>{articleDate(article.date)}</time><h1>{article.title}</h1><p className="news-lead">{article.summary}</p></header>
@@ -2037,6 +2084,6 @@ export function NewsPage({ slug }: { slug?: string }) {
       {section.steps ? <ol>{section.steps.map((text) => <li key={text}>{text}</li>)}</ol> : null}
       {section.image ? <NewsFigure image={section.image} /> : null}
     </section>)}
-    <a className="primary" href={["training-continuation-dataset-source", "training-continuation-class-data"].includes(article.slug) ? "#/results" : ["fast-test-markup-catalog", "test-regions-from-class-annotations", "test-markup-zip-import"].includes(article.slug) ? "#/test-markups" : article.slug === "shared-inference-templates" ? "#/templates/inference" : ["test-markup-creation-queue", "manual-test-markup-editor"].includes(article.slug) ? "#/test-markups/create" : "#/dataset-editor"}>{["training-continuation-dataset-source", "training-continuation-class-data"].includes(article.slug) ? "Открыть результаты обучения" : ["fast-test-markup-catalog", "test-regions-from-class-annotations", "test-markup-zip-import"].includes(article.slug) ? "Открыть каталог тестовых разметок" : article.slug === "shared-inference-templates" ? "Открыть шаблоны инференса" : ["test-markup-creation-queue", "manual-test-markup-editor"].includes(article.slug) ? "Создать тестовую разметку" : "Открыть редактор датасетов"} <ArrowUpRight size={16} /></a>
+    <a className="primary" href={href}>{action} <ArrowUpRight size={16} /></a>
   </article>;
 }

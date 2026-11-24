@@ -109,7 +109,7 @@ export function TrainingContinuationForm({ result, options, datasets = [], testS
     </fieldset>
     {datasetSource === "dataset" ? <label className="field"><span>Датасет класса</span>
       <select name="dataset_key" required disabled={busy} value={selectedDataset} onChange={event => setSelectedDataset(event.currentTarget.value)}>
-        {classDatasets.map(item => <option key={item.key} value={item.key}>{item.dataset_name || item.name}</option>)}
+        {classDatasets.map(item => <option key={item.key} value={item.key}>{item.dataset_name || item.name}{item.managed ? " 🔗" : ""}</option>)}
       </select></label> : null}
     {datasetSource === "test_sample" ? <><label className="field"><span>Тестовая разметка класса</span>
       <select name="test_sample_id" required disabled={busy} value={selectedSample} onChange={event => setSelectedSample(event.currentTarget.value)}>

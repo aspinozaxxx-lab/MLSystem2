@@ -25,7 +25,7 @@ from mlsystem2.dataset_preparing.contracts import (
 )
 
 from ._config import TrainingUIAPIConfig
-from ._markup_lock import markup_read_lock
+from ._markup_lock import markup_read_lock, markup_write_lock
 from ._datasets import (
     CUSTOM_KEY,
     CUSTOM_NAME,
@@ -77,6 +77,7 @@ from .contracts import (
 )
 from ._managed_datasets import (
     SOURCE_MANAGED,
+    SOURCE_SNAPSHOT_PENDING,
     managed_dataset_cache_state,
     managed_manifest,
     managed_source_infos,
@@ -611,11 +612,13 @@ def create_managed_dataset(
         )
         source_owner = session.scalar(
             select(DatasetRow).where(
-                DatasetRow.source_type == SOURCE_MLMARKUP,
+                DatasetRow.source_type.in_((SOURCE_MLMARKUP, SOURCE_SNAPSHOT_PENDING)),
                 DatasetRow.source_path == source_path,
                 DatasetRow.deleted_at.is_(None),
             )
         )
+        if source_owner is not None and source_owner.source_type == SOURCE_SNAPSHOT_PENDING:
+            raise TrainingUIAPIError("Папка зарезервирована для независимой копии.")
         _ensure_dataset_name_available(
             session,
             class_row.id,
@@ -773,10 +776,12 @@ def create_managed_dataset_composition(
     session: Session,
     request: ManagedDatasetCompositionCreate,
     config: TrainingUIAPIConfig,
+    *, username: str = "Гровика",
 ) -> DatasetCatalogInfo:
     """Создать виртуальный multiclass-датасет из binary per-image источников."""
 
-    with markup_read_lock(config):
+    snapshot = request.composition_mode == "snapshot"
+    with (markup_write_lock(config) if snapshot else markup_read_lock(config)):
         class_row = _class_row(session, request.class_key)
         name = _clean_name(request.name, "Название датасета")
         _ensure_dataset_name_available(session, class_row.id, name)
@@ -788,6 +793,8 @@ def create_managed_dataset_composition(
             name=name,
             source_type=SOURCE_MANAGED,
             source_path=f"managed/{uuid.uuid4()}",
+            composition={"inherit_hard_negatives": request.inherit_hard_negatives,
+                         "inherit_annotation_zones": request.inherit_annotation_zones},
             config_revision=1,
             legacy_version=False,
         )
@@ -796,6 +803,24 @@ def create_managed_dataset_composition(
         _replace_managed_composition_sources(session, dataset, specs)
         _assign_main_if_available(class_row, dataset)
         session.flush()
+        if snapshot:
+            from ._composition_snapshots import request_snapshot
+
+            request_snapshot(session, config, dataset, class_row, username)
+        return managed_dataset_catalog(session, config)
+
+
+def detach_dataset_composition(
+    session: Session, dataset_key: str, config: TrainingUIAPIConfig, username: str,
+) -> DatasetCatalogInfo:
+    from ._composition_snapshots import request_snapshot
+
+    with markup_write_lock(config):
+        row = _dataset_row(session, dataset_key)
+        if row.source_type == SOURCE_MANAGED:
+            request_snapshot(session, config, row, session.get(DatasetClassRow, row.class_id), username, detach_existing=True)
+        elif not (row.composition or {}).get("classes"):
+            raise TrainingUIAPIError("Отключить связь можно только у динамического комбо-датасета.")
         return managed_dataset_catalog(session, config)
 
 
@@ -807,6 +832,10 @@ def update_managed_dataset(
 ) -> DatasetCatalogInfo:
     with markup_read_lock(config):
         row = _dataset_row(session, dataset_key)
+        if row.source_type == SOURCE_SNAPSHOT_PENDING:
+            raise TrainingUIAPIError("Дождитесь подготовки независимой копии.")
+        if (row.composition or {}).get("classes") and request.source_path not in (None, row.source_path):
+            raise TrainingUIAPIError("У независимой копии собственная папка разметки.")
         if row.source_type == SOURCE_MANAGED and request.source_path is not None:
             raise TrainingUIAPIError(
                 "Источник виртуального управляемого датасета меняется через его состав."
@@ -876,13 +905,15 @@ def update_managed_dataset(
         if desired_source != row.source_path:
             source_owner = session.scalar(
                 select(DatasetRow).where(
-                    DatasetRow.source_type == row.source_type,
+                    DatasetRow.source_type.in_((row.source_type, SOURCE_SNAPSHOT_PENDING)),
                     DatasetRow.source_path == desired_source,
                     DatasetRow.id != row.id,
                     DatasetRow.deleted_at.is_(None),
                 )
             )
             previous_source_path = row.source_path
+            if source_owner is not None and (source_owner.composition or {}).get("classes"):
+                raise TrainingUIAPIError("Эта папка принадлежит независимой копии.")
             if source_owner is not None:
                 source_owner.source_path = f".mlsystem2-source-swap/{uuid.uuid4()}"
                 session.flush()
@@ -961,7 +992,7 @@ def _import_mlmarkup_folders(
     preserve_legacy_keys: bool,
 ) -> None:
     assigned_rows = session.scalars(
-        select(DatasetRow).where(DatasetRow.source_type == SOURCE_MLMARKUP)
+        select(DatasetRow).where(DatasetRow.source_type.in_((SOURCE_MLMARKUP, SOURCE_SNAPSHOT_PENDING)))
     ).all()
     assigned_sources = {row.source_path for row in assigned_rows}
     source_root_classes: dict[str, set[uuid.UUID]] = {}
@@ -1091,6 +1122,25 @@ def _dataset_info(
     materialize_managed: bool = True,
 ) -> DatasetInfo:
     _ensure_model_name_stem(session, dataset, class_row, config)
+    options = dataset.composition or {}
+    if dataset.source_type == SOURCE_SNAPSHOT_PENDING:
+        manifest = DatasetManifest.model_validate(options["pending"]["manifest"])
+        error = options.get("error")
+        return DatasetInfo(
+            key=dataset.key, name=f"{class_row.name}\\{dataset.name}", dataset_name=dataset.name,
+            class_key=class_row.key, class_name=class_row.name, class_technical_name=class_row.technical_name,
+            imagery_type=class_row.imagery_type, input_channels=IMAGERY_CHANNELS[class_row.imagery_type],
+            images_dir=str(imagery_images_dir(config.images_root, class_row.imagery_type)),
+            quality_metric=class_row.quality_metric, model_name_stem=dataset.model_name_stem,
+            source_type=dataset.source_type, source_path=dataset.source_path, source_available=False,
+            is_primary=class_row.primary_dataset_id == dataset.id, format=DatasetFormat.PER_IMAGE_MULTICLASS,
+            task="multiclass", object_types=[DatasetObjectType(**c.model_dump()) for c in manifest.classes],
+            composition_mode="snapshot", inherit_hard_negatives=manifest.inherit_hard_negatives,
+            snapshot_discardable=bool(options.get("invalid")),
+            inherit_annotation_zones=manifest.inherit_annotation_zones,
+            materialization_status="failed" if error else "queued", materialization_error=error,
+            diagnostics=[error or "Подготавливается независимая копия разметки."],
+        )
     if dataset.source_type == SOURCE_MANAGED:
         return _managed_dataset_info(
             session,
@@ -1160,6 +1210,15 @@ def _dataset_info(
         diagnostics.append(
             f"Каталог снимков типа «{IMAGERY_NAMES[class_row.imagery_type]}» недоступен."
         )
+    if manifest is None and options.get("classes"):
+        object_types = [
+            DatasetObjectType(id=source["object_type_id"], slug=source["object_type_slug"],
+                              name=source["class_name"], priority=source["priority"], color=source["color"])
+            for source in options["classes"]
+        ]
+        dataset_format = DatasetFormat.PER_IMAGE_MULTICLASS
+    else:
+        object_types = [DatasetObjectType(**item.model_dump()) for item in manifest.classes] if manifest else []
     version = source_version
     if not dataset.legacy_version:
         version = f"managed:{dataset.config_revision}:{source_version or 'missing'}"
@@ -1216,22 +1275,13 @@ def _dataset_info(
         source_available=source_available,
         is_primary=class_row.primary_dataset_id == dataset.id,
         diagnostics=diagnostics,
-        task="multiclass" if manifest is not None else "binary",
-        object_types=(
-            [
-                DatasetObjectType(
-                    id=item.id,
-                    slug=item.slug,
-                    name=item.name,
-                    color=item.color,
-                    priority=item.priority,
-                )
-                for item in manifest.classes
-            ]
-            if manifest is not None
-            else []
-        ),
+        task="multiclass" if object_types else "binary",
+        object_types=object_types,
         combined=bool(manifest and manifest.combined),
+        composition_mode="snapshot" if options.get("classes") or (manifest and manifest.snapshot_key) else None,
+        managed_sources=options.get("classes", []),
+        inherit_hard_negatives=options.get("inherit_hard_negatives", manifest.inherit_hard_negatives if manifest else True),
+        inherit_annotation_zones=options.get("inherit_annotation_zones", manifest.inherit_annotation_zones if manifest else True),
         source_status=("unavailable" if not source_available else source_status),
         source_changes=source_changes,
         class_counts=class_counts,
@@ -1296,6 +1346,7 @@ def _managed_dataset_info(
         materialization_status = "failed"
         materialization_error = str(exc)
     display_name = f"{class_row.name}\\{dataset.name}"
+    detach_error = (dataset.composition or {}).get("detach_error")
     return DatasetInfo(
         key=dataset.key,
         name=display_name,
@@ -1318,7 +1369,7 @@ def _managed_dataset_info(
         model_name_stem=dataset.model_name_stem,
         source_available=not diagnostics,
         is_primary=class_row.primary_dataset_id == dataset.id,
-        diagnostics=diagnostics,
+        diagnostics=diagnostics + ([detach_error] if detach_error else []),
         task="multiclass",
         object_types=[
             DatasetObjectType(
@@ -1331,6 +1382,9 @@ def _managed_dataset_info(
             for item in manifest.classes
         ],
         managed=True,
+        composition_mode="dynamic",
+        inherit_hard_negatives=manifest.inherit_hard_negatives,
+        inherit_annotation_zones=manifest.inherit_annotation_zones,
         managed_sources=managed_source_list,
         source_status="current" if not diagnostics else "unavailable",
         class_counts=class_counts,

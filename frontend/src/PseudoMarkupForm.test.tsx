@@ -25,6 +25,7 @@ const NativeFormData = FormData;
 const trainingDataset: DatasetInfo = {
   key: "зу\\main", name: "ЗУ500\\main", is_custom: false, quality_metric: "objects", imagery_type: "ortho",
   source_available: true, is_primary: true, task: "binary", combined: false, managed: false,
+  inherit_hard_negatives: true, inherit_annotation_zones: true,
   source_status: "current", hard_negative_count: 0, materialization_status: "not_applicable",
 };
 const makeProps = (overrides: Partial<Parameters<typeof PseudoMarkupForm>[0]> = {}) => ({

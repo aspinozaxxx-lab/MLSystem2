@@ -270,6 +270,12 @@ def _build_per_image_combined_dataset(
 ) -> CombinedDatasetBuild:
     """Собрать управляемый датасет без повторного поиска сцен по общей AOI."""
 
+    excluded_roles = {
+        role for role, inherited in (
+            ("hard_negative", manifest.inherit_hard_negatives),
+            ("annotation_zone", manifest.inherit_annotation_zones),
+        ) if not inherited
+    }
     features_by_annotation: dict[str, list[_SourceFeature]] = {}
     images_by_annotation: dict[str, Path] = {}
     resolved_sources: list[DatasetSourceRevision] = []
@@ -312,6 +318,8 @@ def _build_per_image_combined_dataset(
                     repo_root,
                     source=source,
                     warnings_list=warnings_list,
+                    excluded_roles=excluded_roles,
+                    role_origin_keys=manifest.role_origin_keys,
                 )
             )
         file_hashes = _folder_file_hashes(source_dir)
@@ -449,6 +457,8 @@ def _load_per_image_source_features(
     *,
     source: DatasetSourceRevision,
     warnings_list: list[str],
+    excluded_roles: set[str],
+    role_origin_keys: list[str],
 ) -> list[_SourceFeature]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -467,6 +477,11 @@ def _load_per_image_source_features(
         if not isinstance(feature, dict):
             warnings_list.append(f"Пропущен некорректный объект {relative}#{index}")
             continue
+        raw_properties = feature.get("properties")
+        properties = dict(raw_properties) if isinstance(raw_properties, dict) else {}
+        role = str(properties.get("_mlsystem2_role") or "positive")
+        if role in excluded_roles and properties.get("_mlsystem2_composition_key") not in role_origin_keys:
+            continue
         try:
             geometry = _polygonal(shape(feature.get("geometry")))
         except Exception:  # noqa: BLE001
@@ -482,9 +497,6 @@ def _load_per_image_source_features(
                 raise TrainingUIAPIError(f"Размеченная зона потеряна при преобразовании CRS: {relative}#{index}")
             warnings_list.append(f"Пропущена геометрия после преобразования {relative}#{index}")
             continue
-        raw_properties = feature.get("properties")
-        properties = dict(raw_properties) if isinstance(raw_properties, dict) else {}
-        role = str(properties.get("_mlsystem2_role") or "positive")
         if role not in {"positive", "hard_negative", "annotation_zone"}:
             warnings_list.append(f"Пропущена неизвестная роль {relative}#{index}: {role}")
             continue
@@ -515,6 +527,9 @@ def _load_per_image_source_features(
                 {"geometry": mapping(geometry), "properties": clean_properties}
             ).encode("utf-8")
         ).hexdigest()
+        owner = properties.get("_mlsystem2_composition_key")
+        if role in {"annotation_zone", "hard_negative"} and isinstance(owner, str):
+            clean_properties["_mlsystem2_composition_key"] = owner
         output.append(
             _SourceFeature(
                 geometry_wgs84=geometry_wgs84,

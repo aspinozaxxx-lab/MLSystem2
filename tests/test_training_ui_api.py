@@ -572,7 +572,7 @@ def test_result_classes_sort_by_last_successful_training(tmp_path: Path, monkeyp
     }
     datasets = [SimpleNamespace(
         key=key, name=name, dataset_name=name, class_key="forest", class_name="Лес",
-        quality_metric="pixel", is_primary=key == "fresh", image_count=10,
+        quality_metric="pixel", is_primary=key == "fresh", image_count=10, managed=False,
     ) for key, name in names.items()]
     class_info = SimpleNamespace(
         key="forest", name="Лес", updated_at=None, datasets=datasets,
@@ -690,6 +690,7 @@ def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeyp
     datasets = [
         SimpleNamespace(
             key="forest-main",
+            managed=True,
             name="main",
             dataset_name="Лес\\main",
             class_key="forest",
@@ -700,6 +701,7 @@ def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeyp
         ),
         SimpleNamespace(
             key="forest-test",
+            managed=False,
             name="test",
             dataset_name="Лес\\test",
             class_key="forest",
@@ -710,6 +712,7 @@ def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeyp
         ),
         SimpleNamespace(
             key="forest-empty",
+            managed=False,
             name="empty",
             dataset_name="Лес\\empty",
             class_key="forest",
@@ -837,6 +840,7 @@ def test_result_classes_show_dataset_specific_network_f1(tmp_path: Path, monkeyp
             {"pixel": {"per_class": {"forest": {"f1": 0.83}, "scrub": {"f1": 0.74}}}},
             {},
         ]
+        assert [item.key for item in cards if item.managed] == ["forest-main"]
         assert [item.test_f1_training_result_id for item in cards] == [
             primary_id,
             latest_test_id,

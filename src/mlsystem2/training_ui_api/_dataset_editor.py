@@ -72,6 +72,7 @@ from ._models import (
 )
 from ._managed_datasets import (
     SOURCE_MANAGED,
+    SOURCE_SNAPSHOT_PENDING,
     invalidate_managed_cache,
     managed_dataset_cache_state,
     managed_sources,
@@ -188,6 +189,9 @@ def list_editor_datasets(
             include_custom=False,
             materialize_managed=False,
         ):
+            if dataset.source_type == SOURCE_SNAPSHOT_PENDING:
+                result.append(_editor_dataset_info(dataset, 0))
+                continue
             try:
                 if dataset.managed:
                     scene_count = _managed_editor_scene_count(
@@ -1559,6 +1563,9 @@ def copy_editor_dataset(
     *,
     name: str,
     username: str,
+    composition_mode: str | None = None,
+    inherit_hard_negatives: bool | None = None,
+    inherit_annotation_zones: bool | None = None,
 ) -> DatasetEditorCopyResult:
     """Создать новый датасет из опубликованного состояния существующего."""
 
@@ -1575,9 +1582,21 @@ def copy_editor_dataset(
         if row is None:
             raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
         _ensure_dataset_name_available(session, row.class_id, copy_name)
+        if row.source_type == SOURCE_SNAPSHOT_PENDING:
+            raise TrainingUIAPIError("Дождитесь подготовки независимой копии.")
 
         if row.source_type == SOURCE_MANAGED:
             copied = _copy_managed_dataset_row(session, row, copy_name)
+            options = dict(copied.composition or {})
+            if inherit_hard_negatives is not None:
+                options["inherit_hard_negatives"] = inherit_hard_negatives
+            if inherit_annotation_zones is not None:
+                options["inherit_annotation_zones"] = inherit_annotation_zones
+            copied.composition = options
+            if composition_mode == "snapshot":
+                from ._composition_snapshots import request_snapshot
+
+                request_snapshot(session, config, copied, session.get(DatasetClassRow, row.class_id), username)
             commit = _git(config, "rev-parse", "HEAD").stdout.strip()
             return DatasetEditorCopyResult(
                 commit=commit,
@@ -1585,9 +1604,14 @@ def copy_editor_dataset(
                 dataset_key=copied.key,
                 dataset_name=copied.name,
                 source_path=copied.source_path,
-                managed=True,
+                managed=copied.source_type == SOURCE_MANAGED,
+                snapshot_pending=copied.source_type == SOURCE_SNAPSHOT_PENDING,
             )
 
+        if composition_mode == "dynamic":
+            raise TrainingUIAPIError("Динамическую копию можно создать только из связанного комбо-датасета.")
+        if inherit_hard_negatives is not None or inherit_annotation_zones is not None:
+            raise TrainingUIAPIError("Наследование настраивается при копировании динамического комбо-датасета.")
         source_dir = _editor_source_dir(config, dataset)
         source_relative = _repo_relative(config, source_dir)
         if len(source_relative.parts) < 2:
@@ -1609,9 +1633,15 @@ def copy_editor_dataset(
                 "Исходная папка датасета отсутствует или не зафиксирована в Git editor-клона."
             )
 
+        copied_key = str(uuid.uuid4())
         try:
             shutil.copytree(source_dir, target_dir, copy_function=shutil.copy2,
                             ignore=shutil.ignore_patterns(".mlsystem2-annotation-selections.json"))
+            if dataset.composition_mode == "snapshot":
+                manifest = load_dataset_manifest(target_dir)
+                if manifest and manifest.snapshot_key:
+                    _write_json_atomic(target_dir / ".mlsystem2-dataset.json",
+                                       manifest.model_copy(update={"snapshot_key": copied_key}).model_dump(mode="json"))
             _git(config, "add", "--", target_relative.as_posix())
             commit = _commit(
                 config,
@@ -1640,12 +1670,13 @@ def copy_editor_dataset(
             raise
 
         copied = DatasetRow(
-            key=str(uuid.uuid4()),
+            key=copied_key,
             class_id=row.class_id,
             name=copy_name,
             source_type=row.source_type,
             source_path=target_relative.as_posix(),
             model_name_stem=row.model_name_stem,
+            composition=row.composition,
             config_revision=1,
             legacy_version=False,
         )
@@ -1691,7 +1722,10 @@ def delete_editor_dataset(
         )
         if row is None:
             raise TrainingUIAPIError(f"Датасет не найден: {dataset_key}")
-        if row.source_type == SOURCE_MANAGED:
+        if row.source_type == SOURCE_SNAPSHOT_PENDING:
+            if not (row.composition or {}).get("invalid"):
+                raise TrainingUIAPIError("Дождитесь подготовки независимой копии перед удалением.")
+        if row.source_type in (SOURCE_MANAGED, SOURCE_SNAPSHOT_PENDING):
             class_row = session.get(DatasetClassRow, row.class_id)
             if class_row is not None and class_row.primary_dataset_id == row.id:
                 class_row.primary_dataset_id = None
@@ -1864,6 +1898,8 @@ def _copy_managed_dataset_row(
         source_type=SOURCE_MANAGED,
         source_path=f"managed/{uuid.uuid4()}",
         model_name_stem=source.model_name_stem,
+        composition={**(source.composition or {}),
+                     "role_origin_keys": [source.key, *(source.composition or {}).get("role_origin_keys", [])]},
         config_revision=1,
         legacy_version=False,
     )
@@ -2497,6 +2533,8 @@ def _editor_dataset_context(
     allow_missing: bool = False,
 ) -> tuple[DatasetInfo, Path]:
     dataset = _managed_editor_dataset(session, config, dataset_key)
+    if dataset.source_type == SOURCE_SNAPSHOT_PENDING:
+        raise TrainingUIAPIError(dataset.materialization_error or "Подготавливается независимая копия разметки.")
     if dataset.managed:
         row = session.scalar(
             select(DatasetRow).where(
@@ -2940,6 +2978,8 @@ def _editor_dataset_info(
         ],
         combined=dataset.combined,
         managed=dataset.managed,
+        composition_mode=dataset.composition_mode,
+        snapshot_discardable=dataset.snapshot_discardable,
         managed_sources=list(dataset.managed_sources),
         source_status=dataset.source_status,
         source_changes=list(dataset.source_changes),
@@ -3087,6 +3127,11 @@ def _publish_managed_editor_scenes(
         )
 
     mutations: dict[tuple[str, str], tuple[Path, dict[str, Any], str | None]] = {}
+    own_role_keys = {row.key, *(row.composition or {}).get("role_origin_keys", [])}
+    inherited_roles = {
+        "hard_negative": dataset.inherit_hard_negatives,
+        "annotation_zone": dataset.inherit_annotation_zones,
+    }
 
     def source_payload(
         source_key: str, annotation_name: str
@@ -3171,6 +3216,7 @@ def _publish_managed_editor_scenes(
                     fallback_geometry=(old_feature or {}).get("geometry"),
                     fallback_crs=previous_crs,
                     fallback_role=old_role,
+                    owner_keys=None if inherited_roles.get(old_role, True) else own_role_keys,
                 )
                 mutations[(source.dataset.key, annotation_name)] = (
                     path,
@@ -3187,6 +3233,9 @@ def _publish_managed_editor_scenes(
                     new_feature,
                     source_crs=candidate_crs,
                     origin_key=origin_key,
+                    composition_key=(old_properties.get("_mlsystem2_composition_key")
+                                     if old_feature is not None and old_role == new_properties.get(_ROLE_PROPERTY)
+                                     else dataset.key),
                 )
                 mutations[(source.dataset.key, annotation_name)] = (
                     path,
@@ -3374,10 +3423,17 @@ def _remove_managed_source_feature(
     fallback_geometry: Any,
     fallback_crs: PyprojCRS,
     fallback_role: str | None = None,
+    owner_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     features = [item for item in payload.get("features") or [] if isinstance(item, dict)]
+    def eligible(properties: dict[str, Any]) -> bool:
+        return ((fallback_role is None or properties.get(_ROLE_PROPERTY, "positive") == fallback_role)
+                and (owner_keys is None or properties.get("_mlsystem2_composition_key") in owner_keys))
+
     for index, feature in enumerate(features, start=1):
         properties = feature.get("properties") or {}
+        if not eligible(properties):
+            continue
         identity = _managed_source_identity(feature, properties, index)
         origin = properties.get("_mlsystem2_origin_key")
         if (isinstance(source_identity, str) and identity == source_identity) or (
@@ -3394,8 +3450,7 @@ def _remove_managed_source_feature(
     output: list[dict[str, Any]] = []
     for feature in features:
         properties = feature.get("properties") or {}
-        role = str(properties.get(_ROLE_PROPERTY) or "positive")
-        if fallback_role is not None and role != fallback_role:
+        if not eligible(properties):
             output.append(feature)
             continue
         try:
@@ -3432,6 +3487,7 @@ def _append_managed_source_feature(
     *,
     source_crs: PyprojCRS,
     origin_key: str,
+    composition_key: str | None = None,
 ) -> dict[str, Any]:
     target_crs = _geojson_crs(payload)
     geometry = _polygonal_geometry(shape(feature.get("geometry")))
@@ -3445,6 +3501,8 @@ def _append_managed_source_feature(
     source_properties = feature.get("properties") or {}
     role = str(source_properties.get(_ROLE_PROPERTY) or "positive")
     properties[_ROLE_PROPERTY] = role
+    if composition_key and role in {"hard_negative", "annotation_zone"}:
+        properties["_mlsystem2_composition_key"] = composition_key
     source_origin = source_properties.get("_mlsystem2_source_origin_key")
     properties["_mlsystem2_origin_key"] = (
         source_origin if isinstance(source_origin, str) and source_origin else origin_key
@@ -3893,7 +3951,7 @@ def _validate_editor_geojson(
                     f"У объекта {index} недопустимое значение {json.dumps(class_slug, ensure_ascii=False)} "
                     f"поля {_CLASS_PROPERTY}. Типы объектов датасета «{dataset.name}»: {allowed_classes}."
                 )
-        elif dataset.task == "multiclass" and role in {"hard_negative", "annotation_zone"} and dataset.managed:
+        elif dataset.task == "multiclass" and role in {"hard_negative", "annotation_zone"} and (dataset.managed or dataset.composition_mode == "snapshot"):
             if class_slug is not None and (not isinstance(class_slug, str) or class_slug not in known_slugs):
                 raise TrainingUIAPIError(
                     f"У объекта {index} недопустимое значение {json.dumps(class_slug, ensure_ascii=False)} "
@@ -4183,7 +4241,7 @@ def _normalize_editor_geojson(
         else:
             properties.setdefault("_mlsystem2_origin_key", f"manual:{feature_id}")
             properties.setdefault("_mlsystem2_source_path", "manual")
-        if properties.get(_ROLE_PROPERTY) in {"hard_negative", "annotation_zone"} and not dataset.managed:
+        if properties.get(_ROLE_PROPERTY) in {"hard_negative", "annotation_zone"} and not (dataset.managed or dataset.composition_mode == "snapshot"):
             properties.pop(_CLASS_PROPERTY, None)
         feature["properties"] = properties
         features.append(feature)

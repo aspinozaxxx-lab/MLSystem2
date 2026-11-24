@@ -300,10 +300,18 @@ def create_managed_dataset_composition(
     session: Session,
     request: ManagedDatasetCompositionCreate,
     config: TrainingUIAPIConfig,
+    *, username: str = "Гровика",
 ) -> DatasetCatalogInfo:
     from ._dataset_catalog import create_managed_dataset_composition as create_composition
 
-    return create_composition(session, request, config)
+    return create_composition(session, request, config, username=username)
+
+
+def detach_dataset_composition(session: Session, dataset_key: str, config: TrainingUIAPIConfig,
+                               username: str) -> DatasetCatalogInfo:
+    from ._dataset_catalog import detach_dataset_composition as detach
+
+    return detach(session, dataset_key, config, username)
 
 
 def update_managed_dataset(
@@ -364,6 +372,7 @@ def result_classes(
                     key=dataset.key,
                     name=dataset.name,
                     dataset_name=dataset.dataset_name,
+                    managed=dataset.managed,
                     class_key=dataset.class_key,
                     class_name=dataset.class_name,
                     quality_metric=dataset.quality_metric,

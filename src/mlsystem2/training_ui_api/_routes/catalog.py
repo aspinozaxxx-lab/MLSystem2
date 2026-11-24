@@ -13,6 +13,7 @@ from mlsystem2.training_ui_api._service import (
     create_dataset_class,
     create_managed_dataset,
     create_managed_dataset_composition,
+    detach_dataset_composition,
     create_mlflow_experiment,
     dataset_catalog,
     datasets,
@@ -43,7 +44,7 @@ from mlsystem2.training_ui_api.contracts import (
     ModelListResponse,
 )
 
-from .common import RouteContext
+from .common import RouteContext, editor_transaction
 
 
 def register_catalog_routes(app: FastAPI, ctx: RouteContext) -> None:
@@ -142,9 +143,18 @@ def register_catalog_routes(app: FastAPI, ctx: RouteContext) -> None:
     def post_managed_dataset_composition(
         request: ManagedDatasetCompositionCreate,
         db: Session = Depends(ctx.get_db),
-        _: str = Depends(ctx.authenticated),
+        username: str = Depends(ctx.authenticated),
     ) -> DatasetCatalogInfo:
-        return create_managed_dataset_composition(db, request, ctx.config)
+        if request.composition_mode == "snapshot":
+            with editor_transaction(db, ctx.config):
+                return create_managed_dataset_composition(db, request, ctx.config, username=username)
+        return create_managed_dataset_composition(db, request, ctx.config, username=username)
+
+    @app.post("/api/v1/managed-datasets/{dataset_key}/detach", response_model=DatasetCatalogInfo)
+    def detach_composition(dataset_key: str, db: Session = Depends(ctx.get_db),
+                           username: str = Depends(ctx.authenticated)) -> DatasetCatalogInfo:
+        with editor_transaction(db, ctx.config):
+            return detach_dataset_composition(db, dataset_key, ctx.config, username)
 
     @app.patch("/api/v1/managed-datasets/{dataset_key}", response_model=DatasetCatalogInfo)
     def patch_managed_dataset(

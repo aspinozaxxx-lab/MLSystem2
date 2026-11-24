@@ -126,10 +126,10 @@ def validate_multiclass_annotation(
         elif role in {"hard_negative", "annotation_zone"}:
             if (
                 CLASS_PROPERTY in properties
-                and not manifest.managed
+                and not (manifest.managed or manifest.snapshot_key)
             ) or (
                 class_slug is not None
-                and manifest.managed
+                and (manifest.managed or manifest.snapshot_key)
                 and class_slug not in known_slugs
             ):
                 raise DatasetPreparationError(

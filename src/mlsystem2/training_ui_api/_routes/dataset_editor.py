@@ -13,9 +13,6 @@ from starlette.background import BackgroundTask
 from mlsystem2.training_ui_api._dataset_editor import (
     editor_annotation_version,
     editor_polygon_history,
-    recover_annotation_publications,
-    DatasetEditorConflict,
-    DatasetEditorGitError,
     DatasetEditorImportClippingRequired,
     add_editor_scenes,
     browse_editor_rasters,
@@ -67,9 +64,7 @@ from mlsystem2.training_ui_api.contracts import (
 )
 
 from mlsystem2.training_ui_api._raster_http import raster_response
-from mlsystem2.training_ui_api._markup_lock import markup_write_lock
-from mlsystem2.training_ui_api._annotation_versions import AnnotationVersionConflict
-from .common import RouteContext
+from .common import RouteContext, editor_errors, editor_transaction
 
 
 _STREAM_CHUNK_SIZE = 1024 * 1024
@@ -172,6 +167,9 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
             ctx.config,
             dataset_key,
             name=request.name,
+            composition_mode=request.composition_mode,
+            inherit_hard_negatives=request.inherit_hard_negatives,
+            inherit_annotation_zones=request.inherit_annotation_zones,
             username=username,
             publish=True,
         )
@@ -239,6 +237,7 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
                 import_editor_drafts, db, ctx.config, dataset_key,
                 scenes=[(scene.annotation_name, scene.geojson) for scene in request.scenes],
                 username=username, clip_to_footprint=request.clip_to_footprint,
+                catalog=True,
             )
         except DatasetEditorImportClippingRequired as exc:
             return JSONResponse(status_code=400, content={
@@ -536,22 +535,8 @@ def register_dataset_editor_routes(app: FastAPI, ctx: RouteContext) -> None:
 
 
 def _git_call(function, *args, publish=False, catalog=False, **kwargs):
-    try:
-        if publish or catalog:
-            session, config = args[:2]
-            with markup_write_lock(config):
-                recover_annotation_publications(session, config)
-                result = function(*args, **kwargs)
-                session.commit()
-                return result
+    with editor_transaction(*args[:2]) if publish or catalog else editor_errors():
         return function(*args, **kwargs)
-    except (DatasetEditorConflict, AnnotationVersionConflict) as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except DatasetEditorGitError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
 
 
 __all__ = ["register_dataset_editor_routes"]

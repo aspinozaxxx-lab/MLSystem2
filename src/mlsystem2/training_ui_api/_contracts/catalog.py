@@ -103,6 +103,10 @@ class DatasetInfo(BaseModel):
     object_types: list[DatasetObjectType] = Field(default_factory=list)
     combined: bool = False
     managed: bool = False
+    composition_mode: Literal["dynamic", "snapshot"] | None = None
+    snapshot_discardable: bool | None = None
+    inherit_hard_negatives: bool = True
+    inherit_annotation_zones: bool = True
     managed_sources: list[ManagedDatasetSourceInfo] = Field(default_factory=list)
     source_status: Literal["current", "stale", "unknown", "unavailable"] = "unknown"
     source_changes: list[str] = Field(default_factory=list)
@@ -262,6 +266,9 @@ class ManagedDatasetCompositionCreate(BaseModel):
     class_key: str = Field(min_length=1, max_length=180)
     name: str = Field(min_length=1, max_length=240)
     sources: list[ManagedDatasetCompositionSourceCreate] = Field(min_length=2)
+    composition_mode: Literal["dynamic", "snapshot"] = "dynamic"
+    inherit_hard_negatives: bool = True
+    inherit_annotation_zones: bool = True
 
     @model_validator(mode="after")
     def validate_unique_sources(self) -> Self:

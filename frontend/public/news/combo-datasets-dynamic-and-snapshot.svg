@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 440" role="img" aria-labelledby="title desc">
+  <title id="title">Как связаны комбо-датасет и исходная разметка</title>
+  <desc id="desc">Слева стрелки показывают двусторонний обмен опубликованными правками. Справа однократный перенос разметки в отдельную копию. В обоих режимах отдельно выбирают наследование сложных отрицательных примеров и размеченных зон.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1 9 5 1 9" fill="none" stroke="#176657" stroke-width="1.6"/></marker>
+    <marker id="copy" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1 9 5 1 9" fill="none" stroke="#78501c" stroke-width="1.6"/></marker>
+  </defs>
+  <rect width="1080" height="440" rx="20" fill="#f2f5f1"/>
+  <g font-family="Arial, sans-serif" fill="#18352f">
+    <text x="39" y="49" font-size="29" font-weight="bold">Два режима комбо-датасета</text>
+    <rect x="32" y="74" width="496" height="230" rx="16" fill="#fff" stroke="#b9d9ca"/>
+    <rect x="552" y="74" width="496" height="230" rx="16" fill="#fff" stroke="#e5cda7"/>
+    <g font-size="24" font-weight="bold"><text x="55" y="115">Динамическая связь</text><text x="575" y="115">Независимая копия</text></g>
+    <g font-size="18" fill="#42594f"><text x="55" y="147">При каждой публикации</text><text x="575" y="147">Один раз при создании или отделении</text></g>
+    <g rx="10" fill="#e0f1e9"><rect x="55" y="174" width="165" height="62" rx="10"/><rect x="330" y="174" width="174" height="62" rx="10"/></g>
+    <g fill="#f9edd9"><rect x="575" y="174" width="165" height="62" rx="10"/><rect x="850" y="174" width="174" height="62" rx="10"/></g>
+    <g text-anchor="middle" font-weight="bold" font-size="20"><text x="137" y="212">Исходники</text><text x="417" y="212">Комбо</text><text x="657" y="212">Исходники</text><text x="937" y="212">Копия</text></g>
+    <path d="M236 205H314" fill="none" stroke="#176657" stroke-width="3" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <path d="M756 205H834" fill="none" stroke="#78501c" stroke-width="3" marker-end="url(#copy)"/>
+    <g font-size="18"><text x="55" y="271">Правки переходят в обе стороны.</text><text x="575" y="271">Дальше каждый набор редактируют отдельно.</text></g>
+    <rect x="32" y="326" width="1016" height="83" rx="14" fill="#e1ebe5"/>
+    <text x="55" y="358" font-size="20" font-weight="bold">В обоих режимах</text>
+    <text x="55" y="386" font-size="19">Сложные отрицательные примеры и размеченные зоны включаются по отдельности.</text>
+  </g>
+</svg>

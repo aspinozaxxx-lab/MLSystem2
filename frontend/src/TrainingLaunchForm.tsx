@@ -151,7 +151,7 @@ export function TrainingLaunchForm({
               {renderFields(["train.pipeline_variant"])}
               <label className="field"><span>Датасет</span>
                 <select name="dataset_key" value={datasetKey} onChange={(event) => onDatasetChange(event.target.value)} required>
-                  {datasets.map((item) => <option value={item.key} key={item.key}>{item.name}{item.image_count == null ? "" : ` (${item.image_count} снимков)`}</option>)}
+                  {datasets.map((item) => <option value={item.key} key={item.key}>{item.name}{item.managed ? " 🔗" : ""}{item.image_count == null ? "" : ` (${item.image_count} снимков)`}</option>)}
                 </select>
               </label>
               {nextGen2 ? renderFields(["tile_preparation.tile_size"]) : null}
