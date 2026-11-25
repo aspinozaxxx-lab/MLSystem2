@@ -14,6 +14,23 @@ import {
   TestMarkupUploadProgress,
 } from "./DatasetEditorPage";
 import { clipEditorGeometry, featureCounts, featureClassCounts } from "./utils/datasetEditor";
+import { datasetEditorHash, datasetEditorRoute } from "./utils/datasetEditorRoute";
+
+describe("ссылка на снимок", () => {
+  it("сохраняет ключ датасета и имя снимка с кириллицей, пробелами и символами адреса", () => {
+    const datasetKey = "ОООП/копия";
+    const annotationName = "Сцена №2 #5%2F?.geojson";
+    const segments = datasetEditorHash(datasetKey, annotationName).slice(2).split("/");
+    expect(segments).toHaveLength(3);
+    expect(datasetEditorRoute(segments)).toEqual({ datasetKey, annotationName });
+  });
+
+  it("читает старые ссылки и допускает некорректный процент в присланном адресе", () => {
+    expect(datasetEditorRoute(["dataset-editor", "main"])).toEqual({ datasetKey: "main", annotationName: "" });
+    expect(datasetEditorRoute(["dataset-editor", "main", "%xx"])?.annotationName).toBe("%xx");
+    expect(datasetEditorRoute(["test-markups", "main", "edit"])).toBeUndefined();
+  });
+});
 
 it("предлагает ZIP с готовыми снимками только в редакторе тестовой разметки", () => {
   const props = { run: async <T,>(operation: () => Promise<T>) => operation(), registerRouteGuard: () => {} };

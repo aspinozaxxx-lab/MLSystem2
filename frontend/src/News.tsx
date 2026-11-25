@@ -15,6 +15,12 @@ type NewsUpdates = Pick<NewsArticle, "slug" | "date" | "title"> & { updates: str
 // Новые статьи добавляются первыми; адрес опубликованной статьи остаётся постоянным.
 export const newsArticles: readonly (NewsArticle | NewsUpdates)[] = [
 {
+  slug: "dataset-editor-scene-links",
+  date: "2026-11-25",
+  title: "Прямые ссылки на снимки в редакторе датасетов",
+  updates: ["Выберите снимок и скопируйте адрес из браузера. По ссылке откроются тот же класс, датасет и снимок. Кнопки «Назад» и «Вперёд» возвращают к просмотренным снимкам."],
+},
+{
   slug: "combo-datasets-dynamic-and-snapshot",
   date: "2026-11-24",
   title: "Комбо-датасеты с общей и независимой разметкой",

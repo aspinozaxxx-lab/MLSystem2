@@ -60,6 +60,7 @@ import { testSampleDownloadUrl } from "./utils/testMarkups";
 import { createTestRegionObjectCounter, resizeTestRegion, squareTestRegion, testRegionObjectCountStyle, testRegions, testRegionSize, translateTestRegion, TEST_REGION_SIZES } from "./utils/testRegions";
 import { DatasetPolygonHistory, type PolygonHistoryPreview } from "./DatasetPolygonHistory";
 import { useRememberedClass } from "./ClassNavigation";
+import { datasetEditorHash } from "./utils/datasetEditorRoute";
 import { useMapFullscreen } from "./utils/useMapFullscreen";
 import { isCompactLayout, useCompactLayout } from "./utils/useCompactLayout";
 import { NEW_SCENE_REVISION, readAnnotationFiles } from "./utils/datasetEditorImport";
@@ -305,12 +306,16 @@ const SELECTED_VERTEX_IMAGE = new CircleStyle({
 export function DatasetEditorPage({
   run,
   registerRouteGuard,
-  initialDatasetKey,
+  routeDatasetKey,
+  routeAnnotationName,
+  replaceEditorAddress,
   testSampleId,
 }: {
   run: Runner;
   registerRouteGuard: (guard: (() => boolean) | null) => void;
-  initialDatasetKey?: string;
+  routeDatasetKey?: string;
+  routeAnnotationName?: string;
+  replaceEditorAddress?: (datasetKey: string, annotationName: string) => void;
   testSampleId?: string;
 }) {
   const editorPath = (key: string) => testSampleId
@@ -323,15 +328,23 @@ export function DatasetEditorPage({
       .map(([key, name]) => ({ key, name })),
     [datasets],
   );
-  const { classKey, setClassKey } = useRememberedClass(datasetsLoading ? null : classes);
-  const [datasetKey, setDatasetKey] = useState("");
+  const { classKey: rememberedClass, setClassKey } = useRememberedClass(datasetsLoading ? null : classes);
+  const linkedDataset = routeDatasetKey ? datasets.find((item) => item.key === routeDatasetKey) : undefined;
+  const classKey = linkedDataset?.class_key ?? rememberedClass;
+  const classDatasets = useMemo(() => datasets.filter((item) => item.class_key === classKey), [datasets, classKey]);
+  const selectedDataset = (routeDatasetKey ? linkedDataset : classDatasets[0]) ?? null;
+  const datasetKey = selectedDataset?.key || "";
   const [scenes, setScenes] = useState<EditorScene[]>([]);
+  const loadedScenesDatasetKeyRef = useRef("");
   const includeClassSourcesRef = useRef(false);
   const [unusedHidden, setUnusedHidden] = useState(false);
   const [regionSize, setRegionSize] = useState(512);
   const regionSizeRef = useRef(regionSize);
   regionSizeRef.current = regionSize;
-  const [annotationName, setAnnotationName] = useState("");
+  const [testAnnotationName, setTestAnnotationName] = useState("");
+  const scenesLoaded = Boolean(datasetKey && loadedScenesDatasetKeyRef.current === datasetKey);
+  const linkedScene = routeAnnotationName ? scenes.find((scene) => scene.annotation_name === routeAnnotationName) : scenes[0];
+  const annotationName = testSampleId ? testAnnotationName : (scenesLoaded ? linkedScene?.annotation_name || "" : "");
   const [detail, setDetail] = useState<SceneDetail | null>(null);
   const [drafts, setDrafts] = useState<DraftMap>({});
   const [role, setRole] = useState<ObjectSelection>("positive");
@@ -414,10 +427,8 @@ export function DatasetEditorPage({
   const newFeaturesRef = useRef<WeakSet<Feature<Geometry>>>(new WeakSet());
   const scenesLoadRequestRef = useRef(0);
   const sceneLoadRequestRef = useRef(0);
-  const loadedScenesDatasetKeyRef = useRef("");
   const pseudoLoadRequestRef = useRef(0);
   const pseudoCacheRef = useRef<Map<string, PseudoMarkupInfo>>(new Map());
-  const appliedInitialDatasetKeyRef = useRef<string | null>(null);
   const draftSaveTimersRef = useRef<Map<string, number>>(new Map());
   const draftSaveInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
   const datasetKeyRef = useRef(datasetKey);
@@ -431,10 +442,6 @@ export function DatasetEditorPage({
     mapRef.current?.render();
   }, []);
 
-  const selectedDataset = useMemo(
-    () => datasets.find((item) => item.key === datasetKey) || null,
-    [datasetKey, datasets],
-  );
   const scopedRoles = Boolean(selectedDataset?.managed || selectedDataset?.composition_mode === "snapshot");
   const preparing = selectedDataset && selectedDataset.materialization_status !== "not_applicable"
     && selectedDataset.materialization_status !== "current";
@@ -544,6 +551,8 @@ export function DatasetEditorPage({
 
   useEffect(() => {
     activeAnnotationRef.current = annotationName;
+    setGeometryNotice("");
+    setVersionMenu((menu) => menu?.name === annotationName ? menu : null);
     highlightClass(null);
   }, [annotationName, highlightClass]);
 
@@ -590,36 +599,22 @@ export function DatasetEditorPage({
     void loadDatasets();
   }, [loadDatasets]);
 
-  const classDatasets = useMemo(
-    () => datasets.filter((item) => item.class_key === classKey),
-    [classKey, datasets],
-  );
   useEffect(() => {
-    if (!classDatasets.some((item) => item.key === datasetKey)) {
-      setDatasetKey(classDatasets[0]?.key || "");
-    }
-  }, [classDatasets, datasetKey]);
-
+    if (linkedDataset && linkedDataset.class_key !== rememberedClass) setClassKey(linkedDataset.class_key);
+  }, [linkedDataset, rememberedClass, setClassKey]);
   useEffect(() => {
-    if (
-      !initialDatasetKey
-      || appliedInitialDatasetKeyRef.current === initialDatasetKey
-    ) return;
-    const initialDataset = datasets.find((item) => item.key === initialDatasetKey);
-    if (!initialDataset) return;
-    appliedInitialDatasetKeyRef.current = initialDatasetKey;
-    setClassKey(initialDataset.class_key);
-    setDatasetKey(initialDataset.key);
-  }, [datasets, initialDatasetKey, setClassKey]);
+    if (scenesLoaded && !routeAnnotationName && !testSampleId) replaceEditorAddress?.(datasetKey, annotationName);
+  }, [annotationName, datasetKey, scenesLoaded, routeAnnotationName, testSampleId, replaceEditorAddress]);
 
   const loadScenes = useCallback(
     async (key: string, preferredAnnotation = "") => {
       const requestId = ++scenesLoadRequestRef.current;
+      const selectionAtRequest = activeAnnotationRef.current;
       if (!key) {
         loadedScenesDatasetKeyRef.current = "";
         activeAnnotationRef.current = "";
         setScenes([]);
-        setAnnotationName("");
+        setTestAnnotationName("");
         setDetail(null);
         return;
       }
@@ -642,11 +637,15 @@ export function DatasetEditorPage({
           ?.annotation_name ||
         payload.scenes[0]?.annotation_name ||
         "";
-      activeAnnotationRef.current = next;
-      setAnnotationName(next);
-      if (!next) setDetail(null);
+      if (testSampleId) {
+        activeAnnotationRef.current = next;
+        setTestAnnotationName(next);
+        if (!next) setDetail(null);
+      } else if (preferredAnnotation && selectionAtRequest === activeAnnotationRef.current) {
+        replaceEditorAddress?.(key, next);
+      }
     },
-    [run],
+    [run, testSampleId, replaceEditorAddress],
   );
 
   useEffect(() => {
@@ -657,7 +656,7 @@ export function DatasetEditorPage({
     setScenes([]);
     includeClassSourcesRef.current = false;
     setUnusedHidden(false);
-    setAnnotationName("");
+    setTestAnnotationName("");
     resetDrafts();
     setDetail(null);
     setBrowser(null);
@@ -1816,30 +1815,21 @@ export function DatasetEditorPage({
     return () => window.clearInterval(timer);
   }, [publication]);
 
-  const confirmDiscardDrafts = () =>
-    !dirtyRef.current || window.confirm(
-      "Последние изменения ещё не сохранены на сервере. Перейти и оставить их несохранёнными?",
-    );
-
   const selectClass = (event: ChangeEvent<HTMLSelectElement>) => {
-    if (!confirmDiscardDrafts()) return;
-    resetDrafts();
-    setClassKey(event.target.value);
+    const first = datasets.find((item) => item.class_key === event.target.value);
+    if (first) window.location.hash = datasetEditorHash(first.key);
   };
 
   const selectDataset = (event: ChangeEvent<HTMLSelectElement>) => {
-    if (!confirmDiscardDrafts()) return;
-    resetDrafts();
-    setDatasetKey(event.target.value);
+    window.location.hash = datasetEditorHash(event.target.value);
   };
 
   const selectScene = (name: string) => {
-    setGeometryNotice("");
-    if (name !== annotationName) setVersionMenu(null);
-    if (name !== annotationName) {
+    if (name === annotationName) return;
+    if (testSampleId) {
       activeAnnotationRef.current = name;
-      setAnnotationName(name);
-    }
+      setTestAnnotationName(name);
+    } else window.location.hash = datasetEditorHash(datasetKey, name);
   };
 
   const changeRole = (nextRole: ObjectSelection) => {
@@ -2378,6 +2368,7 @@ export function DatasetEditorPage({
         <label className="field">
           <span>Датасет</span>
           <select value={datasetKey} onChange={selectDataset}>
+            {routeDatasetKey && !linkedDataset && <option value="">Выберите датасет</option>}
             {classDatasets.map((item) => (
               <option key={item.key} value={item.key}>{item.dataset_name}{item.managed ? " 🔗" : ""} ({item.scene_count})</option>
             ))}
@@ -2456,6 +2447,8 @@ export function DatasetEditorPage({
 
       {datasetsLoading ? (
         <section className="panel empty-state">Загружаем каталог датасетов…</section>
+      ) : routeDatasetKey && !linkedDataset ? (
+        <section className="panel empty-state" role="status">Датасет по этой ссылке недоступен. Выберите датасет из списка.</section>
       ) : !datasets.length ? (
         <section className="panel empty-state">Per-image датасеты в editor-клоне не найдены.</section>
       ) : selectedDataset && preparing ? (
@@ -2530,7 +2523,7 @@ export function DatasetEditorPage({
                     : scene.draft?.annotation_zone_count ?? scene.annotation_zone_count ?? 0) > 0));
                 if (!used.some((scene) => scene.annotation_name === annotationName)) {
                   if (used[0]) selectScene(used[0].annotation_name);
-                  else { activeAnnotationRef.current = ""; setAnnotationName(""); setDetail(null); }
+                  else { activeAnnotationRef.current = ""; setTestAnnotationName(""); setDetail(null); }
                 }
               }}><Trash2 size={15} />Убрать неиспользуемые</button> : null}
             <div className="button-row dataset-editor-draft-actions">
@@ -2629,7 +2622,7 @@ export function DatasetEditorPage({
             className={`panel dataset-editor-workspace${fullscreen ? " fullscreen" : ""}${editMode === "view" ? " view-mode" : ""}`}
             ref={workspaceRef}
           >
-            {detail && activeDraft ? (
+            {detail && detail.scene.annotation_name === annotationName && activeDraft ? (
               <>
                 <div className="dataset-editor-toolbar">
                   {fullscreen || compact ? (
@@ -3101,7 +3094,9 @@ export function DatasetEditorPage({
                 </div>
               </>
             ) : (
-              <div className="empty-state">Выберите или добавьте снимок.</div>
+              <div className="empty-state" role="status">{routeAnnotationName && scenesLoaded && !linkedScene
+                ? "Снимок по этой ссылке отсутствует в датасете. Выберите другой снимок из списка."
+                : annotationName ? "Загрузка снимка…" : "Выберите или добавьте снимок."}</div>
             )}
           </section>
         </section>

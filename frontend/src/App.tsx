@@ -124,6 +124,7 @@ import { inferenceTemplateForDataset } from "./utils/inferenceTemplates";
 import { TestMarkupCreatePage } from "./TestMarkupCreatePage";
 import { useTestMarkupClasses } from "./useTestMarkupClasses";
 import { ClassNavigation, useRememberedClass } from "./ClassNavigation";
+import { datasetEditorHash, datasetEditorRoute } from "./utils/datasetEditorRoute";
 import { NewsPage, NewsSection } from "./News";
 import { useUsage } from "./useUsage";
 import { usagePageViewed } from "./utils/usage";
@@ -170,6 +171,15 @@ export function App() {
   const registerRouteGuard = useCallback((guard: (() => boolean) | null) => {
     routeGuardRef.current = guard;
   }, []);
+  const replaceEditorAddress = useCallback((datasetKey: string, annotationName: string) => {
+    const hash = datasetEditorHash(datasetKey, annotationName);
+    const current = datasetEditorRoute(currentRoute());
+    if (!current || (current.datasetKey && current.datasetKey !== datasetKey)
+      || window.location.hash !== acceptedHashRef.current || window.location.hash === hash) return;
+    window.history.replaceState(window.history.state, "", hash);
+    acceptedHashRef.current = window.location.hash;
+    setRoute(currentRoute());
+  }, []);
 
   const run = useCallback<Runner>(async (operation) => {
     try {
@@ -208,12 +218,15 @@ export function App() {
   useEffect(() => {
     const onHashChange = () => {
       const guard = routeGuardRef.current;
-      if (guard && !guard()) {
+      const next = currentRoute();
+      const previousDataset = datasetEditorRoute(currentRoute(acceptedHashRef.current))?.datasetKey;
+      const withinDataset = previousDataset && previousDataset === datasetEditorRoute(next)?.datasetKey;
+      if (!withinDataset && guard && !guard()) {
         window.history.replaceState(null, "", acceptedHashRef.current || "#/");
         return;
       }
       acceptedHashRef.current = window.location.hash;
-      setRoute(currentRoute());
+      setRoute(next);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -295,6 +308,7 @@ export function App() {
       closeModal={closeModal}
       showJobLog={showJobLog}
       registerRouteGuard={registerRouteGuard}
+      replaceEditorAddress={replaceEditorAddress}
     />
   );
 
@@ -317,6 +331,7 @@ function RoutedPage(context: {
   closeModal: () => void;
   showJobLog: (jobId: string) => Promise<void>;
   registerRouteGuard: (guard: (() => boolean) | null) => void;
+  replaceEditorAddress: (datasetKey: string, annotationName: string) => void;
 }) {
   const [head, second] = context.route;
   if (head === "notes") return context.username.toLowerCase() === "aspinoza"
@@ -339,12 +354,15 @@ function RoutedPage(context: {
   if (head === "automation") return <AutomationPage {...props} />;
   if (head === "classes") return <ClassEditorPage {...props} />;
   if (head === "dataset-editor") {
+    const editor = datasetEditorRoute(context.route);
     return (
       <Suspense fallback={<LoadingPage text="Загрузка редактора датасетов" />}>
         <DatasetEditorPage
           run={props.run}
           registerRouteGuard={props.registerRouteGuard}
-          initialDatasetKey={second ? decodeURIComponent(second) : undefined}
+          routeDatasetKey={editor?.datasetKey}
+          routeAnnotationName={editor?.annotationName}
+          replaceEditorAddress={context.replaceEditorAddress}
         />
       </Suspense>
     );
@@ -4172,8 +4190,8 @@ function Metric({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function currentRoute(): string[] {
-  const hash = window.location.hash.replace(/^#\/?/, "");
+function currentRoute(locationHash = window.location.hash): string[] {
+  const hash = locationHash.replace(/^#\/?/, "");
   return hash ? hash.split("/") : [];
 }
 
